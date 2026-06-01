@@ -1,6 +1,10 @@
-[package]
-name = "lunar-hal"
-version = "0.1.0"
-edition = "2024"
+[workspace]
+members = ["crates/lunar-backend", "crates/lunar-frontend"]
+resolver = "3"
 
-[dependencies]
+[workspace.package]
+version = "0.1.0"
+license = "AGPL-3"
+readme = "README.md"
+edition = "2024"
+authors = ["Nikita Goncharov <ininids@ininids.in.rs>"]
