@@ -1,0 +1,12 @@
+[package]
+name = "lnai"
+version.workspace = true
+license.workspace = true
+readme.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+candle-core = { git = "https://github.com/huggingface/candle.git", version = "0.10.2", features = ["cuda"] }
+candle-nn = { git = "https://github.com/huggingface/candle.git", version = "0.10.2", features = ["cuda"] }
+anyhow = "1.0.102"

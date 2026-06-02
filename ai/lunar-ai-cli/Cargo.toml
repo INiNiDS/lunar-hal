@@ -1,0 +1,16 @@
+[package]
+name = "lunar-ai-cli"
+version.workspace = true
+license.workspace = true
+readme.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+clap = {version = "4.6.1", features = ["derive"]}
+reqwest = { version = "0.13.4", features = ["blocking", "query", "form", "native-tls"] }
+polars = { version = "0.53.0", features = ["lazy", "csv", "parquet", "trigonometry"] }
+anyhow = "1.0.102"
+[[bin]]
+name = "lnaicli"
+path = "src/main.rs"

@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/lunar-backend", "crates/lunar-frontend"]
+members = ["ai/lnai","ai/lunar-ai-cli","crates/lunar-backend", "crates/lunar-frontend"]
 resolver = "3"
 
 [workspace.package]
