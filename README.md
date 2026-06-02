@@ -27,14 +27,16 @@
 ## 🌌 The "Broke-Tech" Manifesto
 
 > [!WARNING]
-> **READ BEFORE FLIGHT:** We don't have massive server farms or VC funding to burn on cloud API keys. We are proudly running everything **locally on your own machine**. Your high-end GPU is going to put in *work*, but in return, you get total data privacy, zero latency, and an infinite cosmos fueled entirely by your own electricity.
+> ### READ BEFORE FLIGHT
+> We don't have massive server farms or VC funding to burn on cloud API keys. We are proudly running everything **locally on your own machine**. Your high-end GPU is going to put in *work*, but in return, you get total data privacy, zero latency, and an infinite cosmos fueled entirely by your own electricity.
 
 ---
 
 ## 🎬 Gameplay Showcase
 
 > [!NOTE]
-> *Gameplay trailer and real-time canvas recording coming soon as we clear the local compiler warnings.*
+> ### Preview Coming Soon
+> Gameplay trailer and real-time canvas recording coming soon as we clear the local compiler warnings.
 
 ---
 
