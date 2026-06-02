@@ -1,5 +1,5 @@
 use dioxus::prelude::*;
-use crate::assets::BG_LUNAR_LANDSCAPE;
+use crate::assets::{BG_LUNAR_LANDSCAPE, BG_LUNAR_LANDSCAPE_PC};
 use crate::components::{GlowingTitle, Divider, GlowingSubtitle, GlowingButton, Header};
 
 #[component]
@@ -8,29 +8,41 @@ pub fn HeroSection() -> Element {
 
     rsx! {
         div {
-            class: "h-screen w-full relative overflow-hidden",
-            style: "background-image: url('{BG_LUNAR_LANDSCAPE}'); background-size: cover; background-position: center;",
+            class: "h-screen w-full relative overflow-hidden bg-black",
 
             img {
                 src: "{BG_LUNAR_LANDSCAPE}",
-                class: "absolute inset-0 w-full h-full object-cover object-center -z-30",
-                alt: "lunar landscape",
+                class: "absolute inset-0 w-full h-full object-cover object-bottom -z50 md:hidden",
+                alt: "lunar landscape mobile",
+            }
+
+            img {
+                src: "{BG_LUNAR_LANDSCAPE_PC}",
+                class: "absolute inset-0 w-full h-full object-cover object-center -z50 hidden md:block",
+                alt: "lunar landscape pc",
             }
 
             div {
-                class: "absolute inset-0 bg-gradient-to-t from-black/60 to-transparent pointer-events-none",
+                class: "absolute inset-0 bg-gradient-to-t from-black/80 via-black/30 to-transparent pointer-events-none -z-10",
             }
-            Header {}
 
-            GlowingTitle {}
-            Divider {}
-            GlowingSubtitle {}
-            GlowingButton {
-                on_click: move |_| {
-                    nav.push("/about");
-                },
+            div {
+                class: "relative z-10 flex flex-col items-center justify-between h-full py-8",
+
+                Header {}
+
+                div {
+                    class: "flex flex-col items-center justify-center flex-grow plan-content",
+                    GlowingTitle {}
+                    Divider {}
+                    GlowingSubtitle {}
+                    GlowingButton {
+                        on_click: move |_| {
+                            nav.push("/about");
+                        },
+                    }
+                }
             }
         }
     }
 }
-

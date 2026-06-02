@@ -1,6 +1,7 @@
 use dioxus::prelude::*;
 
 pub const BG_LUNAR_LANDSCAPE: Asset = asset!("/assets/bg-lunar-landscape.jpg");
+pub const BG_LUNAR_LANDSCAPE_PC: Asset = asset!("/assets/bg-lunar-landscape-pc.png");
 
 pub const FONT_SERIF: &str = "'Cinzel', 'Playfair Display', serif";
 pub const FONT_SANS: &str = "'Space Grotesk', ui-sans-serif, system-ui, sans-serif";
