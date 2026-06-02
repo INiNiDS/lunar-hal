@@ -3,7 +3,7 @@ use dioxus::prelude::*;
 mod assets;
 mod components;
 
-use components::{HeroSection, AboutPage, ContactPage};
+use components::{AboutPage, ContactPage, HeroSection};
 
 const MAIN_CSS: Asset = asset!("/assets/main.css");
 const TAILWIND_CSS: Asset = asset!("/assets/tailwind.css");
@@ -24,7 +24,9 @@ fn main() {
 
 #[component]
 fn HomePage() -> Element {
-    rsx! { HeroSection {} }
+    rsx! {
+        HeroSection {}
+    }
 }
 
 #[component]

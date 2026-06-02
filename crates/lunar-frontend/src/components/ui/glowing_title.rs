@@ -1,5 +1,5 @@
-use dioxus::prelude::*;
 use crate::assets::FONT_SERIF;
+use dioxus::prelude::*;
 
 #[component]
 pub fn GlowingTitle() -> Element {
@@ -12,8 +12,7 @@ pub fn GlowingTitle() -> Element {
                    drop-shadow-[0_0_80px_rgba(255,255,255,0.2)] \
                    select-none whitespace-nowrap",
             style: "font-family: {FONT_SERIF}",
-            "LUNAR-HAL",
+            "LUNAR-HAL"
         }
     }
 }
-

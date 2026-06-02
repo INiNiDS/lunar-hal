@@ -1,14 +1,13 @@
-use dioxus::prelude::*;
 use crate::assets::{BG_LUNAR_LANDSCAPE, BG_LUNAR_LANDSCAPE_PC};
-use crate::components::{GlowingTitle, Divider, GlowingSubtitle, GlowingButton, Header};
+use crate::components::{Divider, GlowingButton, GlowingSubtitle, GlowingTitle, Header};
+use dioxus::prelude::*;
 
 #[component]
 pub fn HeroSection() -> Element {
     let nav = use_navigator();
 
     rsx! {
-        div {
-            class: "h-screen w-full relative overflow-hidden bg-black",
+        div { class: "h-screen w-full relative overflow-hidden bg-black",
 
             img {
                 src: "{BG_LUNAR_LANDSCAPE}",
@@ -22,17 +21,13 @@ pub fn HeroSection() -> Element {
                 alt: "lunar landscape pc",
             }
 
-            div {
-                class: "absolute inset-0 bg-gradient-to-t from-black/80 via-black/30 to-transparent pointer-events-none -z-10",
-            }
+            div { class: "absolute inset-0 bg-gradient-to-t from-black/80 via-black/30 to-transparent pointer-events-none -z-10" }
 
-            div {
-                class: "relative z-10 flex flex-col items-center justify-between h-full py-8",
+            div { class: "relative z-10 flex flex-col items-center justify-between h-full py-8",
 
                 Header {}
 
-                div {
-                    class: "flex flex-col items-center justify-center flex-grow plan-content",
+                div { class: "flex flex-col items-center justify-center flex-grow plan-content",
                     GlowingTitle {}
                     Divider {}
                     GlowingSubtitle {}

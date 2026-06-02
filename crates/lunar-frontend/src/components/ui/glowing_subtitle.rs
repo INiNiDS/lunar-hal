@@ -1,5 +1,5 @@
-use dioxus::prelude::*;
 use crate::assets::FONT_SANS;
+use dioxus::prelude::*;
 
 #[component]
 pub fn GlowingSubtitle() -> Element {
@@ -10,8 +10,7 @@ pub fn GlowingSubtitle() -> Element {
                    drop-shadow-[0_0_8px_rgba(255,255,255,0.4)] \
                    select-none whitespace-nowrap",
             style: "font-family: {FONT_SANS}",
-            "YOUR JOURNEY STARTS HERE",
+            "YOUR JOURNEY STARTS HERE"
         }
     }
 }
-

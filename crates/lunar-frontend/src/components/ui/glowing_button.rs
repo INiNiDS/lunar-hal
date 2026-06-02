@@ -14,8 +14,7 @@ pub fn GlowingButton(on_click: EventHandler<()>) -> Element {
                    transition-all duration-300 \
                    cursor-pointer select-none",
             onclick: move |_| on_click.call(()),
-            "START JOURNEY",
+            "START JOURNEY"
         }
     }
 }
-

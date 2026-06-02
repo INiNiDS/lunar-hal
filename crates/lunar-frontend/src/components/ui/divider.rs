@@ -1,11 +1,10 @@
-use dioxus::prelude::*;
 use crate::assets::DIVIDER_ICON_SVG;
+use dioxus::prelude::*;
 
 #[component]
 pub fn Divider() -> Element {
     rsx! {
-        div {
-            class: "absolute top-[42%] left-1/2 -translate-x-1/2 w-80 flex items-center",
+        div { class: "absolute top-[42%] left-1/2 -translate-x-1/2 w-80 flex items-center",
 
             div { class: "flex-1 h-[1px] bg-white/40" }
 
@@ -18,4 +17,3 @@ pub fn Divider() -> Element {
         }
     }
 }
-
