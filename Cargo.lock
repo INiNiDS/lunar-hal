@@ -4048,6 +4048,8 @@ dependencies = [
  "anyhow",
  "candle-core",
  "candle-nn",
+ "polars",
+ "rand 0.10.1",
 ]
 
 [[package]]

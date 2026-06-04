@@ -8,5 +8,7 @@ authors.workspace = true
 
 [dependencies]
 candle-core = { git = "https://github.com/huggingface/candle.git", version = "0.10.2", features = ["cuda"] }
-candle-nn = { git = "https://github.com/huggingface/candle.git", version = "0.10.2", features = ["cuda"] }
+candle-nn = { git = "https://github.com/huggingface/candle.git", version = "0.10.2" , features = ["cuda"]}
+polars = { version = "0.54.3", features = ["lazy", "parquet", "abs"] }
 anyhow = "1.0.102"
+rand = "0.10.1"
