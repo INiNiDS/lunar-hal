@@ -1,0 +1,224 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background-color: #050608;
+    color: #d0d0d0;
+    font-family: 'Courier New', 'Fira Code', 'Consolas', monospace;
+}
+
+#dither-canvas {
+    position: fixed;
+    inset: 0;
+    width: 100vw;
+    height: 100vh;
+    z-index: 0;
+    image-rendering: pixelated;
+    image-rendering: -moz-crisp-edges;
+    image-rendering: crisp-edges;
+}
+
+#lunar-hal-text {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 5;
+    pointer-events: none;
+    font-family: 'Courier New', 'Fira Code', 'Consolas', monospace;
+    font-weight: 700;
+    font-size: clamp(56px, 17vw, 320px);
+    color: #c8dcff;
+    letter-spacing: 0.05em;
+    text-align: center;
+    white-space: nowrap;
+    opacity: 0;
+    will-change: opacity, transform, filter, letter-spacing, text-shadow;
+    text-shadow:
+        0 0 10px rgba(140, 200, 255, 0.95),
+        0 0 32px rgba(140, 200, 255, 0.75),
+        0 0 80px rgba(140, 200, 255, 0.5),
+        0 0 160px rgba(120, 180, 255, 0.3);
+    animation: lunar-appear 5.5s cubic-bezier(0.16, 1, 0.3, 1) 45s forwards;
+}
+
+@keyframes lunar-appear {
+    0% {
+        opacity: 0;
+        transform: scale(0.84);
+        filter: blur(14px);
+        letter-spacing: 0.55em;
+        text-shadow:
+            0 0 6px rgba(140, 200, 255, 0.4),
+            0 0 18px rgba(140, 200, 255, 0.25),
+            0 0 40px rgba(140, 200, 255, 0.1),
+            0 0 80px rgba(120, 180, 255, 0.05);
+    }
+    45% {
+        opacity: 1;
+        transform: scale(1.03);
+        filter: blur(0);
+        letter-spacing: 0.08em;
+    }
+    100% {
+        opacity: 1;
+        transform: scale(1);
+        filter: blur(0);
+        letter-spacing: 0.05em;
+    }
+}
+
+#overlay {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 10;
+    pointer-events: none;
+}
+
+#center-content {
+    pointer-events: auto;
+    text-align: center;
+    max-width: 92vw;
+}
+
+.install-btn {
+    pointer-events: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 16px;
+    background: rgba(8, 10, 16, 0.82);
+    border: 1px solid #1f2a3a;
+    border-radius: 6px;
+    color: #d8e0ec;
+    font-family: inherit;
+    font-size: 14px;
+    cursor: pointer;
+    user-select: text;
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    opacity: 0;
+    transform: translateY(12px) scale(0.985);
+    filter: blur(4px);
+    transition: opacity 1.6s cubic-bezier(.2,.7,.2,1),
+                transform 1.6s cubic-bezier(.2,.7,.2,1),
+                filter 1.6s cubic-bezier(.2,.7,.2,1),
+                border-color 0.4s ease,
+                background 0.3s ease;
+}
+
+.install-btn.active {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+    animation: neon-pulse 2.8s ease-in-out infinite;
+}
+
+.install-btn:hover {
+    background: rgba(12, 18, 28, 0.94);
+    border-color: rgba(120, 200, 255, 0.7);
+}
+
+.install-btn:active {
+    transform: translateY(0) scale(0.992);
+}
+
+.install-btn:focus-visible {
+    outline: none;
+    border-color: rgba(120, 200, 255, 0.95);
+}
+
+@keyframes neon-pulse {
+    0%, 100% {
+        border-color: rgba(120, 200, 255, 0.45);
+        box-shadow:
+            0 0 6px rgba(120, 200, 255, 0.28),
+            0 0 14px rgba(120, 200, 255, 0.18),
+            0 0 32px rgba(120, 200, 255, 0.08);
+    }
+    50% {
+        border-color: rgba(140, 210, 255, 0.95);
+        box-shadow:
+            0 0 10px rgba(120, 200, 255, 0.55),
+            0 0 24px rgba(120, 200, 255, 0.38),
+            0 0 52px rgba(120, 200, 255, 0.22);
+    }
+}
+
+.prompt {
+    color: #6a7a8c;
+    font-size: 14px;
+    user-select: none;
+}
+
+.install-cmd {
+    color: #e6edf5;
+    font-size: 14px;
+    font-family: inherit;
+    white-space: nowrap;
+}
+
+.cursor {
+    display: inline-block;
+    width: 7px;
+    height: 14px;
+    background: #c8d4e0;
+    margin-left: 2px;
+    animation: blink 1s step-end infinite;
+    vertical-align: text-bottom;
+}
+
+@keyframes blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0; }
+}
+
+.copied-tag {
+    margin-left: 6px;
+    padding: 2px 8px;
+    border-radius: 3px;
+    background: rgba(120, 200, 255, 0.15);
+    color: #c8e0ff;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    border: 1px solid rgba(120, 200, 255, 0.5);
+    animation: copied-pop 1.5s ease-out forwards;
+    user-select: none;
+}
+
+@keyframes copied-pop {
+    0% { opacity: 0; transform: scale(0.6); }
+    20% { opacity: 1; transform: scale(1.08); }
+    35% { transform: scale(1); }
+    85% { opacity: 1; transform: scale(1); }
+    100% { opacity: 0; transform: scale(0.95); }
+}
+
+@media (max-width: 720px) {
+    .install-btn {
+        flex-wrap: wrap;
+        padding: 10px 12px;
+        gap: 6px;
+    }
+    .install-cmd, .prompt {
+        font-size: 11px;
+    }
+    .cursor {
+        height: 12px;
+        width: 5px;
+    }
+    .copied-tag {
+        font-size: 10px;
+    }
+}
