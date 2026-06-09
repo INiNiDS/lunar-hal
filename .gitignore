@@ -6,3 +6,11 @@ target
 *.bak
 backup/
 ai_data/
+*.safetensors
+run_pipeline.sh
+.env
+.env.*
+!.env.example
+data
+*.bpk
+stellar_norm.json
