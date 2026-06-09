@@ -3,6 +3,21 @@ name = "lunar-backend"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = ["wgpu"]
+wgpu = ["burn/wgpu"]
+cuda = ["burn/cuda"]
+cpu = ["burn/burn-cpu"]
+metal = ["burn/metal"]
+rocm = ["burn/rocm"]
+
 [dependencies]
 axum = "0.8.9"
-tokio = "1.52.3"
+tokio = { version = "1.52.3", features = ["full"] }
+anyhow = "1.0.102"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+burn = "0.21"
+burn-store = { version = "0.21", features = ["burnpack"] }
+lnai-models = { path = "../../ai/lnai-models", features = ["pinn", "gnn", "image"] }
+lunar-structures = { path = "../lunar-structures" }
