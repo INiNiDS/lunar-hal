@@ -1,0 +1,60 @@
+# Containerfile for running the lunar-hal pipeline in podman/docker.
+# Two stages: builder (rust) → runtime (debian-slim + lnaicli + s3cmd).
+#
+# Usage:
+#   podman build -t lunar-hal -f install/Containerfile .
+#   podman run --rm \
+#     -e SINK_KIND=local -e LOCAL_OUT_DIR=/data \
+#     -e GAIA_USER=... -e GAIA_PASS=... \
+#     -v ./data:/data lunar-hal
+
+# ---------- builder ----------------------------------------------------------
+FROM docker.io/library/rust:1.96.0-bookworm AS builder
+
+WORKDIR /build
+
+# Cache dependencies: copy only manifests first to reuse the layer cache
+COPY Cargo.toml Cargo.lock ./
+COPY ai/lunar-ai-cli/Cargo.toml ai/lunar-ai-cli/
+COPY ai/lnai/Cargo.toml        ai/lnai/
+COPY crates/lunar-backend/Cargo.toml  crates/lunar-backend/
+COPY crates/lunar-frontend/Cargo.toml crates/lunar-frontend/
+COPY crates/lunar-site/Cargo.toml     crates/lunar-site/
+
+# Create skeletal files to fetch and build dependencies without actual source code
+RUN mkdir -p ai/lunar-ai-cli/src ai/lnai/src \
+           crates/lunar-backend/src crates/lunar-frontend/src crates/lunar-site/src && \
+    echo "fn main() {}" > ai/lunar-ai-cli/src/main.rs && \
+    echo "fn main() {}" > ai/lnai/src/main.rs && \
+    echo "fn main() {}" > crates/lunar-backend/src/main.rs && \
+    echo "fn main() {}" > crates/lunar-frontend/src/main.rs && \
+    echo "fn main() {}" > crates/lunar-site/src/main.rs && \
+    cargo fetch
+
+# Now copy the actual source directories (this layer gets invalidated when code changes)
+COPY ai/ ai/
+COPY crates/ crates/
+
+RUN cargo build --release -p lunar-ai-cli && \
+    strip target/release/lnaicli
+
+# ---------- runtime ----------------------------------------------------------
+FROM docker.io/library/debian:bookworm-slim
+
+RUN apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      ca-certificates s3cmd jq parallel moreutils && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /build/target/release/lnaicli /usr/local/bin/lnaicli
+COPY install/orchestrate.sh /usr/local/bin/orchestrate
+RUN chmod +x /usr/local/bin/orchestrate
+
+ENV LNAICLI=/usr/local/bin/lnaicli
+
+# Default working directory — mount a volume here.
+WORKDIR /work
+VOLUME ["/work"]
+
+# /work/chunks, /work/logs, /work/staging are created by orchestrate at runtime.
+ENTRYPOINT ["/usr/local/bin/orchestrate"]

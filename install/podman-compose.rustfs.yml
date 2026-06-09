@@ -1,0 +1,84 @@
+# Alternative to MinIO: RustFS written in Rust.
+# S3 API compatible — our orchestrate.sh works against it without changes.
+#
+# Usage:
+#   podman-compose -f install/podman-compose.rustfs.yml up
+#
+# MinIO → RustFS differences:
+#   - image:        rustfs/rustfs:latest
+#   - env:          RUSTFS_ACCESS_KEY / RUSTFS_SECRET_KEY (default: rustfsadmin)
+#   - data volume:  /data (UID 10001 inside the container → bind-mount needs
+#                   chown, or use a named volume to avoid the issue)
+#   - healthcheck:  GET /health (not /minio/health/ready)
+#   - S3 API:       100% compatible, s3cmd works as-is
+
+services:
+  rustfs:
+    image: docker.io/rustfs/rustfs:latest
+    container_name: lunar-rustfs
+    command: ["rustfs", "/data"]
+    # The default compose uses /data/rustfs{0..3} for erasure coding. For our
+    # local simulation a single disk is enough. If you want EC locally, change
+    # to: command: ["rustfs", "/data/rustfs{0..3}"]
+    environment:
+      RUSTFS_ADDRESS: "0.0.0.0:9000"
+      RUSTFS_CONSOLE_ADDRESS: "0.0.0.0:9001"
+      RUSTFS_CONSOLE_ENABLE: "true"
+      RUSTFS_ACCESS_KEY: "rustfsadmin"
+      RUSTFS_SECRET_KEY: "rustfsadmin"
+    ports:
+      - "9000:9000"    # S3 API
+      - "9001:9001"    # console
+    volumes:
+      # Named volume — podman handles the UID/GID mapping between host and the
+      # container's 10001:10001 automatically. If you need a bind-mount to
+      # ./data, add an init container that runs `chown -R 10001:10001 /data`
+      # or run `sudo chown -R 10001:10001 ./data` before bringing it up.
+      - rustfs-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  init-bucket:
+    image: docker.io/minio/mc:latest
+    depends_on:
+      rustfs:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://rustfs:9000 rustfsadmin rustfsadmin &&
+      mc mb -p local/lunar-hal-data || true &&
+      mc anonymous set download local/lunar-hal-data || true
+      "
+
+  lunar:
+    build:
+      context: ..
+      dockerfile: install/Containerfile
+    depends_on:
+      rustfs:
+        condition: service_healthy
+      init-bucket:
+        condition: service_completed_successfully
+    env_file:
+      - ../.env
+    environment:
+      SINK_KIND: s3
+      SPACES_KEY: rustfsadmin
+      SPACES_SECRET: rustfsadmin
+      SPACES_BUCKET: lunar-hal-data
+      SPACES_REGION: us-east-1
+      SPACES_ENDPOINT: rustfs:9000
+
+      # Gaia credentials come from ../.env (see .env.example).
+
+      TOTAL_STARS: ${TOTAL_STARS:-30000000}
+      CHUNK_SIZE:  ${CHUNK_SIZE:-3000000}
+      PARALLEL:    ${PARALLEL:-3}
+    volumes:
+      - ./data:/work
+
+volumes:
+  rustfs-data:

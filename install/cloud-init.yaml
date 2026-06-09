@@ -1,0 +1,81 @@
+#cloud-config
+# Runs on first boot of the DigitalOcean Droplet.
+# Prepares the environment: installs Rust, clones the repo, builds lnaicli,
+# installs s3cmd/jq/parallel — everything orchestrate.sh needs.
+
+package_update: true
+package_upgrade: true
+
+packages:
+  - build-essential
+  - pkg-config
+  - libssl-dev
+  - curl
+  - wget
+  - git
+  - ca-certificates
+  - jq
+  - s3cmd
+  - parallel
+  - htop
+  - tmux
+  - rsync
+
+write_files:
+  - path: /etc/profile.d/lunar-hal-env.sh
+    permissions: '0644'
+    content: |
+      export LUNAR_HAL_HOME="/opt/lunar-hal"
+      export PATH="$LUNAR_HAL_HOME/target/release:$PATH"
+      [ -f "$LUNAR_HAL_HOME/.env" ] && . "$LUNAR_HAL_HOME/.env"
+
+  - path: /opt/lunar-hal/README-DEPLOY.txt
+    permissions: '0644'
+    content: |
+      lunar-hal on the droplet is ready.
+
+      Next steps:
+      1. Create a Spaces bucket + access key (https://cloud.digitalocean.com → Spaces).
+      2. Fill in credentials:
+           sudo -i
+           cd /opt/lunar-hal
+           cp .env.example .env
+           nano .env        # set GAIA_USER, GAIA_PASS, SPACES_KEY, SPACES_SECRET
+           chmod 600 .env
+      3. Run:
+           ./install/orchestrate.sh
+
+runcmd:
+  - |
+    set -e
+    # --- rustup -------------------------------------------------------------
+    if ! command -v rustup >/dev/null; then
+      curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal
+      . "$HOME/.cargo/env"
+    fi
+    . "$HOME/.cargo/env"
+
+    # --- repo ---------------------------------------------------------------
+    if [ ! -d /opt/lunar-hal ]; then
+      git clone https://github.com/ininids/lunar-hal.git /opt/lunar-hal
+    fi
+    cd /opt/lunar-hal
+    git pull --ff-only || true
+
+    # --- deps ---------------------------------------------------------------
+    cargo fetch
+
+    # --- release build (only lunar-ai-cli — skips the UI/wgpu crates and saves ~10 min)
+    cargo build --release -p lunar-ai-cli
+
+    # --- workdir ------------------------------------------------------------
+    mkdir -p /opt/lunar-hal/run/{chunks,logs,staging}
+    chown -R root:root /opt/lunar-hal
+
+    # --- tmux session for a quick landing pad ------------------------------
+    tmux new-session -d -s lunar 'bash' || true
+
+    # --- final banner -------------------------------------------------------
+    echo "lunar-hal droplet ready at $(date -u)" > /var/log/lunar-hal-ready.log
+
+final_message: "lunar-hal droplet is ready. See /opt/lunar-hal/README-DEPLOY.txt"
