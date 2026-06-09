@@ -1,0 +1,16 @@
+[package]
+name = "lnai-models"
+version.workspace = true
+license.workspace = true
+readme.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[features]
+default = []
+pinn = []
+gnn = []
+image = []
+
+[dependencies]
+burn = { version = "0.21", features = ["std", "train", "cuda", "autodiff", "fusion", "autotune"] }
