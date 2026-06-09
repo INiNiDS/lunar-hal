@@ -2,6 +2,7 @@ use dioxus::prelude::*;
 
 mod assets;
 mod components;
+pub mod api;
 
 use components::{AboutPage, ContactPage, HeroSection};
 

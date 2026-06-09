@@ -2,6 +2,7 @@
 pub mod layout;
 pub mod pages;
 pub mod ui;
+pub mod editor;
 
 // Re-exports (convenience)
 pub use layout::header::Header;
@@ -12,3 +13,4 @@ pub use ui::divider::Divider;
 pub use ui::glowing_button::GlowingButton;
 pub use ui::glowing_subtitle::GlowingSubtitle;
 pub use ui::glowing_title::GlowingTitle;
+pub use editor::sidebar::EntropySlider;
