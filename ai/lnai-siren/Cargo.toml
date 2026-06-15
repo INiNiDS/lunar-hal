@@ -1,0 +1,24 @@
+[package]
+name = "lnai-siren"
+version.workspace = true
+license.workspace = true
+readme.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "lnai-siren"
+path = "src/main.rs"
+
+[dependencies]
+burn = { version = "0.21", features = ["std", "train", "cuda", "autodiff", "fusion", "autotune"] }
+burn-store = { version = "0.21", features = ["safetensors", "burnpack"] }
+polars = { version = "0.53.0", features = ["lazy", "parquet", "abs"] }
+anyhow = "1.0.102"
+rand = "0.10.1"
+clap = { version = "4.6.1", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rayon = "1.12"
+ctrlc = "3"
+lnai-models = { path = "../lnai-models", features = ["siren", "pinn"] }
