@@ -1,7 +1,6 @@
 mod dataset;
 mod loss;
 
-use nah::high_complexity;
 use anyhow::Result;
 use burn::backend::cuda::CudaDevice;
 use burn::backend::Autodiff;
@@ -56,7 +55,6 @@ struct Args {
     patience: usize,
 }
 
-#[high_complexity]
 fn main() -> Result<()> {
     let args = Args::parse();
 
