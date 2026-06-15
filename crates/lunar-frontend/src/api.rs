@@ -1,11 +1,11 @@
-use lunar_structures::{GnnRequest, GnnResponse, ImageRequest, ImageResponse, PinnRequest, PinnResponse, StarLore};
-use once_cell::sync::Lazy;
+use lunar_structures::{GnnRequest, GnnResponse, PinnRequest, PinnResponse, PipelineRequest, PipelineResponse, RandomStarRequest, RandomStarResponse, StarDescriptionPayload, StarLore};
+use std::sync::LazyLock;
 
-static HTTP_CLIENT: Lazy<reqwest::Client> = Lazy::new(reqwest::Client::new);
-const BASE_URL: &str = "https://api.star-system.space";
+static HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(reqwest::Client::new);
+const BASE_URL: &str = "http://localhost:25255";
 
-pub async fn fetch_pinn(target_id: u64) -> Result<PinnResponse, reqwest::Error> {
-    let req = PinnRequest { target_id, ..Default::default() };
+pub async fn fetch_pinn(x_pc: f32, y_pc: f32, z_pc: f32, bp_rp: f32, g_mag: f32) -> Result<PinnResponse, reqwest::Error> {
+    let req = PinnRequest { x_pc, y_pc, z_pc, bp_rp, g_mag };
 
     HTTP_CLIENT
         .post(&format!("{BASE_URL}/pinn"))
@@ -21,12 +21,16 @@ pub async fn fetch_gnn_by_temp(
     cy: f32,
     cz: f32,
     radius: f32,
-    temperature: f32
+    temperature: f32,
+    bp_rp: f32,
+    g_mag: f32,
 ) -> Result<GnnResponse, reqwest::Error> {
     let req = GnnRequest {
         center_x: cx,
         center_y: cy,
         center_z: cz,
+        bp_rp,
+        g_mag,
         search_radius: radius,
         temperature,
     };
@@ -40,31 +44,37 @@ pub async fn fetch_gnn_by_temp(
         .await
 }
 
-pub async fn fetch_star_image(star_id: u64, resolution: (u32, u32)) -> Result<ImageResponse, reqwest::Error> {
-    let req = ImageRequest {
-        star_id,
-        width: resolution.0,
-        height: resolution.1
-    };
-
-    HTTP_CLIENT
-        .post(&format!("{BASE_URL}/image"))
-        .json(&req)
-        .send()
-        .await?
-        .json::<ImageResponse>()
-        .await
-}
-
 pub async fn fetch_star_description(gnn_response: GnnResponse, pinn_response: PinnResponse) -> Result<StarLore, reqwest::Error> {
-    dbg!(HTTP_CLIENT
+    let payload = StarDescriptionPayload {
+        pinn_payload: pinn_response,
+        gnn_payload: gnn_response,
+    };
+    HTTP_CLIENT
         .post(&format!("{BASE_URL}/description"))
-        .json(&serde_json::json!({
-                "gnn_response": gnn_response,
-                "pinn_response": pinn_response,
-            }))
+        .json(&payload)
         .send()
         .await?
         .json::<StarLore>()
-        .await)
+        .await
+}
+
+pub async fn fetch_random_star(entropy_temperature: f32) -> Result<RandomStarResponse, reqwest::Error> {
+    let req = RandomStarRequest { entropy_temperature };
+
+    HTTP_CLIENT
+        .post(&format!("{BASE_URL}/random_star"))
+        .json(&req)
+        .send()
+        .await?
+        .json::<RandomStarResponse>()
+        .await
+}
+pub async fn fetch_pipeline(req: PipelineRequest) -> Result<PipelineResponse, reqwest::Error> {
+    HTTP_CLIENT
+        .post(&format!("{BASE_URL}/pipeline"))
+        .json(&req)
+        .send()
+        .await?
+        .json::<PipelineResponse>()
+        .await
 }
