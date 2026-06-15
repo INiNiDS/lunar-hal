@@ -4,7 +4,7 @@ mod assets;
 mod components;
 pub mod api;
 
-use components::{AboutPage, ContactPage, HeroSection};
+use components::{AboutPage, ContactPage, EditorPage, HeroSection};
 
 const MAIN_CSS: Asset = asset!("/assets/main.css");
 const TAILWIND_CSS: Asset = asset!("/assets/tailwind.css");
@@ -17,6 +17,8 @@ enum Route {
     AboutPage {},
     #[route("/contact")]
     ContactPage {},
+    #[route("/editor")]
+    EditorPage {},
 }
 
 fn main() {

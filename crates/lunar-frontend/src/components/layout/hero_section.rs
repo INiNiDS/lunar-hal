@@ -1,11 +1,11 @@
 use crate::assets::{BG_LUNAR_LANDSCAPE, BG_LUNAR_LANDSCAPE_PC};
-use crate::components::{Divider, EntropySlider, GlowingButton, GlowingSubtitle, GlowingTitle, Header};
+use crate::components::{Divider, GlowingButton, GlowingSubtitle, GlowingTitle, Header, JourneyModal};
 use dioxus::prelude::*;
 
 #[component]
 pub fn HeroSection() -> Element {
+    let mut modal_open = use_signal(|| false);
     let nav = use_navigator();
-    let temperature = use_signal(|| 0.7_f32);
 
     rsx! {
         div { class: "h-screen w-full relative overflow-hidden bg-black",
@@ -34,17 +34,19 @@ pub fn HeroSection() -> Element {
                     GlowingSubtitle {}
                     GlowingButton {
                         on_click: move |_| {
-                            nav.push("/about");
+                            modal_open.set(true);
                         },
                     }
                 }
+            }
+        }
 
-                div { class: "absolute right-4 top-1/2 -translate-y-1/2 w-64 hidden lg:block",
-                    EntropySlider {
-                        temperature,
-                        on_change: move |_t| {},
-                    }
-                }
+        if modal_open() {
+            JourneyModal {
+                on_continue: move |_| {
+                    nav.push("/editor");
+                },
+                on_close: move |_| modal_open.set(false),
             }
         }
     }

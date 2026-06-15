@@ -1,2 +1,2 @@
 pub mod sidebar;
-pub use sidebar::EntropySlider;
+pub mod editor_page;
