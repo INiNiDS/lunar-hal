@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lunar HAL — Pipeline Playground</title>
+<style>
+:root {
+  --bg: #0b0e14; --surface: #131820; --surface2: #1a2030; --border: #2a3040;
+  --accent: #7c5cfc; --accent2: #00e5a0; --text: #c8d0e0; --text2: #6a7590;
+  --red: #ff5555; --green: #50fa7b; --blue: #8be9fd; --yellow: #f1fa8c; --pink: #ff79c6; --orange: #ffb86c;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:'Inter',system-ui,-apple-system,sans-serif;font-size:13px;line-height:1.5}
+.layout{display:grid;grid-template-rows:48px 1fr;grid-template-columns:340px 1fr;height:100vh}
+.header{grid-column:1/-1;background:var(--surface);border-bottom:1px solid var(--border);display:flex;align-items:center;padding:0 20px;gap:20px}
+.header h1{font-size:16px;font-weight:700;background:linear-gradient(135deg,var(--accent),var(--accent2));-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.header .tag{font-size:10px;color:var(--text2);background:var(--surface2);padding:2px 8px;border-radius:10px;letter-spacing:1px;text-transform:uppercase}
+.sidebar{background:var(--surface);border-right:1px solid var(--border);overflow-y:auto;padding:16px}
+.panel{margin-bottom:20px}
+.panel-title{font-size:10px;text-transform:uppercase;letter-spacing:1.5px;color:var(--accent);margin-bottom:8px;font-weight:600}
+.tabs{display:flex;gap:2px;margin-bottom:12px}
+.tab{flex:1;padding:8px;text-align:center;background:var(--surface2);border:1px solid var(--border);cursor:pointer;font-size:11px;color:var(--text2);transition:all .15s;border-radius:4px}
+.tab:hover{background:var(--border);color:var(--text)}
+.tab.active{background:var(--accent);color:#fff;border-color:var(--accent)}
+.field{margin-bottom:10px}
+.field label{display:flex;justify-content:space-between;font-size:11px;color:var(--text2);margin-bottom:3px}
+.field label span{color:var(--accent2);font-family:'JetBrains Mono',monospace}
+.field input[type="range"]{width:100%;accent-color:var(--accent);height:4px}
+.field input[type="number"]{width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:4px;font-family:'JetBrains Mono',monospace;font-size:12px}
+.field select{width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:4px;font-size:12px}
+.btn{width:100%;padding:10px;border:none;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;transition:all .15s}
+.btn-primary{background:linear-gradient(135deg,var(--accent),#9b6cff);color:#fff}
+.btn-primary:hover{filter:brightness(1.15);transform:translateY(-1px)}
+.btn-secondary{background:var(--surface2);color:var(--text);border:1px solid var(--border)}
+.btn-secondary:hover{border-color:var(--accent)}
+.btn-row{display:flex;gap:6px}
+.btn-row .btn{flex:1}
+.main{display:flex;flex-direction:column;overflow:hidden}
+.results{flex:1;overflow-y:auto;padding:20px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:8px;overflow:hidden}
+.card-header{padding:10px 14px;border-bottom:1px solid var(--border);font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--accent);display:flex;justify-content:space-between}
+.card-body{padding:14px}
+.stat-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.stat{background:var(--bg);padding:8px 10px;border-radius:6px}
+.stat .label{font-size:9px;text-transform:uppercase;color:var(--text2);letter-spacing:1px}
+.stat .value{font-size:18px;font-weight:700;font-family:'JetBrains Mono',monospace;margin-top:2px}
+.stat .value.hot{color:var(--orange)}
+.stat .value.cool{color:var(--blue)}
+.stat .value.normal{color:var(--yellow)}
+.img-wrap{display:flex;align-items:center;justify-content:center;padding:20px;position:relative;background:var(--bg);border-radius:8px}
+.star-img{border-radius:50%;box-shadow:0 0 60px rgba(124,92,252,.25),0 0 120px rgba(0,229,160,.1);image-rendering:auto}
+.star-class{font-size:24px;font-weight:700;text-align:center;margin-bottom:4px}
+.star-desc{font-size:12px;color:var(--text2);text-align:center;margin-bottom:8px}
+.pipeline-viz{display:flex;align-items:center;gap:8px;margin-bottom:16px;padding:10px;background:var(--surface2);border-radius:8px;overflow-x:auto}
+.pipe-step{padding:6px 12px;border-radius:6px;font-size:11px;white-space:nowrap;font-weight:600}
+.pipe-step.pinn{background:#1e3a5f;color:var(--blue)}
+.pipe-step.siren{background:#3a1e5f;color:var(--pink)}
+.pipe-step.out{background:#1e3f2f;color:var(--green)}
+.pipe-arrow{color:var(--text2);font-size:14px}
+.json-view{background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:10px;font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--green);max-height:200px;overflow:auto;white-space:pre-wrap}
+.log-panel{background:var(--surface);border-top:1px solid var(--border);padding:10px;font-family:'JetBrains Mono',monospace;font-size:10px;max-height:120px;overflow-y:auto;color:var(--text2)}
+.log-entry{padding:2px 0;border-bottom:1px solid var(--border)}
+.log-entry .time{color:var(--accent2);margin-right:8px}
+.log-entry .method{color:var(--accent);margin-right:8px}
+.log-entry .url{color:var(--text)}
+.log-entry .status-ok{color:var(--green);margin-left:8px}
+.log-entry .status-err{color:var(--red);margin-left:8px}
+.log-entry .dur{color:var(--orange);margin-left:8px}
+.benchmark{margin-top:16px}
+.benchmark canvas{width:100%;height:80px;background:var(--bg);border-radius:6px;border:1px solid var(--border)}
+.bench-stats{display:flex;gap:16px;margin-top:8px;font-size:11px;color:var(--text2)}
+.bench-stats strong{color:var(--text)}
+.preset-row{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:10px}
+.preset{padding:4px 10px;border-radius:12px;font-size:10px;cursor:pointer;border:1px solid var(--border);background:var(--bg);color:var(--text2);transition:all .15s}
+.preset:hover{border-color:var(--accent);color:var(--text)}
+.preset .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:4px;vertical-align:middle}
+.preset.M .dot{background:#ff4444}
+.preset.K .dot{background:#ff8844}
+.preset.G .dot{background:#ffcc44}
+.preset.F .dot{background:#ffffaa}
+.preset.A .dot{background:#ccccff}
+.preset.B .dot{background:#8888ff}
+.preset.O .dot{background:#5555ff}
+</style>
+</head>
+<body>
+<div class="layout">
+<div class="header">
+  <h1>Lunar HAL</h1>
+  <span class="tag">Pipeline Playground</span>
+  <span style="flex:1"></span>
+  <span style="font-size:11px;color:var(--text2)">127.0.0.1:25255</span>
+</div>
+<div class="sidebar">
+
+<div class="panel">
+<div class="panel-title">Star Type Presets</div>
+<div class="preset-row">
+<span class="preset M" onclick="loadPreset('M')">M Dwarf<span class="dot"></span></span>
+<span class="preset K" onclick="loadPreset('K')">K Orange</span>
+<span class="preset G" onclick="loadPreset('G')">G Solar</span>
+<span class="preset F" onclick="loadPreset('F')">F Yellow</span>
+<span class="preset A" onclick="loadPreset('A')">A White</span>
+<span class="preset B" onclick="loadPreset('B')">B Blue</span>
+<span class="preset O" onclick="loadPreset('O')">O Giant</span>
+<span class="preset K" onclick="loadPreset('KIII')">K Giant</span>
+</div>
+</div>
+
+<div class="panel">
+<div class="panel-title">Endpoint</div>
+<div class="tabs">
+<div class="tab active" onclick="setTab('pipeline')" id="tab-pipeline">Pipeline</div>
+<div class="tab" onclick="setTab('pinn')" id="tab-pinn">PINN</div>
+<div class="tab" onclick="setTab('siren')" id="tab-siren">SIREN</div>
+<div class="tab" onclick="setTab('gnn')" id="tab-gnn">GNN</div>
+</div>
+</div>
+
+<div class="panel" id="input-pipeline">
+<div class="panel-title">Spatial + Photometric Input</div>
+<div class="field"><label>x_pc (pc) <span id="v-x">0</span></label><input type="range" id="x_pc" min="-500" max="500" step="1" value="0" oninput="upd('x')"></div>
+<div class="field"><label>y_pc (pc) <span id="v-y">0</span></label><input type="range" id="y_pc" min="-500" max="500" step="1" value="0" oninput="upd('y')"></div>
+<div class="field"><label>z_pc (pc) <span id="v-z">100</span></label><input type="range" id="z_pc" min="-500" max="500" step="1" value="100" oninput="upd('z')"></div>
+<div class="field"><label>bp_rp <span id="v-bp">1.50</span></label><input type="range" id="bp_rp" min="-0.5" max="5.0" step="0.01" value="1.50" oninput="upd('bp')"></div>
+<div class="field"><label>G_mag (apparent) <span id="v-gm">10.00</span></label><input type="range" id="g_mag" min="-1" max="20" step="0.1" value="10" oninput="upd('gm')"></div>
+<div class="field"><label>Texture size</label>
+<select id="tex-size"><option value="32">32x32</option><option value="64" selected>64x64</option><option value="128">128x128</option><option value="256">256x256</option></select>
+</div>
+<button class="btn btn-primary" onclick="runPipeline()">▶ Run Pipeline (PINN → SIREN)</button>
+</div>
+
+<div class="panel" id="input-pinn" style="display:none">
+<div class="panel-title">PINN Direct</div>
+<div class="field"><label>x_pc <span id="v-px">0</span></label><input type="range" id="p-x" min="-500" max="500" step="1" value="0" oninput="updPinn()"></div>
+<div class="field"><label>y_pc <span id="v-py">0</span></label><input type="range" id="p-y" min="-500" max="500" step="1" value="0" oninput="updPinn()"></div>
+<div class="field"><label>z_pc <span id="v-pz">100</span></label><input type="range" id="p-z" min="-500" max="500" step="1" value="100" oninput="updPinn()"></div>
+<div class="field"><label>bp_rp <span id="v-pbp">1.50</span></label><input type="range" id="p-bp" min="-0.5" max="5.0" step="0.01" value="1.50" oninput="updPinn()"></div>
+<div class="field"><label>G_mag <span id="v-pgm">10.0</span></label><input type="range" id="p-gm" min="-1" max="20" step="0.1" value="10" oninput="updPinn()"></div>
+<button class="btn btn-primary" onclick="runPinn()">▶ Run PINN</button>
+</div>
+
+<div class="panel" id="input-siren" style="display:none">
+<div class="panel-title">SIREN Direct</div>
+<div class="field"><label>bp_rp <span id="v-sbp">1.50</span></label><input type="range" id="s-bp" min="-0.5" max="5.0" step="0.01" value="1.50" oninput="updSiren()"></div>
+<div class="field"><label>M_G (absolute) <span id="v-smg">5.00</span></label><input type="range" id="s-mg" min="-6" max="14" step="0.1" value="5.0" oninput="updSiren()"></div>
+<div class="field"><label>T_eff (K) <span id="v-st">5778</span></label><input type="range" id="s-teff" min="2000" max="40000" step="100" value="5778" oninput="updSiren()"></div>
+<div class="field"><label>Texture size</label>
+<select id="s-size"><option value="32">32x32</option><option value="64" selected>64x64</option><option value="128">128x128</option><option value="256">256x256</option></select>
+</div>
+<button class="btn btn-primary" onclick="runSiren()">▶ Render SIREN</button>
+</div>
+
+<div class="panel" id="input-gnn" style="display:none">
+<div class="panel-title">GNN (star field)</div>
+<div class="field"><label>x_pc <span id="v-gx">0</span></label><input type="number" id="g-x" value="0"></div>
+<div class="field"><label>y_pc <span id="v-gy">0</span></label><input type="number" id="g-y" value="0"></div>
+<div class="field"><label>z_pc <span id="v-gz">0</span></label><input type="number" id="g-z" value="0"></div>
+<div class="field"><label>bp_rp <span id="v-gbp">1.50</span></label><input type="number" id="g-bp" value="1.50" step="0.01"></div>
+<div class="field"><label>G_mag <span id="v-ggm">10.0</span></label><input type="number" id="g-gm" value="10.0" step="0.1"></div>
+<div class="field"><label>Search radius (pc)</label><input type="number" id="g-rad" value="50"></div>
+<div class="field"><label>Temperature (randomness)</label><input type="range" id="g-temp" min="0" max="2" step="0.1" value="0"></div>
+<button class="btn btn-primary" onclick="runGnn()">▶ Run GNN</button>
+</div>
+
+<div class="log-panel" id="log">
+<div class="log-entry"><span class="time">--:--:--</span><span class="method">SYS</span><span class="url">Playground ready. Select endpoint and run.</span></div>
+</div>
+</div>
+
+<div class="results" id="results">
+<div class="pipeline-viz" id="pipe-viz">
+<span class="pipe-step pinn">PINN</span><span class="pipe-arrow">→</span><span class="pipe-step siren">SIREN</span><span class="pipe-arrow">→</span><span class="pipe-step out">Texture + Metadata</span>
+</div>
+<div class="grid2">
+<div class="card">
+<div class="card-header"><span>Stellar Parameters</span><span id="pinn-time"></span></div>
+<div class="card-body">
+<div class="stat-grid">
+<div class="stat"><div class="label">T_eff</div><div class="value" id="r-teff">—</div></div>
+<div class="stat"><div class="label">R/R☉</div><div class="value" id="r-rad">—</div></div>
+<div class="stat"><div class="label">M/M☉</div><div class="value" id="r-mass">—</div></div>
+<div class="stat"><div class="label">L/L☉</div><div class="value" id="r-lum">—</div></div>
+</div>
+<div id="r-class" class="star-class" style="margin-top:10px">—</div>
+<div id="r-desc" class="star-desc"></div>
+</div>
+</div>
+<div class="card">
+<div class="card-header"><span>SIREN Texture</span><span id="siren-time"></span></div>
+<div class="card-body">
+<div class="img-wrap"><img id="star-img" class="star-img" width="256" height="256" src="" alt="select star type and click render"></div>
+</div>
+</div>
+</div>
+<div class="card" style="margin-bottom:16px">
+<div class="card-header"><span>Raw Response</span><span id="resp-size"></span></div>
+<div class="card-body"><div class="json-view" id="json-out">Run a pipeline to see results</div></div>
+</div>
+<div class="card" id="bench-card" style="display:none">
+<div class="card-header">Benchmark Latency</div>
+<div class="card-body">
+<canvas id="bench-canvas" width="800" height="80"></canvas>
+<div class="bench-stats">
+<span>Total: <strong id="bench-total">—</strong></span>
+<span>PINN: <strong id="bench-pinn">—</strong></span>
+<span>SIREN: <strong id="bench-siren">—</strong></span>
+<span>PNG encode: <strong id="bench-png">—</strong></span>
+</div>
+</div>
+</div>
+</div>
+</div>
+
+<script>
+const B='http://127.0.0.1:25255';
+const P={M:{bp:3.6,mg:10,teff:3200},K:{bp:1.4,mg:7.5,teff:4800},G:{bp:0.8,mg:4.5,teff:5778},F:{bp:0.4,mg:2.5,teff:7200},A:{bp:0.0,mg:1.0,teff:9500},B:{bp:-0.2,mg:-1.0,teff:15000},O:{bp:-0.3,mg:-4.0,teff:30000},KIII:{bp:1.8,mg:-2.0,teff:4300}};
+let curTab='pipeline', benchData=[], running=false;
+
+function log(method,url,status,dur){
+  const t=new Date().toISOString().slice(11,19);
+  const el=document.getElementById('log');
+  const s=status>=200&&status<300?'status-ok':'status-err';
+  el.innerHTML=`<div class="log-entry"><span class="time">${t}</span><span class="method">${method}</span><span class="url">${url}</span><span class="${s}">${status}</span><span class="dur">${dur}ms</span></div>`+el.innerHTML;
+  if(el.children.length>50)el.removeChild(el.lastChild);
+}
+
+function upd(p){
+  document.getElementById('v-x').textContent=document.getElementById('x_pc').value;
+  document.getElementById('v-y').textContent=document.getElementById('y_pc').value;
+  document.getElementById('v-z').textContent=document.getElementById('z_pc').value;
+  document.getElementById('v-bp').textContent=parseFloat(document.getElementById('bp_rp').value).toFixed(2);
+  document.getElementById('v-gm').textContent=parseFloat(document.getElementById('g_mag').value).toFixed(1);
+}
+function updPinn(){
+  document.getElementById('v-px').textContent=document.getElementById('p-x').value;
+  document.getElementById('v-py').textContent=document.getElementById('p-y').value;
+  document.getElementById('v-pz').textContent=document.getElementById('p-z').value;
+  document.getElementById('v-pbp').textContent=parseFloat(document.getElementById('p-bp').value).toFixed(2);
+  document.getElementById('v-pgm').textContent=parseFloat(document.getElementById('p-gm').value).toFixed(1);
+}
+function updSiren(){
+  document.getElementById('v-sbp').textContent=parseFloat(document.getElementById('s-bp').value).toFixed(2);
+  document.getElementById('v-smg').textContent=parseFloat(document.getElementById('s-mg').value).toFixed(1);
+  document.getElementById('v-st').textContent=parseInt(document.getElementById('s-teff').value).toLocaleString();
+}
+
+function setTab(t){
+  curTab=t;
+  document.querySelectorAll('.tab').forEach(e=>e.classList.remove('active'));
+  document.getElementById('tab-'+t).classList.add('active');
+  ['pipeline','pinn','siren','gnn'].forEach(id=>{
+    document.getElementById('input-'+id).style.display=id===t?'block':'none';
+  });
+}
+
+function loadPreset(key){
+  const p=P[key];
+  ['x_pc','y_pc','z_pc','bp_rp','g_mag','p-x','p-y','p-z','p-bp','p-gm','s-bp','s-mg','s-teff'].forEach(id=>{
+    if(document.getElementById(id))return;
+  });
+  const el=id=>document.getElementById(id);
+  if(el('x_pc'))el('x_pc').value=0;
+  if(el('y_pc'))el('y_pc').value=0;
+  if(el('z_pc'))el('z_pc').value=100;
+  if(el('bp_rp'))el('bp_rp').value=p.bp;
+  if(el('g_mag'))el('g_mag').value=p.mg>6?10:p.mg+5;
+  if(el('p-x'))el('p-x').value=0;
+  if(el('p-y'))el('p-y').value=0;
+  if(el('p-z'))el('p-z').value=100;
+  if(el('p-bp'))el('p-bp').value=p.bp;
+  if(el('p-gm'))el('p-gm').value=p.mg>6?10:p.mg+5;
+  if(el('s-bp'))el('s-bp').value=p.bp;
+  if(el('s-mg'))el('s-mg').value=p.mg;
+  if(el('s-teff'))el('s-teff').value=p.teff;
+  upd();updPinn();updSiren();
+  runPipeline();
+}
+
+function classify(t){
+  if(t>=30000)return'O-type Blue Supergiant';if(t>=10000)return'B-type Blue Giant';
+  if(t>=7500)return'A-type White Star';if(t>=6000)return'F-type Yellow-White';
+  if(t>=5200)return'G-type Solar';if(t>=3700)return'K-type Orange Dwarf';
+  return'M-type Red Dwarf';
+}
+function teffColor(t){
+  if(t>=10000)return'hot';if(t>=6000)return'normal';return'cool';
+}
+
+async function runPipeline(){
+  if(running)return;running=true;
+  const sz=parseInt(document.getElementById('tex-size').value);
+  const xp=parseFloat(document.getElementById('x_pc').value);
+  const yp=parseFloat(document.getElementById('y_pc').value);
+  const zp=parseFloat(document.getElementById('z_pc').value);
+  const bp=parseFloat(document.getElementById('bp_rp').value);
+  const gm=parseFloat(document.getElementById('g_mag').value);
+
+  const t0=performance.now();
+  try{
+    const r=await fetch('/pipeline',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({x_pc:xp,y_pc:yp,z_pc:zp,bp_rp:bp,g_mag:gm,texture_size:sz})});
+    const t1=performance.now();
+    const d=await r.json();
+    log('POST','/pipeline',r.status,Math.round(t1-t0));
+    benchData.push(t1-t0);
+    renderPipeline(d,sz,xp,yp,zp,bp,gm);
+    const pngUrl=`/pipeline/png?x_pc=${xp}&y_pc=${yp}&z_pc=${zp}&bp_rp=${bp}&g_mag=${gm}&size=${sz}`;
+    document.getElementById('star-img').src=pngUrl;
+  }catch(e){log('POST','/pipeline',0,'ERR');}
+  running=false;
+}
+
+async function runPinn(){
+  if(running)return;running=true;
+  const r=await fetch(B+'/pinn',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({x_pc:+document.getElementById('p-x').value,y_pc:+document.getElementById('p-y').value,z_pc:+document.getElementById('p-z').value,bp_rp:+document.getElementById('p-bp').value,g_mag:+document.getElementById('p-gm').value})});
+  const d=await r.json();
+  const t=performance.now();
+  log('POST','/pinn',r.status,0);
+  document.getElementById('r-teff').textContent=d.temperature_k.toLocaleString()+' K';
+  document.getElementById('r-teff').className='value '+teffColor(d.temperature_k);
+  document.getElementById('r-rad').textContent=d.radius_solar.toFixed(3);
+  document.getElementById('r-mass').textContent=d.mass_solar.toFixed(3);
+  document.getElementById('r-lum').textContent=d.luminosity_solar.toFixed(3);
+  document.getElementById('r-class').textContent=classify(d.temperature_k);
+  document.getElementById('r-desc').textContent='';
+  document.getElementById('json-out').textContent=JSON.stringify(d,null,2);
+  running=false;
+}
+
+async function runSiren(){
+  if(running)return;running=true;
+  const bp=parseFloat(document.getElementById('s-bp').value);
+  const mg=parseFloat(document.getElementById('s-mg').value);
+  const teff=parseInt(document.getElementById('s-teff').value);
+  const sz=parseInt(document.getElementById('s-size').value);
+  document.getElementById('star-img').src=`${B}/siren/png?width=${sz}&height=${sz}&bp_rp=${bp}&m_g=${mg}&temperature_k=${teff}`;
+  document.getElementById('r-teff').textContent=teff.toLocaleString()+' K';
+  document.getElementById('r-teff').className='value '+teffColor(teff);
+  document.getElementById('r-class').textContent=classify(teff);
+  document.getElementById('r-desc').textContent='bp_rp='+bp.toFixed(2)+', M_G='+mg.toFixed(1);
+  try{
+    const r=await fetch(B+'/siren/texture',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({width:sz,height:sz,bp_rp:bp,m_g:mg,log_teff:Math.log10(teff)})});
+    const d=await r.json();
+    log('POST','/siren/texture',r.status,0);
+    document.getElementById('json-out').textContent=JSON.stringify(d,null,2).substring(0,800)+'...';
+  }catch(e){}
+  running=false;
+}
+
+async function runGnn(){
+  if(running)return;running=true;
+  const r=await fetch(B+'/gnn',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({center_x:+document.getElementById('g-x').value,center_y:+document.getElementById('g-y').value,center_z:+document.getElementById('g-z').value,bp_rp:+document.getElementById('g-bp').value,g_mag:+document.getElementById('g-gm').value,search_radius:+document.getElementById('g-rad').value,temperature:+document.getElementById('g-temp').value})});
+  const d=await r.json();
+  const n=d.stars?d.stars.length:0;
+  log('POST','/gnn',r.status,0);
+  document.getElementById('json-out').textContent=JSON.stringify(d,null,2).substring(0,2000);
+  document.getElementById('r-class').textContent=n+' stars found';
+  document.getElementById('r-desc').textContent='Radius: '+document.getElementById('g-rad').value+' pc';
+  running=false;
+}
+
+function renderPipeline(d,sz,x,y,z,bp,gm){
+  const p=d.pinn;
+  const m=d.metadata;
+  document.getElementById('r-teff').textContent=p.temperature_k.toLocaleString()+' K';
+  document.getElementById('r-teff').className='value '+teffColor(p.temperature_k);
+  document.getElementById('r-rad').textContent=p.radius_solar.toFixed(3);
+  document.getElementById('r-mass').textContent=p.mass_solar.toFixed(3);
+  document.getElementById('r-lum').textContent=p.luminosity_solar.toFixed(3);
+  document.getElementById('r-class').textContent=classify(p.temperature_k);
+  document.getElementById('r-desc').textContent=m?spectralInfo(m,p):'';
+  let j=JSON.stringify(d,null,2);
+  if(j.length>2000)j=j.substring(0,2000)+'\n  // ... '+((d.siren?.pixels?.length||0)/3)+' RGB pixels truncated';
+  document.getElementById('json-out').textContent=j;
+  document.getElementById('resp-size').textContent=d.siren?.pixels?.length?Math.round(d.siren.pixels.length/3)+' pixels':'no texture';
+}
+
+function spectralInfo(m,p){
+  return m.spectral_class+'-type '+m.category+' — '+m.designated_name;
+}
+
+upd(); updPinn(); updSiren();
+</script>
+</body>
+</html>

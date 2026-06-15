@@ -1,0 +1,11 @@
+[application]
+
+[web.app]
+title = "Lunar Testbench"
+base_path = ""
+
+[web.resource]
+script = []
+
+[web.resource.dev]
+script = []
