@@ -13,4 +13,4 @@ run_pipeline.sh
 !.env.example
 data
 *.bpk
-stellar_norm.json
+models/stellar_norm.json

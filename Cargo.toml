@@ -1,5 +1,11 @@
 [workspace]
-members = ["ai/lnai", "ai/lnai-models","ai/lnai-gnn","ai/lunar-ai-cli","crates/lunar-backend", "crates/lunar-frontend", "crates/lunar-site", "crates/lunar-start", "crates/lunar-structures"]
+members = [
+    "ai/lnai", "ai/lnai-models", "ai/lnai-gnn", "ai/lunar-ai-cli", "ai/lnai-siren",
+    "crates/lunar-backend", "crates/lunar-frontend", "crates/lunar-site",
+    "crates/lunar-start", "crates/lunar-structures", "crates/lunar-ui-shared",
+    "testbench/lunar-structures-testbench",
+    "testbench/lunar-testbench", "testbench/lunar-testbench-backend",
+]
 resolver = "3"
 
 [workspace.package]
