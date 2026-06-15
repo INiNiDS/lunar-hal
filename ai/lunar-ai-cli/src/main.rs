@@ -1,6 +1,5 @@
 use anyhow::{anyhow, Context, Result};
 use clap::{Parser, Subcommand};
-use nah::high_complexity;
 use polars::prelude::*;
 use rand::seq::SliceRandom;
 use sha2::{Digest, Sha256};
@@ -507,7 +506,6 @@ fn hex_encode(bytes: &[u8]) -> String {
     s
 }
 
-#[high_complexity]
 fn fetch_stellar_data(
     output_path: &str,
     username: Option<&str>,
@@ -528,6 +526,7 @@ fn fetch_stellar_data(
 
     #[cfg(debug_assertions)]
     {
+        let _ = (username, password, max_rows, ra_min, ra_max, max_ruwe, poll_initial_secs, poll_max_secs, include_velocities);
         let url = "https://exoplanetarchive.ipac.caltech.edu/TAP/sync";
         let query = "select hostname, ra, dec, sy_dist, st_teff, st_rad, st_mass, st_lum from ps";
 

@@ -2,14 +2,12 @@ use dioxus::prelude::*;
 use gloo_timers::callback::Timeout;
 use std::cell::RefCell;
 use std::rc::Rc;
-use nah::high_complexity;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::{Clamped, JsCast};
 use web_sys::{
     CanvasRenderingContext2d, HtmlCanvasElement, ImageData, MouseEvent, TouchEvent, Window,
 };
 
-const FAVICON: Asset = asset!("/assets/favicon.ico");
 const MAIN_CSS: Asset = asset!("/assets/main.css");
 
 const INSTALL_CMD: &str =
@@ -69,7 +67,6 @@ fn App() -> Element {
                 if !active() { active.set(true); }
             },
 
-            document::Link { rel: "icon", href: FAVICON }
             document::Link { rel: "stylesheet", href: MAIN_CSS }
             canvas { id: "dither-canvas" }
             div { id: "lunar-hal-text", "LUNAR-HAL" }
@@ -270,7 +267,6 @@ fn resize_canvas(canvas: &HtmlCanvasElement, window: &Window) {
     canvas.set_width((w / PIXEL_SIZE).ceil().max(1.0) as u32);
     canvas.set_height((h / PIXEL_SIZE).ceil().max(1.0) as u32);
 }
-#[high_complexity]
 fn draw(
     canvas: &HtmlCanvasElement,
     ctx: &CanvasRenderingContext2d,
