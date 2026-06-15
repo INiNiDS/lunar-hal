@@ -6,4 +6,13 @@ readme.workspace = true
 edition.workspace = true
 authors.workspace = true
 
+[[bin]]
+name = "lunar-start"
+path = "src/main.rs"
+
 [dependencies]
+clap = { version = "4.6.1", features = ["derive"] }
+anyhow = "1.0.102"
+tokio = { version = "1.52.3", features = ["full"] }
+ctrlc = "3.4"
+nah = "0.1.2"
