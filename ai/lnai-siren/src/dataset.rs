@@ -496,9 +496,9 @@ fn generate_pixel(u: f32, v: f32, base: &BaseColor, params: &SpotParams, seed: u
 }
 
 fn granulation_noise(u: f32, v: f32, seed: u64, freq: f32) -> f32 {
-    let n1 = (u * freq + v * freq * 0.7 + hash_float(seed, 0) * 6.28).sin();
-    let n2 = (u * freq * 1.3 - v * freq * 0.9 + hash_float(seed, 1) * 6.28).sin();
-    let n3 = (u * freq * 0.7 + v * freq * 1.1 + hash_float(seed, 2) * 6.28).sin();
+    let n1 = (u * freq + v * freq * 0.7 + hash_float(seed, 0) * std::f32::consts::TAU).sin();
+    let n2 = (u * freq * 1.3 - v * freq * 0.9 + hash_float(seed, 1) * std::f32::consts::TAU).sin();
+    let n3 = (u * freq * 0.7 + v * freq * 1.1 + hash_float(seed, 2) * std::f32::consts::TAU).sin();
     (n1 + n2 + n3) / 3.0
 }
 
