@@ -66,7 +66,7 @@ fn ValidationBody(
         };
         let mut res = jobs.clone();
         spawn(async move {
-            match api::start_validate(spec).await {
+            match api::start_validate(&spec).await {
                 Ok(job) => selected.set(Some(job.id)),
                 Err(e) => error.set(Some(e)),
             }
@@ -132,7 +132,7 @@ fn ValidationBody(
                     JobDetail { job: job.clone(), on_cancel: move |id: String| {
                         let mut res = jobs.clone();
                         spawn(async move {
-                            let _ = api::cancel_job(id).await;
+                            let _ = api::cancel_job(&id).await;
                             res.restart();
                         });
                     } }

@@ -68,7 +68,7 @@ fn PinnPanel() -> Element {
             "bp_rp": bp_rp() as f32, "g_mag": g_mag() as f32,
         });
         spawn(async move {
-            match api::pinn_infer(payload).await {
+            match api::pinn_infer(&payload).await {
                 Ok(v) => result.set(Some(v)),
                 Err(e) => error.set(Some(e)),
             }
@@ -140,7 +140,7 @@ fn GnnPanel() -> Element {
             "search_radius": radius() as f32, "temperature": temperature() as f32,
         });
         spawn(async move {
-            match api::gnn_infer(payload).await {
+            match api::gnn_infer(&payload).await {
                 Ok(v) => result.set(Some(v)),
                 Err(e) => error.set(Some(e)),
             }
@@ -211,7 +211,7 @@ fn SirenPanel() -> Element {
             "bp_rp": bp_rp() as f32, "m_g": m_g() as f32, "log_teff": (teff() as f32).log10(),
         });
         spawn(async move {
-            match api::siren_texture(payload).await {
+            match api::siren_texture(&payload).await {
                 Ok(v) => result.set(Some(v)),
                 Err(e) => error.set(Some(e)),
             }

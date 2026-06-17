@@ -30,7 +30,7 @@ pub fn Pipeline() -> Element {
             "texture_size": texture_size(),
         });
         spawn(async move {
-            match api::pipeline(payload).await {
+            match api::pipeline(&payload).await {
                 Ok(v) => pipeline_result.set(Some(v)),
                 Err(e) => error.set(Some(e)),
             }
@@ -50,7 +50,7 @@ pub fn Pipeline() -> Element {
             size: texture_size(),
         };
         spawn(async move {
-            match api::pipeline_png(q).await {
+            match api::pipeline_png(&q).await {
                 Ok((bytes, w, h)) => {
                     let b64 = base64_encode(&bytes);
                     png_data_url.set(Some(format!("data:image/png;base64,{}", b64)));
@@ -67,7 +67,7 @@ pub fn Pipeline() -> Element {
         error.set(None);
         let payload = json!({ "entropy_temperature": 1.0_f32 });
         spawn(async move {
-            match api::random_star(payload).await {
+            match api::random_star(&payload).await {
                 Ok(v) => {
                     if let (Some(bp), Some(gm), Some(xx), Some(yy), Some(zz)) = (
                         v.get("bp_rp").and_then(|x| x.as_f64()),
@@ -103,7 +103,7 @@ pub fn Pipeline() -> Element {
             "gnn_payload": { "stars": [] },
         });
         spawn(async move {
-            match api::description(payload).await {
+            match api::description(&payload).await {
                 Ok(v) => description_result.set(Some(v)),
                 Err(e) => error.set(Some(e)),
             }

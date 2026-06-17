@@ -37,7 +37,7 @@ pub fn SirenGallery() -> Element {
             temperature_k: teff(),
         };
         spawn(async move {
-            match api::siren_png(q).await {
+            match api::siren_png(&q).await {
                 Ok((bytes, w, h)) => {
                     let b64 = base64_encode(&bytes);
                     data_url.set(Some(format!("data:image/png;base64,{}", b64)));
