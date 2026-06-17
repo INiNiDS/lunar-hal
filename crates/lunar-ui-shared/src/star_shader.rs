@@ -1,9 +1,15 @@
+#[cfg(all(feature = "web", target_family = "wasm"))]
 use std::cell::RefCell;
+#[cfg(all(feature = "web", target_family = "wasm"))]
 use std::rc::Rc;
 use dioxus::prelude::*;
+
+#[cfg(all(feature = "web", target_family = "wasm"))]
 use wasm_bindgen::{JsCast, JsValue, prelude::Closure};
+#[cfg(all(feature = "web", target_family = "wasm"))]
 use web_sys::WebGl2RenderingContext as Gl2;
 
+#[cfg(all(feature = "web", target_family = "wasm"))]
 macro_rules! gl_err {
     ($($arg:tt)*) => {
         web_sys::console::error_1(&JsValue::from(format!($($arg)*)))
@@ -81,11 +87,106 @@ void main() {
     fragColor = vec4(max(color*disk,vec3(0.0)),1.0);
 }"#;
 
+/// JS bootstrap used on the desktop build, where the Rust side has no
+/// `web-sys` and therefore has to drive the canvas from inside the
+/// WebView via `document::eval`.
+#[cfg(not(all(feature = "web", target_family = "wasm")))]
+const DESKTOP_JS: &str = r#"
+(function() {
+    const canvas = document.getElementById('__ID__');
+    if (!canvas) return;
+    if (canvas.__starReady) return;
+    canvas.__starReady = true;
+    const gl = canvas.getContext('webgl2');
+    if (!gl) { console.error('StarShader: WebGL2 not supported'); return; }
+
+    const compile = (type, src) => {
+        const sh = gl.createShader(type);
+        gl.shaderSource(sh, src);
+        gl.compileShader(sh);
+        if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
+            console.error('StarShader shader error:', gl.getShaderInfoLog(sh));
+        }
+        return sh;
+    };
+    const vs = compile(gl.VERTEX_SHADER, `__VERT__`);
+    const fs = compile(gl.FRAGMENT_SHADER, `__FRAG__`);
+    const prog = gl.createProgram();
+    gl.attachShader(prog, vs); gl.attachShader(prog, fs); gl.linkProgram(prog);
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+        console.error('StarShader link error:', gl.getProgramInfoLog(prog));
+        return;
+    }
+    gl.useProgram(prog);
+
+    const verts = new Float32Array([-1,-1, 1,-1, -1,1, 1,1]);
+    const buf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.bufferData(gl.ARRAY_BUFFER, verts, gl.STATIC_DRAW);
+    const aPos = gl.getAttribLocation(prog, 'aPos');
+    gl.enableVertexAttribArray(aPos);
+    gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+    const uTime = gl.getUniformLocation(prog, 'uTime');
+    const uTeff = gl.getUniformLocation(prog, 'uTeff');
+    const uBpRp = gl.getUniformLocation(prog, 'uBpRp');
+    const uScale = gl.getUniformLocation(prog, 'uScale');
+    const uSpeed = gl.getUniformLocation(prog, 'uSpeed');
+    const uContrast = gl.getUniformLocation(prog, 'uContrast');
+
+    const state = { teff: __TEFF__, bp_rp: __BP_RP__, scale: __SCALE__, speed: __SPEED__, contrast: __CONTRAST__, t: 0 };
+    canvas.__starUpdate = (teff, bp_rp, scale, speed, contrast) => {
+        state.teff = teff; state.bp_rp = bp_rp;
+        state.scale = scale; state.speed = speed; state.contrast = contrast;
+    };
+
+    const w = canvas.width, h = canvas.height;
+    gl.viewport(0, 0, w, h);
+    gl.clearColor(0.02, 0.02, 0.04, 1.0);
+
+    const tick = () => {
+        state.t += 1/60;
+        gl.uniform1f(uTime, state.t);
+        gl.uniform1f(uTeff, state.teff);
+        gl.uniform1f(uBpRp, state.bp_rp);
+        gl.uniform1f(uScale, state.scale);
+        gl.uniform1f(uSpeed, state.speed);
+        gl.uniform1f(uContrast, state.contrast);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+        canvas.__starRaf = requestAnimationFrame(tick);
+    };
+    canvas.__starRaf = requestAnimationFrame(tick);
+})();
+"#;
+
+#[cfg(not(all(feature = "web", target_family = "wasm")))]
+fn escape_for_template(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('`', "\\`").replace("${", "\\${")
+}
+
+#[cfg(not(all(feature = "web", target_family = "wasm")))]
+fn build_desktop_js(id: &str, teff: f32, bp_rp: f32, scale: f32, speed: f32, contrast: f32) -> String {
+    let v = escape_for_template(VERT_SRC);
+    let f = escape_for_template(FRAG_SRC);
+    DESKTOP_JS
+        .replace("__ID__", id)
+        .replace("__VERT__", &v)
+        .replace("__FRAG__", &f)
+        .replace("__TEFF__", &format!("{teff}"))
+        .replace("__BP_RP__", &format!("{bp_rp}"))
+        .replace("__SCALE__", &format!("{scale}"))
+        .replace("__SPEED__", &format!("{speed}"))
+        .replace("__CONTRAST__", &format!("{contrast}"))
+}
+
+#[cfg(all(feature = "web", target_family = "wasm"))]
 struct StarProps {
     teff: f32, bp_rp: f32, scale: f32, speed: f32, contrast: f32,
 }
 
 #[allow(dead_code)]
+#[cfg(all(feature = "web", target_family = "wasm"))]
 struct GlState {
     _slot: Rc<RefCell<Option<Closure<dyn FnMut(f64)>>>>,
     ctx: Gl2,
@@ -96,6 +197,7 @@ struct GlState {
     u_contrast: web_sys::WebGlUniformLocation,
 }
 
+#[cfg(all(feature = "web", target_family = "wasm"))]
 thread_local! {
     static GL_STATE: RefCell<Option<GlState>> = const { RefCell::new(None) };
 }
@@ -107,26 +209,46 @@ pub fn StarShaderCanvas(
     noise_scale: f64, noise_speed: f64, contrast: f64,
 ) -> Element {
     let canvas_id = use_signal(|| {
-        format!("star-gl-{:016x}", js_sys::Math::random().to_bits())
+        #[cfg(all(feature = "web", target_family = "wasm"))]
+        {
+            format!("star-gl-{:016x}", js_sys::Math::random().to_bits())
+        }
+        #[cfg(not(all(feature = "web", target_family = "wasm")))]
+        {
+            use std::sync::atomic::{AtomicU64, Ordering};
+            static COUNTER: AtomicU64 = AtomicU64::new(0);
+            let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+            format!("star-gl-{n}")
+        }
     });
+
+    let teff_f = teff as f32;
+    let bp_rp_f = bp_rp as f32;
+    let scale_f = noise_scale as f32;
+    let speed_f = noise_speed as f32;
+    let contrast_f = contrast as f32;
+
+    #[cfg(all(feature = "web", target_family = "wasm"))]
     let props: Signal<Rc<RefCell<StarProps>>> = use_signal(|| {
         Rc::new(RefCell::new(StarProps {
-            teff: teff as f32, bp_rp: bp_rp as f32,
-            scale: noise_scale as f32, speed: noise_speed as f32,
-            contrast: contrast as f32,
+            teff: teff_f, bp_rp: bp_rp_f,
+            scale: scale_f, speed: speed_f,
+            contrast: contrast_f,
         }))
     });
 
+    #[cfg(all(feature = "web", target_family = "wasm"))]
     {
         let p = &*props.read();
         let mut mp = p.borrow_mut();
-        mp.teff = teff as f32;
-        mp.bp_rp = bp_rp as f32;
-        mp.scale = noise_scale as f32;
-        mp.speed = noise_speed as f32;
-        mp.contrast = contrast as f32;
+        mp.teff = teff_f;
+        mp.bp_rp = bp_rp_f;
+        mp.scale = scale_f;
+        mp.speed = speed_f;
+        mp.contrast = contrast_f;
     }
 
+    #[cfg(all(feature = "web", target_family = "wasm"))]
     {
         let id = canvas_id.read().clone();
         let p2 = props.clone();
@@ -135,107 +257,54 @@ pub fn StarShaderCanvas(
         use_effect(move || {
             let window = match web_sys::window() {
                 Some(w) => w,
-                None => {
-                    gl_err!("StarShader: no window");
-                    return;
-                }
+                None => { gl_err!("StarShader: no window"); return; }
             };
             let doc = match window.document() {
                 Some(d) => d,
-                None => {
-                    gl_err!("StarShader: no document");
-                    return;
-                }
+                None => { gl_err!("StarShader: no document"); return; }
             };
             let canvas = match doc.get_element_by_id(&id) {
                 Some(el) => match el.dyn_into::<web_sys::HtmlCanvasElement>() {
                     Ok(c) => c,
-                    Err(_) => {
-                        gl_err!("StarShader: element is not a canvas");
-                        return;
-                    }
+                    Err(_) => { gl_err!("StarShader: not a canvas"); return; }
                 },
-                None => {
-                    gl_err!("StarShader: canvas element not found");
-                    return;
-                }
+                None => { gl_err!("StarShader: canvas not found"); return; }
             };
             canvas.set_width(w);
             canvas.set_height(h);
 
             let ctx = match canvas.get_context("webgl2") {
-                Ok(Some(c)) => match c.dyn_into::<Gl2>() {
-                    Ok(gl) => gl,
-                    Err(_) => {
-                        gl_err!("StarShader: context is not WebGl2RenderingContext");
-                        return;
-                    }
-                },
-                Ok(None) => {
-                    gl_err!("StarShader: WebGL2 not supported");
-                    return;
-                }
-                Err(e) => {
-                    gl_err!("StarShader: get_context error: {:?}", e);
-                    return;
-                }
+                Ok(Some(c)) => match c.dyn_into::<Gl2>() { Ok(gl) => gl, Err(_) => { gl_err!("StarShader: ctx"); return; } },
+                Ok(None) => { gl_err!("StarShader: WebGL2 unsupported"); return; }
+                Err(e) => { gl_err!("StarShader: get_context {:?}", e); return; }
             };
 
-            let vs = match ctx.create_shader(Gl2::VERTEX_SHADER) {
-                Some(s) => s,
-                None => {
-                    gl_err!("StarShader: failed to create vertex shader");
-                    return;
-                }
-            };
+            let vs = match ctx.create_shader(Gl2::VERTEX_SHADER) { Some(s) => s, None => { gl_err!("StarShader: vs create"); return; } };
             ctx.shader_source(&vs, VERT_SRC);
             ctx.compile_shader(&vs);
             if !ctx.get_shader_parameter(&vs, Gl2::COMPILE_STATUS).as_bool().unwrap_or(false) {
-                let log = ctx.get_shader_info_log(&vs).unwrap_or_default();
-                gl_err!("StarShader: vertex shader compile error: {}", log);
+                gl_err!("StarShader: vs compile {}", ctx.get_shader_info_log(&vs).unwrap_or_default());
                 return;
             }
-
-            let fs = match ctx.create_shader(Gl2::FRAGMENT_SHADER) {
-                Some(s) => s,
-                None => {
-                    gl_err!("StarShader: failed to create fragment shader");
-                    return;
-                }
-            };
+            let fs = match ctx.create_shader(Gl2::FRAGMENT_SHADER) { Some(s) => s, None => { gl_err!("StarShader: fs create"); return; } };
             ctx.shader_source(&fs, FRAG_SRC);
             ctx.compile_shader(&fs);
             if !ctx.get_shader_parameter(&fs, Gl2::COMPILE_STATUS).as_bool().unwrap_or(false) {
-                let log = ctx.get_shader_info_log(&fs).unwrap_or_default();
-                gl_err!("StarShader: fragment shader compile error: {}", log);
+                gl_err!("StarShader: fs compile {}", ctx.get_shader_info_log(&fs).unwrap_or_default());
                 return;
             }
-
-            let prog = match ctx.create_program() {
-                Some(p) => p,
-                None => {
-                    gl_err!("StarShader: failed to create program");
-                    return;
-                }
-            };
+            let prog = match ctx.create_program() { Some(p) => p, None => { gl_err!("StarShader: prog"); return; } };
             ctx.attach_shader(&prog, &vs);
             ctx.attach_shader(&prog, &fs);
             ctx.link_program(&prog);
             if !ctx.get_program_parameter(&prog, Gl2::LINK_STATUS).as_bool().unwrap_or(false) {
-                let log = ctx.get_program_info_log(&prog).unwrap_or_default();
-                gl_err!("StarShader: program link error: {}", log);
+                gl_err!("StarShader: link {}", ctx.get_program_info_log(&prog).unwrap_or_default());
                 return;
             }
             ctx.use_program(Some(&prog));
 
             let verts: [f32; 8] = [-1.0, -1.0, 1.0, -1.0, -1.0, 1.0, 1.0, 1.0];
-            let buf = match ctx.create_buffer() {
-                Some(b) => b,
-                None => {
-                    gl_err!("StarShader: failed to create buffer");
-                    return;
-                }
-            };
+            let buf = match ctx.create_buffer() { Some(b) => b, None => { gl_err!("StarShader: buf"); return; } };
             ctx.bind_buffer(Gl2::ARRAY_BUFFER, Some(&buf));
             ctx.buffer_data_with_array_buffer_view(
                 Gl2::ARRAY_BUFFER,
@@ -249,17 +318,14 @@ pub fn StarShaderCanvas(
             ctx.viewport(0, 0, w as i32, h as i32);
             ctx.clear_color(0.02, 0.02, 0.04, 1.0);
 
-            let (Some(u_time), Some(u_teff), Some(u_bp_rp), Some(u_scale), Some(u_speed), Some(u_contrast)) =
-                (ctx.get_uniform_location(&prog, "uTime"),
-                 ctx.get_uniform_location(&prog, "uTeff"),
-                 ctx.get_uniform_location(&prog, "uBpRp"),
-                 ctx.get_uniform_location(&prog, "uScale"),
-                 ctx.get_uniform_location(&prog, "uSpeed"),
-                 ctx.get_uniform_location(&prog, "uContrast"))
-            else {
-                gl_err!("StarShader: failed to get uniform locations");
-                return;
-            };
+            let (Some(u_time), Some(u_teff), Some(u_bp_rp), Some(u_scale), Some(u_speed), Some(u_contrast)) = (
+                ctx.get_uniform_location(&prog, "uTime"),
+                ctx.get_uniform_location(&prog, "uTeff"),
+                ctx.get_uniform_location(&prog, "uBpRp"),
+                ctx.get_uniform_location(&prog, "uScale"),
+                ctx.get_uniform_location(&prog, "uSpeed"),
+                ctx.get_uniform_location(&prog, "uContrast"),
+            ) else { gl_err!("StarShader: uniforms"); return; };
 
             let slot: Rc<RefCell<Option<Closure<dyn FnMut(f64)>>>> = Rc::new(RefCell::new(None));
             let slot2 = slot.clone();
@@ -307,6 +373,39 @@ pub fn StarShaderCanvas(
                     u_scale, u_speed, u_contrast,
                 });
             });
+        });
+    }
+
+    #[cfg(not(all(feature = "web", target_family = "wasm")))]
+    {
+        let id = canvas_id.read().clone();
+        use_effect(move || {
+            let js = build_desktop_js(&id, teff_f, bp_rp_f, scale_f, speed_f, contrast_f);
+            let _ = dioxus::document::eval(&js);
+        });
+        let teff_v = teff_f;
+        let bp_rp_v = bp_rp_f;
+        let scale_v = scale_f;
+        let speed_v = speed_f;
+        let contrast_v = contrast_f;
+        let id_for_update = canvas_id.read().clone();
+        use_effect(move || {
+            let teff_v = teff_v;
+            let bp_rp_v = bp_rp_v;
+            let scale_v = scale_v;
+            let speed_v = speed_v;
+            let contrast_v = contrast_v;
+            let id = id_for_update.clone();
+            let _ = teff_v;
+            let _ = bp_rp_v;
+            let _ = scale_v;
+            let _ = speed_v;
+            let _ = contrast_v;
+            let js = format!(
+                "(function(){{const c=document.getElementById('{}');if(c&&c.__starUpdate){{c.__starUpdate({},{},{},{},{});}}}})();",
+                id, teff_v, bp_rp_v, scale_v, speed_v, contrast_v
+            );
+            let _ = dioxus::document::eval(&js);
         });
     }
 
