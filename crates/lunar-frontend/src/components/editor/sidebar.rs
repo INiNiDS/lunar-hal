@@ -3,61 +3,17 @@ use dioxus::prelude::*;
 use lunar_structures::{PinnResponse, StarLore};
 use lunar_ui_shared::star_shader::StarShaderCanvas;
 
-#[derive(Clone, Copy, PartialEq)]
-pub enum EntropyLevel {
-    Classical,
-    Explorer,
-    Multiverse,
-}
-
-impl EntropyLevel {
-    pub fn from_temperature(t: f32) -> Self {
-        if t < 0.5 {
-            Self::Classical
-        } else if t < 1.2 {
-            Self::Explorer
-        } else {
-            Self::Multiverse
-        }
-    }
-
-    pub fn label(&self) -> &str {
-        match self {
-            Self::Classical => "Classical Cosmos",
-            Self::Explorer => "Explorer Space",
-            Self::Multiverse => "Chaotic Multiverse",
-        }
-    }
-
-    pub fn description(&self) -> &str {
-        match self {
-            Self::Classical => "Deterministic Newtonian physics. Perfectly circular orbits. Stable and predictable.",
-            Self::Explorer => "Eccentric orbits, binary spirals. Unusual magnetic fields, crystalline coronas.",
-            Self::Multiverse => "Rogue stars, chrono-tears, Dyson relics. Physics bends at the edge of reality.",
-        }
-    }
-
-    pub fn color(&self) -> &str {
-        match self {
-            Self::Classical => "#60a5fa",
-            Self::Explorer => "#a78bfa",
-            Self::Multiverse => "#f472b6",
-        }
-    }
-}
+const ACCENT: &str = "#a78bfa";
 
 #[component]
 pub fn StarSidebar(
-    temperature: Signal<f32>,
-    on_temperature_change: EventHandler<f32>,
-    bp_rp: Signal<f32>,
-    g_mag: Signal<f32>,
     selected: bool,
+    selected_teff: f32,
     pinn_data: Option<PinnResponse>,
     lore_data: Option<StarLore>,
     siren_texture_b64: Option<String>,
 ) -> Element {
-    let level = EntropyLevel::from_temperature(temperature());
+    let _ = siren_texture_b64;
 
     rsx! {
         div {
@@ -68,7 +24,7 @@ pub fn StarSidebar(
                 div { class: "flex items-center gap-2",
                     div {
                         class: "w-1.5 h-1.5 rounded-full",
-                        style: "background: {level.color()}; box-shadow: 0 0 6px {level.color()}",
+                        style: "background: {ACCENT}; box-shadow: 0 0 6px {ACCENT}",
                     }
                     h2 { class: "text-[10px] uppercase tracking-[0.2em] text-white/40 font-medium",
                         "Stellar Profile"
@@ -86,39 +42,8 @@ pub fn StarSidebar(
                         }
                         span {
                             class: "text-[10px] font-semibold uppercase tracking-widest px-2.5 py-1 rounded-full w-fit",
-                            style: "background: {level.color()}18; color: {level.color()}; border: 1px solid {level.color()}30",
+                            style: "background: {ACCENT}18; color: {ACCENT}; border: 1px solid {ACCENT}30",
                             "{lore.category}"
-                        }
-                    }
-                }
-
-                EntropySlider {
-                    temperature,
-                    on_change: move |val| on_temperature_change.call(val),
-                }
-
-                div { class: "flex flex-col gap-3 p-4 rounded-xl bg-white/[0.03] border border-white/[0.06]",
-                    div { class: "text-[10px] uppercase tracking-[0.15em] text-white/40 font-medium mb-0.5",
-                        "Observation"
-                    }
-
-                    div { class: "flex flex-col gap-3",
-                        div { class: "flex items-center justify-between",
-                            label { class: "text-[10px] uppercase tracking-[0.15em] text-white/40 font-medium",
-                                "Color (Bp\u{2212}Rp)"
-                            }
-                            span { class: "text-sm font-bold tabular-nums text-white/70",
-                                "{bp_rp():.2}"
-                            }
-                        }
-
-                        div { class: "flex items-center justify-between",
-                            label { class: "text-[10px] uppercase tracking-[0.15em] text-white/40 font-medium",
-                                "Brightness (G mag)"
-                            }
-                            span { class: "text-sm font-bold tabular-nums text-white/70",
-                                "{g_mag():.1}"
-                            }
                         }
                     }
                 }
@@ -133,13 +58,13 @@ pub fn StarSidebar(
                                 "LIVE"
                             }
                         }
-                        if let Some(pinn) = &pinn_data {
+                        if let Some(_pinn) = &pinn_data {
                             div { style: "width: 100%; aspect-ratio: 1; border-radius: 8px; overflow: hidden;",
                                 StarShaderCanvas {
                                     width: 256,
                                     height: 256,
-                                    teff: pinn.temperature_k as f64,
-                                    bp_rp: bp_rp() as f64,
+                                    teff: selected_teff as f64,
+                                    bp_rp: 0.5,
                                     noise_scale: 1.5,
                                     noise_speed: 0.3,
                                     contrast: 0.8,
@@ -154,10 +79,10 @@ pub fn StarSidebar(
                         div { class: "text-[10px] uppercase tracking-[0.15em] text-white/40 font-medium mb-0.5",
                             "PINN Parameters"
                         }
-                        {param_row("Temperature", &format!("{:.1} K", data.temperature_k), level.color())}
-                        {param_row("Radius", &format_abs_radius(data.radius_solar), level.color())}
-                        {param_row("Mass", &format_abs_mass(data.mass_solar), level.color())}
-                        {param_row("Luminosity", &format_abs_luminosity(data.luminosity_solar), level.color())}
+                        {param_row("Temperature", &format!("{:.1} K", data.temperature_k), ACCENT)}
+                        {param_row("Radius", &format_abs_radius(data.radius_solar), ACCENT)}
+                        {param_row("Mass", &format_abs_mass(data.mass_solar), ACCENT)}
+                        {param_row("Luminosity", &format_abs_luminosity(data.luminosity_solar), ACCENT)}
                     }
                 } else if selected {
                     div { class: "flex flex-col items-center justify-center py-8 gap-3",
@@ -195,60 +120,6 @@ pub fn StarSidebar(
                             {meta_row("Complexity", &lore.metadata.complexity_level)}
                         }
                     }
-                }
-            }
-        }
-    }
-}
-
-#[component]
-pub fn EntropySlider(mut temperature: Signal<f32>, on_change: EventHandler<f32>) -> Element {
-    let level = EntropyLevel::from_temperature(temperature());
-    let temp_display = format!("{:.2}", temperature());
-
-    rsx! {
-        div { class: "flex flex-col gap-4 p-4 rounded-xl bg-white/[0.03] border border-white/[0.06]",
-            div { class: "flex items-center justify-between",
-                label { class: "text-[10px] uppercase tracking-[0.15em] text-white/40 font-medium",
-                    "Entropy"
-                }
-                span {
-                    class: "text-sm font-bold tabular-nums",
-                    style: "color: {level.color()}",
-                    "{temp_display}"
-                }
-            }
-
-            div { class: "relative w-full",
-                input {
-                    r#type: "range",
-                    min: "0.0",
-                    max: "2.0",
-                    step: "0.01",
-                    value: "{temp_display}",
-                    class: "w-full h-1 rounded-full appearance-none cursor-pointer bg-white/10 accent-white",
-                    oninput: move |e| {
-                        let val: f32 = e.value().parse().unwrap_or(0.7);
-                        temperature.set(val);
-                        on_change.call(val);
-                    },
-                }
-            }
-
-            div { class: "flex justify-between text-[9px] text-white/25 tabular-nums",
-                span { "0.0" }
-                span { "1.0" }
-                span { "2.0" }
-            }
-
-            div { class: "flex flex-col gap-0.5 pt-1",
-                span {
-                    class: "text-xs font-semibold",
-                    style: "color: {level.color()}",
-                    "{level.label()}"
-                }
-                span { class: "text-[11px] text-white/40 leading-relaxed",
-                    "{level.description()}"
                 }
             }
         }
