@@ -4,6 +4,10 @@ version = {workspace = true}
 authors = {workspace = true}
 edition = {workspace = true}
 
+[[bin]]
+name = "lunar-frontend"
+path = "src/main.rs"
+
 [dependencies]
 dioxus = { version = "0.7.1", features = ["router"] }
 reqwest = { version = "0.13.4", features = ["json"] }
@@ -11,6 +15,11 @@ lunar-structures = { path = "../lunar-structures" }
 lunar-ui-shared = { path = "../lunar-ui-shared" }
 image = "0.25.10"
 base64 = "0.22.1"
+serde_json = "1"
+nah = "0.1.2"
+lunar-utils = { path = "../lunar-utils" }
+
+[target.'cfg(all(target_family= "wasm", not(target_os = "wasi")))'.dependencies]
 wasm-bindgen = "0.2"
 js-sys = "0.3"
 web-sys = { version = "0.3", features = [
@@ -19,11 +28,17 @@ web-sys = { version = "0.3", features = [
     "Window",
     "Document",
     "Element",
+    "DomRect",
+    "Storage",
+    "console",
 ] }
-nah = "0.1.2"
+gloo-timers = "0.3.0"
+
+[target.'cfg(not(all(target_family = "wasm", not(target_os = "wasi"))))'.dependencies]
+tokio = { version = "1", features = ["time"] }
 
 [features]
-default = ["web"]
-web = ["dioxus/web"]
-desktop = ["dioxus/desktop"]
+default = ["desktop"]
+web = ["dioxus/web", "dioxus/document", "lunar-ui-shared/web"]
+desktop = ["dioxus/desktop", "lunar-ui-shared/desktop"]
 mobile = ["dioxus/mobile"]
