@@ -1,11 +1,8 @@
 use crate::assets::FONT_SANS;
-use crate::components::editor::sidebar::EntropySlider;
 use dioxus::prelude::*;
 
 #[component]
 pub fn JourneyModal(on_continue: EventHandler<()>, on_close: EventHandler<()>) -> Element {
-    let mut temperature = use_signal(|| 0.7_f32);
-
     rsx! {
         div { class: "fixed inset-0 z-50 flex items-center justify-center",
             div { class: "absolute inset-0 bg-black/70 backdrop-blur-sm",
@@ -20,7 +17,7 @@ pub fn JourneyModal(on_continue: EventHandler<()>, on_close: EventHandler<()>) -
 
                     div { class: "flex items-center justify-between",
                         h2 { class: "text-xs uppercase tracking-widest text-white/60",
-                            "Stellar Entropy"
+                            "Embark"
                         }
                         button {
                             class: "text-white/40 hover:text-white transition-colors cursor-pointer",
@@ -29,9 +26,8 @@ pub fn JourneyModal(on_continue: EventHandler<()>, on_close: EventHandler<()>) -
                         }
                     }
 
-                    EntropySlider {
-                        temperature,
-                        on_change: move |val| temperature.set(val),
+                    p { class: "text-xs text-white/45 leading-relaxed",
+                        "Cross the threshold into a fully procedural cosmos. Each world is a unique stellar population, crystallized into the archive forever."
                     }
 
                     button {
@@ -44,7 +40,7 @@ pub fn JourneyModal(on_continue: EventHandler<()>, on_close: EventHandler<()>) -
                                transition-all duration-300 \
                                cursor-pointer select-none",
                         onclick: move |_| on_continue.call(()),
-                        "CONTINUE"
+                        "ENTER ARCHIVE"
                     }
 
                     button {
