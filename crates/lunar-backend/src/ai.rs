@@ -11,6 +11,8 @@ use lnai_models::{StellarSiren, StellarSirenConfig, SIREN_INPUT_DIM};
 use serde::{Deserialize, Serialize};
 use tokio::sync::OnceCell;
 
+use lunar_utils::env::get_lunar_models_dir;
+
 #[cfg(feature = "wgpu")]
 type B = burn::backend::Wgpu;
 #[cfg(all(not(feature = "wgpu"), feature = "cuda"))]
@@ -140,14 +142,16 @@ static GNN: OnceCell<Option<Arc<GnnModel>>> = OnceCell::const_new();
 
 pub async fn get_gnn() -> Option<Arc<GnnModel>> {
     GNN.get_or_init(|| async {
-        let norm_path = std::path::Path::new("models/stellar_gnn_norm.json");
-        let bpk_path = std::path::Path::new("models/stellar_gnn_model.bpk");
+        let models_dir = get_lunar_models_dir();
+        let norm_path = models_dir.join("stellar_gnn_norm.json");
+        let bpk_path = models_dir.join("stellar_gnn_model.bpk");
 
         if !norm_path.exists() || !bpk_path.exists() {
+            println!("  GNN model files not found at: {}", models_dir.display());
             return None;
         }
 
-        let norm: GnnNorm = match std::fs::read_to_string(norm_path) {
+        let norm: GnnNorm = match std::fs::read_to_string(&norm_path) {
             Ok(json) => match serde_json::from_str(&json) {
                 Ok(n) => n,
                 Err(_) => return None,
@@ -156,12 +160,12 @@ pub async fn get_gnn() -> Option<Arc<GnnModel>> {
         };
 
         let device: Device<B> = Default::default();
-        let path_str = bpk_path.to_str().unwrap_or("");
+        let path_str = bpk_path.to_string_lossy();
 
         let mut deterministic_model = StellarGnnConfig::new(
             GNN_INPUT_DIM, 256, GNN_OUTPUT_DIM,
         ).init(&device);
-        let mut store = BurnpackStore::from_file(path_str);
+        let mut store = BurnpackStore::from_file(&*path_str);
         if deterministic_model.load_from(&mut store).is_ok() {
             return Some(Arc::new(GnnModel {
                 model: deterministic_model,
@@ -174,7 +178,7 @@ pub async fn get_gnn() -> Option<Arc<GnnModel>> {
         let mut variational_model = StellarGnnConfig::new(
             GNN_INPUT_DIM, 256, GNN_VARIATIONAL_DIM,
         ).init(&device);
-        let mut store2 = BurnpackStore::from_file(path_str);
+        let mut store2 = BurnpackStore::from_file(&*path_str);
         if variational_model.load_from(&mut store2).is_ok() {
             return Some(Arc::new(GnnModel {
                 model: variational_model,
@@ -198,6 +202,107 @@ pub struct StarFeatures {
     pub mg: f32,
 }
 
+fn prepare_node_data(stars: &[StarFeatures], norm: &GnnNorm) -> Vec<f32> {
+    let mut node_data = Vec::with_capacity(stars.len() * GNN_INPUT_DIM);
+    for star in stars {
+        node_data.push((star.log_teff - norm.log_teff_mean) / norm.log_teff_std);
+        node_data.push((star.log_rad - norm.log_rad_mean) / norm.log_rad_std);
+        node_data.push((star.log_mass - norm.log_mass_mean) / norm.log_mass_std);
+        node_data.push((star.log_lum - norm.log_lum_mean) / norm.log_lum_std);
+        node_data.push((star.mg - norm.mg_mean) / norm.mg_std);
+        node_data.push((star.coords[0] - norm.x_mean) / norm.x_std);
+        node_data.push((star.coords[1] - norm.y_mean) / norm.y_std);
+        node_data.push((star.coords[2] - norm.z_mean) / norm.z_std);
+    }
+    node_data
+}
+
+fn compute_variational_velocities(
+    vals: &[f32],
+    stars: &[StarFeatures],
+    norm: &GnnNorm,
+    temperature: f32,
+) -> Vec<[f32; 3]> {
+    let n = stars.len();
+    let dims_per_star = GNN_VARIATIONAL_DIM;
+    let mut velocities = Vec::with_capacity(n);
+
+    let coords_hash = stars
+        .iter()
+        .map(|s| s.coords[0].to_bits() as u64)
+        .fold(0u64, |a, b| a ^ b);
+
+    let mut rng = SimpleRng::new(
+        ((temperature * 1000.0) as u64).wrapping_add(coords_hash),
+    );
+
+    for i in 0..n {
+        let base = i * dims_per_star;
+        let vx_mean = vals[base] * norm.vx_std + norm.vx_mean;
+        let vy_mean = vals[base + 1] * norm.vy_std + norm.vy_mean;
+        let vz_mean = vals[base + 2] * norm.vz_std + norm.vz_mean;
+
+        let vx_logvar = vals[base + 3] * norm.vx_logvar_std + norm.vx_logvar_mean;
+        let vy_logvar = vals[base + 4] * norm.vy_logvar_std + norm.vy_logvar_mean;
+        let vz_logvar = vals[base + 5] * norm.vz_logvar_std + norm.vz_logvar_mean;
+
+        if temperature <= 0.0 {
+            velocities.push([vx_mean, vy_mean, vz_mean]);
+        } else {
+            let vx_std = (vx_logvar * 0.5).exp();
+            let vy_std = (vy_logvar * 0.5).exp();
+            let vz_std = (vz_logvar * 0.5).exp();
+
+            let vx = vx_mean + vx_std * rng.gaussian() * temperature;
+            let vy = vy_mean + vy_std * rng.gaussian() * temperature;
+            let vz = vz_mean + vz_std * rng.gaussian() * temperature;
+
+            velocities.push([vx, vy, vz]);
+        }
+    }
+    velocities
+}
+
+fn compute_deterministic_velocities(
+    vals: &[f32],
+    stars: &[StarFeatures],
+    norm: &GnnNorm,
+    temperature: f32,
+) -> Vec<[f32; 3]> {
+    let n = stars.len();
+    let dims_per_star = GNN_OUTPUT_DIM;
+    let mut velocities = Vec::with_capacity(n);
+
+    for i in 0..n {
+        let base = i * dims_per_star;
+        let vx = vals[base] * norm.vx_std + norm.vx_mean;
+        let vy = vals[base + 1] * norm.vy_std + norm.vy_mean;
+        let vz = vals[base + 2] * norm.vz_std + norm.vz_mean;
+
+        if temperature > 0.0 {
+            let mut rng = SimpleRng::new(
+                ((temperature * 1000.0) as u64).wrapping_add(
+                    ((stars[i].coords[0] * 1000.0) as u64).wrapping_add(
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_millis() as u64,
+                    ),
+                ),
+            );
+            let scale = temperature * 0.15;
+            velocities.push([
+                vx + rng.gaussian() * norm.vx_std * scale,
+                vy + rng.gaussian() * norm.vy_std * scale,
+                vz + rng.gaussian() * norm.vz_std * scale,
+            ]);
+        } else {
+            velocities.push([vx, vy, vz]);
+        }
+    }
+    velocities
+}
+
 pub fn gnn_infer(
     gnn: &GnnModel,
     stars: &[StarFeatures],
@@ -215,22 +320,12 @@ pub fn gnn_infer(
     let coords: Vec<[f32; 3]> = stars.iter().map(|s| s.coords).collect();
     let adj = compute_knn_adjacency(&coords, knn_k);
 
-    let mut node_data = Vec::with_capacity(n * GNN_INPUT_DIM);
-    for star in stars {
-        node_data.push((star.log_teff - norm.log_teff_mean) / norm.log_teff_std);
-        node_data.push((star.log_rad - norm.log_rad_mean) / norm.log_rad_std);
-        node_data.push((star.log_mass - norm.log_mass_mean) / norm.log_mass_std);
-        node_data.push((star.log_lum - norm.log_lum_mean) / norm.log_lum_std);
-        node_data.push((star.mg - norm.mg_mean) / norm.mg_std);
-        node_data.push((star.coords[0] - norm.x_mean) / norm.x_std);
-        node_data.push((star.coords[1] - norm.y_mean) / norm.y_std);
-        node_data.push((star.coords[2] - norm.z_mean) / norm.z_std);
-    }
-
     let mut adj_flat = Vec::with_capacity(n * n);
     for row in &adj {
         adj_flat.extend_from_slice(row);
     }
+
+    let node_data = prepare_node_data(stars, norm);
 
     let nodes = Tensor::<B, 2>::from_data(
         TensorData::new(node_data, [n, GNN_INPUT_DIM]),
@@ -246,69 +341,9 @@ pub fn gnn_infer(
     let vals: Vec<f32> = data.to_vec().expect("failed to convert GNN output");
 
     if gnn.variational {
-        let dims_per_star = GNN_VARIATIONAL_DIM;
-        let mut velocities = Vec::with_capacity(n);
-        let mut rng = SimpleRng::new(
-            ((temperature * 1000.0) as u64).wrapping_add(stars.iter().map(|s| s.coords[0].to_bits() as u64).fold(0u64, |a, b| a ^ b))
-        );
-
-        for i in 0..n {
-            let base = i * dims_per_star;
-            let vx_mean = vals[base] * norm.vx_std + norm.vx_mean;
-            let vy_mean = vals[base + 1] * norm.vy_std + norm.vy_mean;
-            let vz_mean = vals[base + 2] * norm.vz_std + norm.vz_mean;
-
-            let vx_logvar = vals[base + 3] * norm.vx_logvar_std + norm.vx_logvar_mean;
-            let vy_logvar = vals[base + 4] * norm.vy_logvar_std + norm.vy_logvar_mean;
-            let vz_logvar = vals[base + 5] * norm.vz_logvar_std + norm.vz_logvar_mean;
-
-            if temperature <= 0.0 {
-                velocities.push([vx_mean, vy_mean, vz_mean]);
-            } else {
-                let vx_std = (vx_logvar * 0.5).exp();
-                let vy_std = (vy_logvar * 0.5).exp();
-                let vz_std = (vz_logvar * 0.5).exp();
-
-                let vx = vx_mean + vx_std * rng.gaussian() * temperature;
-                let vy = vy_mean + vy_std * rng.gaussian() * temperature;
-                let vz = vz_mean + vz_std * rng.gaussian() * temperature;
-
-                velocities.push([vx, vy, vz]);
-            }
-        }
-        velocities
+        compute_variational_velocities(&vals, stars, norm, temperature)
     } else {
-        let dims_per_star = GNN_OUTPUT_DIM;
-        let mut velocities = Vec::with_capacity(n);
-
-        for i in 0..n {
-            let base = i * dims_per_star;
-            let vx = vals[base] * norm.vx_std + norm.vx_mean;
-            let vy = vals[base + 1] * norm.vy_std + norm.vy_mean;
-            let vz = vals[base + 2] * norm.vz_std + norm.vz_mean;
-
-            if temperature > 0.0 {
-                let mut rng = SimpleRng::new(
-                    ((temperature * 1000.0) as u64).wrapping_add(
-                        ((stars[i].coords[0] * 1000.0) as u64).wrapping_add(
-                            std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .unwrap_or_default()
-                                .as_millis() as u64
-                        )
-                    )
-                );
-                let scale = temperature * 0.15;
-                velocities.push([
-                    vx + rng.gaussian() * norm.vx_std * scale,
-                    vy + rng.gaussian() * norm.vy_std * scale,
-                    vz + rng.gaussian() * norm.vz_std * scale,
-                ]);
-            } else {
-                velocities.push([vx, vy, vz]);
-            }
-        }
-        velocities
+        compute_deterministic_velocities(&vals, stars, norm, temperature)
     }
 }
 
@@ -410,30 +445,30 @@ pub fn classify_star(teff: f32, rad: f32) -> (String, String) {
     (spectral_class, category)
 }
 
+fn compute_stellar_seed(teff: f32, rad: f32, mass: f32, entropy: f32) -> u64 {
+    let base = ((teff * 100.0) as u64)
+        ^ ((rad * 1000.0) as u64)
+        ^ ((mass * 100.0) as u64);
+    if entropy > 0.5 {
+        let epoch = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        base ^ epoch.wrapping_mul((entropy * 1000.0) as u64)
+    } else {
+        base
+    }
+}
+
 pub fn generate_stochastic_metadata(
     teff: f32, rad: f32, mass: f32, _lum: f32,
     entropy_temperature: f32,
 ) -> lunar_structures::StellarMetadata {
     let (spectral_class, category) = classify_star(teff, rad);
-
-    let base_seed = ((teff * 100.0) as u64)
-        ^ ((rad * 1000.0) as u64)
-        ^ ((mass * 100.0) as u64);
-
-    let final_seed = if entropy_temperature > 0.5 {
-        let epoch = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64;
-        base_seed ^ epoch.wrapping_mul((entropy_temperature * 1000.0) as u64)
-    } else {
-        base_seed
-    };
-
+    let final_seed = compute_stellar_seed(teff, rad, mass, entropy_temperature);
     let mut rng = SimpleRng::new(final_seed);
 
     let designated_name = generate_name(&mut rng, entropy_temperature);
-
     let description = generate_description(&mut rng, &spectral_class, &category, entropy_temperature, teff, rad);
 
     lunar_structures::StellarMetadata {
@@ -651,13 +686,15 @@ static LORE_CACHE: OnceCell<Option<Arc<LoreCache>>> = OnceCell::const_new();
 
 pub async fn get_lore_cache() -> Option<Arc<LoreCache>> {
     LORE_CACHE.get_or_init(|| async {
-        let path = std::path::Path::new("models/stellar_lore_cache.json");
+        let models_dir = get_lunar_models_dir();
+        let path = models_dir.join("stellar_lore_cache.json");
+
         if !path.exists() {
-            println!("  Lore cache not found (models/stellar_lore_cache.json)");
+            println!("  Lore cache not found ({})", path.display());
             return None;
         }
 
-        let json = match std::fs::read_to_string(path) {
+        let json = match std::fs::read_to_string(&path) {
             Ok(j) => j,
             Err(_) => return None,
         };
@@ -670,7 +707,7 @@ pub async fn get_lore_cache() -> Option<Arc<LoreCache>> {
             }
         };
 
-        println!("  Lore cache loaded: {} entries", entries.len());
+        println!("  Lore cache loaded: {} entries from {}", entries.len(), path.display());
         Some(Arc::new(LoreCache { entries }))
     }).await.clone()
 }
@@ -727,19 +764,7 @@ pub fn generate_hybrid_metadata(
     entropy_temperature: f32,
     lore_cache: Option<&LoreCache>,
 ) -> lunar_structures::StellarMetadata {
-    let seed = {
-        let base = ((teff * 100.0) as u64) ^ ((rad * 1000.0) as u64) ^ ((mass * 100.0) as u64);
-        if entropy_temperature > 0.5 {
-            let epoch = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis() as u64;
-            base ^ epoch.wrapping_mul((entropy_temperature * 1000.0) as u64)
-        } else {
-            base
-        }
-    };
-
+    let seed = compute_stellar_seed(teff, rad, mass, entropy_temperature);
     let (spectral_class, category) = classify_star(teff, rad);
 
     if is_rare_star(teff, rad, mass, entropy_temperature) {
@@ -779,15 +804,16 @@ pub struct SirenModel {
 #[cfg(feature = "siren")]
 pub async fn get_siren() -> Option<Arc<SirenModel>> {
     SIREN_MODEL.get_or_init(|| async {
-        let norm_path = std::path::Path::new("models/stellar_siren_norm.json");
-        let bpk_path = std::path::Path::new("models/stellar_siren_model.bpk");
+        let models_dir = get_lunar_models_dir();
+        let norm_path = models_dir.join("stellar_siren_norm.json");
+        let bpk_path = models_dir.join("stellar_siren_model.bpk");
 
         if !norm_path.exists() || !bpk_path.exists() {
-            println!("  SIREN model not available (no .bpk file found)");
+            println!("  SIREN model not available (files not found in {})", models_dir.display());
             return None;
         }
 
-        let norm: SirenNorm = match std::fs::read_to_string(norm_path) {
+        let norm: SirenNorm = match std::fs::read_to_string(&norm_path) {
             Ok(json) => match serde_json::from_str(&json) {
                 Ok(n) => n,
                 Err(e) => {
@@ -799,15 +825,15 @@ pub async fn get_siren() -> Option<Arc<SirenModel>> {
         };
 
         let device: Device<B> = Default::default();
-        let path_str = bpk_path.to_str().unwrap_or("");
+        let path_str = bpk_path.to_string_lossy();
 
         let mut model = StellarSirenConfig::new().init(&device);
-        let mut store = BurnpackStore::from_file(path_str);
+        let mut store = BurnpackStore::from_file(&*path_str);
         if model.load_from(&mut store).is_err() {
             return None;
         }
 
-        println!("  SIREN model loaded successfully");
+        println!("  SIREN model loaded successfully from {}", bpk_path.display());
         Some(Arc::new(SirenModel { model, device, norm }))
     }).await.clone()
 }
@@ -859,9 +885,9 @@ pub fn siren_generate_texture(
     let mut input_data = Vec::with_capacity(total * SIREN_INPUT_DIM);
 
     for y in 0..height {
-        let v = -1.0 + 2.0 * (y as f32) / (height.saturating_sub(1)).max(1) as f32;
+        let v = -1.0 + 2.0 * (y as f32) / height.saturating_sub(1).max(1) as f32;
         for x in 0..width {
-            let u = -1.0 + 2.0 * (x as f32) / (width.saturating_sub(1)).max(1) as f32;
+            let u = -1.0 + 2.0 * (x as f32) / width.saturating_sub(1).max(1) as f32;
             input_data.push(u);
             input_data.push(v);
             input_data.push(n_bp);

@@ -22,4 +22,6 @@ burn = "0.21"
 burn-store = { version = "0.21", features = ["burnpack"] }
 lnai-models = { path = "../../ai/lnai-models", features = ["pinn", "gnn", "image", "siren"] }
 lunar-structures = { path = "../lunar-structures" }
-tower-http = { version = "0.6.11", features = ["cors"] }
+tower-http = { version = "0.7.0", features = ["cors"] }
+lunar-utils = { path = "../lunar-utils" }
+nah = "0.1.2"
