@@ -82,3 +82,26 @@ cd lunar-hal
 # Use the provided install script for installing and building the project
 ./install.sh
 ```
+
+### Build Targets
+
+The `lunar-frontend` crate ships in two flavors from the same source tree:
+
+* **Web** (default for `dx serve`) — compiled to `wasm32-unknown-unknown` and served at `http://127.0.0.1:8080`.
+  ```bash
+  dx serve --platform web
+  ```
+* **Desktop** (default for plain `cargo` builds) — produces a native WebView binary you can run directly.
+  ```bash
+  dx build --platform linux --release
+  ./target/dx/lunar-frontend/release/linux/app/lunar-frontend
+  ```
+  Use `dx build --platform macos` / `--platform windows` to cross-compile for other desktops.
+
+The launcher in `crates/lunar-start` understands both flavors:
+```bash
+# Web frontend via dx serve (default behaviour)
+lunar-start frontend
+# Native desktop frontend
+lunar-start frontend-desktop
+```
