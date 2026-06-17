@@ -143,4 +143,54 @@ pub struct StarDescriptionPayload {
     pub gnn_payload: GnnResponse,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct World {
+    pub id: String,
+    pub name: String,
+    pub created_at: u64,
+    pub center_x: f32,
+    pub center_y: f32,
+    pub center_z: f32,
+    pub temperature: f32,
+    pub bp_rp: f32,
+    pub g_mag: f32,
+    pub stars: Vec<ResponseStar>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct WorldSummary {
+    pub id: String,
+    pub name: String,
+    pub created_at: u64,
+    pub center_x: f32,
+    pub center_y: f32,
+    pub center_z: f32,
+    pub star_count: usize,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone)]
+pub struct CreateWorldRequest {
+    pub name: String,
+    pub center_x: f32,
+    pub center_y: f32,
+    pub center_z: f32,
+    #[serde(default)]
+    pub temperature: f32,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct WorldListResponse {
+    pub worlds: Vec<WorldSummary>,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone)]
+pub struct SectorRequest {
+    pub sector_cx: f32,
+    pub sector_cy: f32,
+    pub sector_cz: f32,
+    pub temperature: f32,
+    pub bp_rp: f32,
+    pub g_mag: f32,
+    pub search_radius: Option<f32>,
+}
 
