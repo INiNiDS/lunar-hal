@@ -11,7 +11,7 @@ use lunar_utils::*;
 use lunar_structures::{
     PipelineRequest, PipelineResponse, RandomStarRequest, RandomStarResponse,
     SirenTextureRequest, SirenTextureResponse, StarDescriptionPayload, StarLore,
-    LoreMetadata, ResponseStar, PinnResponse,
+    ResponseStar, PinnResponse,
 };
 use lunar_utils::env::{get_url, get_worlds_dir};
 use crate::ai::{generate_hybrid_metadata, generate_random_inputs, get_gnn, get_lore_cache, get_pinn, gnn_infer, warmup_models, RandomStellarInputs, StarFeatures};
@@ -22,6 +22,7 @@ use crate::ai::{get_siren, siren_generate_texture};
 pub mod ai;
 pub mod worlds;
 
+use crate::ai::PinnInputs;
 use crate::worlds::{
     calculate_absolute_magnitude, infer_pinn_async, WorldStore,
 };
@@ -103,22 +104,15 @@ async fn description(Json(payload): Json<StarDescriptionPayload>) -> Json<StarLo
         category: format!("{}-type {}", meta.spectral_class, meta.category),
         visual_profile: meta.description.clone(),
         system_lore: meta.description,
-        metadata: LoreMetadata {
-            simulation_engine: "LunarSim v1.0".to_string(),
-            data_source: "Procedurally Generated".to_string(),
-            complexity_level: "High".to_string(),
-        },
     })
 }
 
 async fn pipeline_handler(Json(payload): Json<PipelineRequest>) -> Json<PipelineResponse> {
-    let [teff, rad, mass, lum] = infer_pinn_async(
-        payload.x_pc,
-        payload.y_pc,
-        payload.z_pc,
-        payload.bp_rp,
-        payload.g_mag,
-    )
+    let [teff, rad, mass, lum] = infer_pinn_async(PinnInputs {
+        position: [payload.x_pc, payload.y_pc, payload.z_pc],
+        bp_rp: payload.bp_rp,
+        g_mag: payload.g_mag,
+    })
     .await;
 
     let m_g = calculate_absolute_magnitude(payload.x_pc, payload.y_pc, payload.z_pc, payload.g_mag);
@@ -163,17 +157,15 @@ async fn random_star(Json(payload): Json<RandomStarRequest>) -> Json<RandomStarR
 
     let inputs = tokio::task::spawn_blocking(move || {
         generate_random_inputs(entropy, &pinn.norm)
-    }).await.unwrap_or_else(|_| RandomStellarInputs {
+    }).await.unwrap_or(RandomStellarInputs {
         x_pc: 0.0, y_pc: 0.0, z_pc: 0.0, bp_rp: 1.0, g_mag: 10.0,
     });
 
-    let [teff, rad, mass, lum] = infer_pinn_async(
-        inputs.x_pc,
-        inputs.y_pc,
-        inputs.z_pc,
-        inputs.bp_rp,
-        inputs.g_mag,
-    )
+    let [teff, rad, mass, lum] = infer_pinn_async(PinnInputs {
+        position: [inputs.x_pc, inputs.y_pc, inputs.z_pc],
+        bp_rp: inputs.bp_rp,
+        g_mag: inputs.g_mag,
+    })
     .await;
 
     let mg = calculate_absolute_magnitude(inputs.x_pc, inputs.y_pc, inputs.z_pc, inputs.g_mag);

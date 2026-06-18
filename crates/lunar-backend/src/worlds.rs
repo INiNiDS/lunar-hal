@@ -1,6 +1,6 @@
 use crate::ai::{
     generate_hybrid_metadata, get_gnn, get_lore_cache, get_pinn,
-    gnn_infer, pinn_infer, SimpleRng, StarFeatures,
+    gnn_infer, pinn_infer, PinnInputs, SimpleRng, StarFeatures,
 };
 use axum::{
     Json,
@@ -28,10 +28,10 @@ pub fn calculate_absolute_magnitude(x: f32, y: f32, z: f32, g_mag: f32) -> f32 {
     }
 }
 
-pub async fn infer_pinn_async(x: f32, y: f32, z: f32, bp_rp: f32, g_mag: f32) -> [f32; 4] {
+pub async fn infer_pinn_async(inputs: PinnInputs) -> [f32; 4] {
     let pinn = get_pinn().await;
     tokio::task::spawn_blocking(move || {
-        pinn_infer(&pinn.model, &pinn.device, &pinn.norm, x, y, z, bp_rp, g_mag)
+        pinn_infer(&pinn.model, &pinn.device, &pinn.norm, inputs)
     })
     .await
     .unwrap_or([0.0, 0.0, 0.0, 0.0])
@@ -47,13 +47,31 @@ pub fn sector_seed(cx: f32, cy: f32, cz: f32) -> u64 {
     if s == 0 { 1 } else { s }
 }
 
-pub fn generate_sector_stars(
-    cx: f32, cy: f32, cz: f32,
-    search_radius: f32,
-    base_teff: f32, base_rad: f32, base_mass: f32, base_lum: f32,
-    base_mg: f32,
-    seed: u64,
-) -> Vec<StarFeatures> {
+pub struct StellarBaseParams {
+    pub teff: f32,
+    pub radius: f32,
+    pub mass: f32,
+    pub luminosity: f32,
+    pub mg: f32,
+}
+
+pub struct SectorSeed {
+    pub center: [f32; 3],
+    pub search_radius: f32,
+    pub base: StellarBaseParams,
+    pub seed: u64,
+}
+
+pub fn generate_sector_stars(spec: SectorSeed) -> Vec<StarFeatures> {
+    let [cx, cy, cz] = spec.center;
+    let search_radius = spec.search_radius;
+    let base_teff = spec.base.teff;
+    let base_rad = spec.base.radius;
+    let base_mass = spec.base.mass;
+    let base_lum = spec.base.luminosity;
+    let base_mg = spec.base.mg;
+    let seed = spec.seed;
+
     let mut rng = SimpleRng::new(seed);
     let mut stars = Vec::with_capacity(STARS_PER_SECTOR);
 
@@ -150,42 +168,54 @@ pub async fn compile_response_stars(
         .collect()
 }
 
-pub async fn generate_sector_internal(
-    cx: f32, cy: f32, cz: f32,
-    search_radius: f32,
-    temperature: f32,
-    bp_rp: f32,
-    g_mag: f32,
-    seed: u64,
-) -> Vec<ResponseStar> {
+pub struct SectorQuery {
+    pub center: [f32; 3],
+    pub search_radius: f32,
+    pub temperature: f32,
+    pub bp_rp: f32,
+    pub g_mag: f32,
+    pub seed: u64,
+}
+
+pub async fn generate_sector_internal(query: SectorQuery) -> Vec<ResponseStar> {
     let gnn_opt = get_gnn().await;
     if gnn_opt.is_none() {
         return Vec::new();
     }
 
-    let [teff, rad, mass, lum] = infer_pinn_async(cx, cy, cz, bp_rp, g_mag).await;
-    let mg = calculate_absolute_magnitude(cx, cy, cz, g_mag);
+    let [teff, rad, mass, lum] = infer_pinn_async(PinnInputs {
+        position: query.center,
+        bp_rp: query.bp_rp,
+        g_mag: query.g_mag,
+    }).await;
+    let mg = calculate_absolute_magnitude(
+        query.center[0], query.center[1], query.center[2], query.g_mag,
+    );
 
     let stars = tokio::task::spawn_blocking(move || {
-        generate_sector_stars(
-            cx, cy, cz,
-            search_radius,
-            teff, rad, mass, lum, mg,
-            seed,
-        )
+        generate_sector_stars(SectorSeed {
+            center: query.center,
+            search_radius: query.search_radius,
+            base: StellarBaseParams {
+                teff,
+                radius: rad,
+                mass,
+                luminosity: lum,
+                mg,
+            },
+            seed: query.seed,
+        })
     }).await.unwrap_or_default();
 
-    compile_response_stars(&stars, temperature).await
+    compile_response_stars(&stars, query.temperature).await
 }
 
 pub async fn pinn(Json(payload): Json<PinnRequest>) -> Json<PinnResponse> {
-    let result = infer_pinn_async(
-        payload.x_pc,
-        payload.y_pc,
-        payload.z_pc,
-        payload.bp_rp,
-        payload.g_mag,
-    )
+    let result = infer_pinn_async(PinnInputs {
+        position: [payload.x_pc, payload.y_pc, payload.z_pc],
+        bp_rp: payload.bp_rp,
+        g_mag: payload.g_mag,
+    })
     .await;
 
     Json(PinnResponse {
@@ -203,24 +233,28 @@ pub async fn gnn(Json(payload): Json<GnnRequest>) -> Json<GnnResponse> {
         .as_nanos() as u64
         ^ (payload.temperature * 1000.0) as u64;
 
-    let stars = generate_sector_internal(
-        payload.center_x, payload.center_y, payload.center_z,
-        payload.search_radius,
-        payload.temperature, payload.bp_rp, payload.g_mag,
+    let stars = generate_sector_internal(SectorQuery {
+        center: [payload.center_x, payload.center_y, payload.center_z],
+        search_radius: payload.search_radius,
+        temperature: payload.temperature,
+        bp_rp: payload.bp_rp,
+        g_mag: payload.g_mag,
         seed,
-    ).await;
+    }).await;
 
     Json(GnnResponse { stars })
 }
 
 pub async fn sector_stars(Json(payload): Json<SectorRequest>) -> Json<GnnResponse> {
     let seed = sector_seed(payload.sector_cx, payload.sector_cy, payload.sector_cz);
-    let stars = generate_sector_internal(
-        payload.sector_cx, payload.sector_cy, payload.sector_cz,
-        payload.search_radius.unwrap_or(200.0),
-        payload.temperature, payload.bp_rp, payload.g_mag,
+    let stars = generate_sector_internal(SectorQuery {
+        center: [payload.sector_cx, payload.sector_cy, payload.sector_cz],
+        search_radius: payload.search_radius.unwrap_or(200.0),
+        temperature: payload.temperature,
+        bp_rp: payload.bp_rp,
+        g_mag: payload.g_mag,
         seed,
-    ).await;
+    }).await;
     Json(GnnResponse { stars })
 }
 
@@ -284,7 +318,7 @@ impl WorldStore {
                 star_count: w.stars.len(),
             })
             .collect();
-        worlds.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        worlds.sort_by_key(|w| std::cmp::Reverse(w.created_at));
         WorldListResponse { worlds }
     }
 
@@ -414,27 +448,29 @@ async fn generate_world_stars(
     let world_bp_rp = 0.4 + rng.next_f32() * 2.6;
     let world_g_mag = 4.0 + rng.next_f32() * 12.0;
 
-    let [teff, rad, mass, lum] = infer_pinn_async(
-        req.center_x,
-        req.center_y,
-        req.center_z,
-        world_bp_rp,
-        world_g_mag,
-    ).await;
+    let [teff, rad, mass, lum] = infer_pinn_async(PinnInputs {
+        position: [req.center_x, req.center_y, req.center_z],
+        bp_rp: world_bp_rp,
+        g_mag: world_g_mag,
+    }).await;
 
     let mg = calculate_absolute_magnitude(req.center_x, req.center_y, req.center_z, world_g_mag);
 
     let features = tokio::task::spawn_blocking({
-        let req_cx = req.center_x;
-        let req_cy = req.center_y;
-        let req_cz = req.center_z;
+        let center = [req.center_x, req.center_y, req.center_z];
         move || {
-            generate_sector_stars(
-                req_cx, req_cy, req_cz,
-                SEARCH_RADIUS,
-                teff, rad, mass, lum, mg,
+            generate_sector_stars(SectorSeed {
+                center,
+                search_radius: SEARCH_RADIUS,
+                base: StellarBaseParams {
+                    teff,
+                    radius: rad,
+                    mass,
+                    luminosity: lum,
+                    mg,
+                },
                 seed,
-            )
+            })
         }
     })
     .await

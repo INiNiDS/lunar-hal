@@ -63,22 +63,30 @@ fn load_pinn(device: &Device<B>) -> StellarMlp<B> {
     model
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct PinnInputs {
+    pub position: [f32; 3],
+    pub bp_rp: f32,
+    pub g_mag: f32,
+}
+
 pub fn pinn_infer(
     model: &StellarMlp<B>, device: &Device<B>, norm: &StellarNorm,
-    x_pc: f32, y_pc: f32, z_pc: f32, bp_rp: f32, g_mag: f32,
+    inputs: PinnInputs,
 ) -> [f32; 4] {
+    let [x_pc, y_pc, z_pc] = inputs.position;
     let d_raw = (x_pc * x_pc + y_pc * y_pc + z_pc * z_pc).sqrt();
 
     let mg = if d_raw < 0.1 {
         4.67
     } else {
-        g_mag - 5.0 * d_raw.log10() + 5.0
+        inputs.g_mag - 5.0 * d_raw.log10() + 5.0
     };
 
     let nx = (x_pc - norm.x_mean) / norm.x_std;
     let ny = (y_pc - norm.y_mean) / norm.y_std;
     let nz = (z_pc - norm.z_mean) / norm.z_std;
-    let nbp = (bp_rp - norm.bp_rp_mean) / norm.bp_rp_std;
+    let nbp = (inputs.bp_rp - norm.bp_rp_mean) / norm.bp_rp_std;
     let nmg = (mg - norm.mg_mean) / norm.mg_std;
 
     let input = Tensor::<B, 2>::from_data(
@@ -273,7 +281,7 @@ fn compute_deterministic_velocities(
     let dims_per_star = GNN_OUTPUT_DIM;
     let mut velocities = Vec::with_capacity(n);
 
-    for i in 0..n {
+    for (i, star) in stars.iter().take(n).enumerate() {
         let base = i * dims_per_star;
         let vx = vals[base] * norm.vx_std + norm.vx_mean;
         let vy = vals[base + 1] * norm.vy_std + norm.vy_mean;
@@ -282,7 +290,7 @@ fn compute_deterministic_velocities(
         if temperature > 0.0 {
             let mut rng = SimpleRng::new(
                 ((temperature * 1000.0) as u64).wrapping_add(
-                    ((stars[i].coords[0] * 1000.0) as u64).wrapping_add(
+                    ((star.coords[0] * 1000.0) as u64).wrapping_add(
                         std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)
                             .unwrap_or_default()
@@ -664,7 +672,7 @@ fn generate_description(
         String::new()
     };
 
-    format!("{}. {}{}{}", classification, trait_note, extra, if entropy > 0.7 { "" } else { "" })
+    format!("{}. {}{}{}", classification, trait_note, extra, "")
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -740,6 +748,10 @@ impl LoreCache {
     pub fn len(&self) -> usize {
         self.entries.len()
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
 }
 
 pub fn is_rare_star(teff: f32, rad: f32, mass: f32, entropy: f32) -> bool {
@@ -767,17 +779,16 @@ pub fn generate_hybrid_metadata(
     let seed = compute_stellar_seed(teff, rad, mass, entropy_temperature);
     let (spectral_class, category) = classify_star(teff, rad);
 
-    if is_rare_star(teff, rad, mass, entropy_temperature) {
-        if let Some(cache) = lore_cache {
-            if let Some(entry) = cache.pick_by_class(seed, &spectral_class) {
-                return lunar_structures::StellarMetadata {
-                    spectral_class: entry.spectral_class.clone(),
-                    category,
-                    designated_name: entry.designated_name.clone(),
-                    description: format!("{}. {}", entry.description, entry.system_lore),
-                };
-            }
-        }
+    if is_rare_star(teff, rad, mass, entropy_temperature)
+        && let Some(cache) = lore_cache
+        && let Some(entry) = cache.pick_by_class(seed, &spectral_class)
+    {
+        return lunar_structures::StellarMetadata {
+            spectral_class: entry.spectral_class.clone(),
+            category,
+            designated_name: entry.designated_name.clone(),
+            description: format!("{}. {}", entry.description, entry.system_lore),
+        };
     }
 
     generate_stochastic_metadata(teff, rad, mass, lum, entropy_temperature)
@@ -839,22 +850,27 @@ pub async fn get_siren() -> Option<Arc<SirenModel>> {
 }
 
 #[cfg(feature = "siren")]
+#[derive(Clone, Copy, Debug)]
+pub struct SirenInputs {
+    pub uv: [f32; 2],
+    pub bp_rp: f32,
+    pub m_g: f32,
+    pub log_teff: f32,
+}
+
+#[cfg(feature = "siren")]
 pub fn siren_infer_point(
     model: &StellarSiren<B>,
     device: &Device<B>,
     norm: &SirenNorm,
-    u: f32,
-    v: f32,
-    bp_rp: f32,
-    m_g: f32,
-    log_teff: f32,
+    inputs: SirenInputs,
 ) -> [f32; 3] {
-    let n_bp = (bp_rp - norm.bp_rp_mean) / norm.bp_rp_std;
-    let n_mg = (m_g - norm.mg_mean) / norm.mg_std;
-    let n_teff = (log_teff - norm.log_teff_mean) / norm.log_teff_std;
+    let n_bp = (inputs.bp_rp - norm.bp_rp_mean) / norm.bp_rp_std;
+    let n_mg = (inputs.m_g - norm.mg_mean) / norm.mg_std;
+    let n_teff = (inputs.log_teff - norm.log_teff_mean) / norm.log_teff_std;
 
     let input = Tensor::<B, 2>::from_data(
-        TensorData::new(vec![u, v, n_bp, n_mg, n_teff], [1, SIREN_INPUT_DIM]),
+        TensorData::new(vec![inputs.uv[0], inputs.uv[1], n_bp, n_mg, n_teff], [1, SIREN_INPUT_DIM]),
         device,
     );
     let output = model.forward(input);
@@ -920,7 +936,7 @@ pub async fn warmup_models() {
     tokio::task::spawn_blocking(move || {
         let _ = pinn_infer(
             &pinn.model, &pinn.device, &pinn.norm,
-            0.0, 0.0, 0.0, 1.0, 10.0,
+            PinnInputs { position: [0.0, 0.0, 0.0], bp_rp: 1.0, g_mag: 10.0 },
         );
     }).await.ok();
 
@@ -952,7 +968,7 @@ pub async fn warmup_models() {
             let norm = &siren_arc.norm;
             let _ = siren_infer_point(
                 &siren_arc.model, &siren_arc.device, norm,
-                0.0, 0.0, 1.0, 5.0, 3.75,
+                SirenInputs { uv: [0.0, 0.0], bp_rp: 1.0, m_g: 5.0, log_teff: 3.75 },
             );
         }).await.ok();
     }
