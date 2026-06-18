@@ -213,7 +213,7 @@ fn spawn_dx_serve(
     let actual_port = extra_args
         .windows(2)
         .find(|w| w[0] == "--port" || w[0] == "-p")
-        .and_then(|w| Some(w[1].as_str()))
+        .map(|w| w[1].as_str())
         .unwrap_or(port);
 
     let mut cmd = std::process::Command::new("dx");

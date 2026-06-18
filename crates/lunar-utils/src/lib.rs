@@ -84,7 +84,7 @@ pub fn adler32(data: &[u8]) -> u32 {
 
 pub fn deflate_minimal(data: &[u8]) -> Vec<u8> {
     let max_block = 65535;
-    let num_blocks = (data.len() + max_block - 1) / max_block;
+    let num_blocks = data.len().div_ceil(max_block);
     let mut compressed = Vec::with_capacity(data.len() + num_blocks * 5 + 6);
     compressed.push(0x78);
     compressed.push(0x01);
