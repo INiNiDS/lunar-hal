@@ -144,7 +144,7 @@ pub struct SectorFetchRequest {
 
 /// Decide which sectors are currently visible but neither cached
 /// nor in-flight. Returns at most `MAX_CONCURRENT_FETCHES` chunks to
-/// keep request rate bounded.
+/// keep the request rate bounded.
 pub fn sectors_to_fetch(
     req: SectorFetchRequest,
     cache: &HashMap<SectorKey, Vec<ResponseStar>>,
@@ -181,4 +181,23 @@ pub fn eviction_cam_pos(
     world_center: (f32, f32),
 ) -> (f32, f32) {
     world_point_under_center(cam_offset, cam_zoom, world_center)
+}
+
+/// Map a world-space point (in parsecs) to the [`SectorKey`] that
+/// contains it. Returns `None` when the key is outside the playable
+/// map or the coordinate is not finite.
+pub fn chunk_at_world_point(point: (f32, f32)) -> Option<SectorKey> {
+    if !point.0.is_finite() || !point.1.is_finite() {
+        return None;
+    }
+    let cx = (point.0 / CHUNK_SIZE_PC).floor() as i32;
+    let cy = (point.1 / CHUNK_SIZE_PC).floor() as i32;
+    if cx < crate::validation::limits::SECTOR_KEY_MIN
+        || cx > crate::validation::limits::SECTOR_KEY_MAX
+        || cy < crate::validation::limits::SECTOR_KEY_MIN
+        || cy > crate::validation::limits::SECTOR_KEY_MAX
+    {
+        return None;
+    }
+    Some((cx, cy))
 }

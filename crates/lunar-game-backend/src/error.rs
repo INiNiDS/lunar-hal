@@ -7,7 +7,7 @@
 //! * [`GameError::Validation`] — the caller's input was invalid.
 //! * [`GameError::Api`] — the AI backend returned an error.
 //!
-//! Both variants are cheap to construct and easy to match.
+//! Both variants are lightweight to construct and easy to match.
 
 use thiserror::Error;
 
@@ -48,7 +48,7 @@ impl GameError {
         matches!(self, Self::Validation(_))
     }
 
-    /// Field name that caused the error, if known.
+    /// Field name that caused the error if known.
     pub fn field(&self) -> Option<&'static str> {
         match self {
             Self::Validation(v) => Some(v.field()),

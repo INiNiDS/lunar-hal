@@ -118,8 +118,6 @@ impl ApiClient {
         Ok(())
     }
 
-    // === Worlds ===
-
     pub async fn list_worlds(&self) -> Result<WorldListResponse, ApiError> {
         self.get_json("/worlds").await
     }
@@ -135,8 +133,6 @@ impl ApiClient {
     pub async fn delete_world(&self, id: &str) -> Result<(), ApiError> {
         self.delete(&format!("/worlds/{id}")).await
     }
-
-    // === Sectors / stars ===
 
     pub async fn sector_stars(
         &self,

@@ -340,7 +340,7 @@ pub fn StarShaderCanvas(
             let u_contrast_c = u_contrast.clone();
             *slot.borrow_mut() = Some(Closure::new(move |_ts: f64| {
                 time += 1.0 / 60.0;
-                let pr = &*p3.read();
+                let Ok(pr) = p3.try_read() else { return; };
                 let sp = pr.borrow();
                 ctx2.uniform1f(Some(&u_teff_c), sp.teff);
                 ctx2.uniform1f(Some(&u_bp_rp_c), sp.bp_rp);
