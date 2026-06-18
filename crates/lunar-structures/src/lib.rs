@@ -73,19 +73,11 @@ pub struct StellarMetadata {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
-pub struct LoreMetadata {
-    pub simulation_engine: String,
-    pub data_source: String,
-    pub complexity_level: String,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct StarLore {
     pub designated_name: String,
     pub category: String,
     pub visual_profile: String,
     pub system_lore: String,
-    pub metadata: LoreMetadata,
 }
 
 
