@@ -52,12 +52,7 @@ struct PreparedRequest {
     error: Option<String>,
 }
 
-fn prepare_request(
-    method: &str,
-    path: &str,
-    body: &str,
-    query: &str,
-) -> PreparedRequest {
+fn prepare_request(method: &str, path: &str, body: &str, query: &str) -> PreparedRequest {
     let parsed_body: Option<serde_json::Value> = if method.to_uppercase() == "GET" {
         None
     } else {
@@ -69,9 +64,16 @@ fn prepare_request(
                     method: method.to_string(),
                     path: path.to_string(),
                     body: None,
-                    query: if query.is_empty() { None } else { Some(query.to_string()) },
+                    query: if query.is_empty() {
+                        None
+                    } else {
+                        Some(query.to_string())
+                    },
                     json_err: Some(err_info.clone()),
-                    error: Some(format!("JSON error at line {}, col {}: {e}", err_info.0, err_info.1)),
+                    error: Some(format!(
+                        "JSON error at line {}, col {}: {e}",
+                        err_info.0, err_info.1
+                    )),
                 };
             }
         }
@@ -81,7 +83,11 @@ fn prepare_request(
         method: method.to_string(),
         path: path.to_string(),
         body: parsed_body,
-        query: if query.is_empty() { None } else { Some(query.to_string()) },
+        query: if query.is_empty() {
+            None
+        } else {
+            Some(query.to_string())
+        },
         json_err: None,
         error: None,
     }
@@ -110,7 +116,9 @@ fn apply_request_to_signals(
 }
 
 fn extract_status_code_from_err(msg: &str) -> Option<u16> {
-    msg.split_whitespace().nth(1).and_then(|rest| rest.parse::<u16>().ok())
+    msg.split_whitespace()
+        .nth(1)
+        .and_then(|rest| rest.parse::<u16>().ok())
 }
 
 #[component]
@@ -363,10 +371,22 @@ fn ResponsePanel(
 }
 
 const QUICK_TEMPLATES: &[(&str, &str, &str)] = &[
-    ("POST", "/pinn", r#"{"x_pc":0,"y_pc":0,"z_pc":100,"bp_rp":1.5,"g_mag":10}"#),
-    ("POST", "/gnn", r#"{"center_x":0,"center_y":0,"center_z":100,"bp_rp":1.5,"g_mag":10,"search_radius":25,"temperature":0.7}"#),
+    (
+        "POST",
+        "/pinn",
+        r#"{"x_pc":0,"y_pc":0,"z_pc":100,"bp_rp":1.5,"g_mag":10}"#,
+    ),
+    (
+        "POST",
+        "/gnn",
+        r#"{"center_x":0,"center_y":0,"center_z":100,"bp_rp":1.5,"g_mag":10,"search_radius":25,"temperature":0.7}"#,
+    ),
     ("POST", "/random_star", r#"{"entropy_temperature":0.5}"#),
-    ("POST", "/siren/texture", r#"{"width":128,"height":128,"bp_rp":1.5,"m_g":5.0,"log_teff":3.76}"#),
+    (
+        "POST",
+        "/siren/texture",
+        r#"{"width":128,"height":128,"bp_rp":1.5,"m_g":5.0,"log_teff":3.76}"#,
+    ),
     ("GET", "/siren/png", ""),
 ];
 
@@ -434,7 +454,14 @@ pub fn BackendApi() -> Element {
         let req_query = prep.query.clone();
         let req_body = prep.body.clone();
         spawn(async move {
-            match api::backend_proxy(&req_path, &req_method, req_body.as_ref(), req_query.as_deref()).await {
+            match api::backend_proxy(
+                &req_path,
+                &req_method,
+                req_body.as_ref(),
+                req_query.as_deref(),
+            )
+            .await
+            {
                 Ok(v) => {
                     status_code.set(Some(200));
                     let pretty = serde_json::to_string_pretty(&v).unwrap_or_default();

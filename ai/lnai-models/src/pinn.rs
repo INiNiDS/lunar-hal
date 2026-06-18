@@ -60,7 +60,11 @@ pub struct StellarMlpConfig {
 
 impl StellarMlpConfig {
     pub fn init<B: Backend>(&self, device: &B::Device) -> StellarMlp<B> {
-        let ln = |d| LayerNormConfig::new(d).with_epsilon(self.layer_norm_eps).init(device);
+        let ln = |d| {
+            LayerNormConfig::new(d)
+                .with_epsilon(self.layer_norm_eps)
+                .init(device)
+        };
 
         StellarMlp {
             fc1: LinearConfig::new(MLP_INPUT_DIM, self.hidden).init(device),
@@ -98,15 +102,12 @@ impl<B: Backend> StellarMlp<B> {
         let mlp_input = Tensor::cat(vec![fourier, cond], 1);
 
         let h1 = burn::tensor::activation::silu(self.ln1.forward(self.fc1.forward(mlp_input)));
-        let h2 = burn::tensor::activation::silu(
-            self.ln2.forward(self.fc2.forward(h1.clone()) + h1),
-        );
-        let h3 = burn::tensor::activation::silu(
-            self.ln3.forward(self.fc3.forward(h2.clone()) + h2),
-        );
-        let h4 = burn::tensor::activation::silu(
-            self.ln4.forward(self.fc4.forward(h3.clone()) + h3),
-        );
+        let h2 =
+            burn::tensor::activation::silu(self.ln2.forward(self.fc2.forward(h1.clone()) + h1));
+        let h3 =
+            burn::tensor::activation::silu(self.ln3.forward(self.fc3.forward(h2.clone()) + h2));
+        let h4 =
+            burn::tensor::activation::silu(self.ln4.forward(self.fc4.forward(h3.clone()) + h3));
         let h5 = burn::tensor::activation::silu(self.ln5.forward(self.fc5.forward(h4)));
         let h6 = burn::tensor::activation::silu(self.fc6.forward(h5));
         self.out.forward(h6)

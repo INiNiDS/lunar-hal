@@ -5,8 +5,8 @@ mod components;
 mod pages;
 
 use components::Shell;
-use dioxus::prelude::*;
 use dioxus::document;
+use dioxus::prelude::*;
 
 const MAIN_CSS: Asset = asset!("/assets/main.css");
 

@@ -14,8 +14,8 @@ pub enum EnemyAction {
 pub enum EnemyType {
     Aggressive,
     Defensive,
-     Opportunistic,
-     Random,
+    Opportunistic,
+    Random,
 }
 
 impl From<u32> for EnemyType {
@@ -24,7 +24,7 @@ impl From<u32> for EnemyType {
             0 => EnemyType::Aggressive,
             1 => EnemyType::Defensive,
             2 => EnemyType::Opportunistic,
-            _ => EnemyType::Random
+            _ => EnemyType::Random,
         }
     }
 }
@@ -40,7 +40,7 @@ pub struct Enemy {
     action: EnemyAction,
     /// The sector the enemy last found itself in.
     current_sector: Option<SectorKey>,
-    enemy_type: EnemyType
+    enemy_type: EnemyType,
 }
 
 impl Enemy {
@@ -63,12 +63,7 @@ impl Enemy {
     }
 
     #[inline]
-    pub fn update(
-         &mut self,
-        enemies: &[Enemy],
-        payload: &UpdatePayload,
-        camera: &Camera,
-    ) {
+    pub fn update(&mut self, enemies: &[Enemy], payload: &UpdatePayload, camera: &Camera) {
         self.decide_what_to_do(enemies, payload, camera);
     }
 
@@ -77,21 +72,22 @@ impl Enemy {
     /// camera movement (accumulated over the rolling window), and
     /// player actions without reaching into the game state directly.
     #[inline]
-    fn decide_what_to_do(
-        &mut self,
-        enemies: &[Enemy],
-        payload: &UpdatePayload,
-        camera: &Camera,
-    ) {
+    fn decide_what_to_do(&mut self, enemies: &[Enemy], payload: &UpdatePayload, camera: &Camera) {
         self.current_sector = payload.current_sector;
 
         match self.action {
             EnemyAction::Nothing => {
                 self.on_idle(&payload.sector_stars, enemies, payload, camera);
             }
-            EnemyAction::AttackingEnemy(_target_id) => {todo!()}
-            EnemyAction::AttackingStar(_target_star) => {todo!()}
-            EnemyAction::Escaping { .. } => {todo!()}
+            EnemyAction::AttackingEnemy(_target_id) => {
+                todo!()
+            }
+            EnemyAction::AttackingStar(_target_star) => {
+                todo!()
+            }
+            EnemyAction::Escaping { .. } => {
+                todo!()
+            }
         }
     }
 
@@ -121,22 +117,18 @@ impl Enemy {
     }
 }
 
-
 pub struct EnemyInstance {
     enemies: Vec<Enemy>,
 }
-
 
 impl EnemyInstance {
     pub fn new() -> Self {
         let mut rng = rand::rng();
         let enemies_count = rng.random_range(0..=5);
         let enemies: Vec<Enemy> = (0..enemies_count)
-        .map(|id| Enemy::new(rng.random_range(5.0..20.0), id))
-        .collect();
-        EnemyInstance {
-            enemies,
-        }
+            .map(|id| Enemy::new(rng.random_range(5.0..20.0), id))
+            .collect();
+        EnemyInstance { enemies }
     }
 
     pub fn update(&mut self, payload: &UpdatePayload, camera: Camera) {

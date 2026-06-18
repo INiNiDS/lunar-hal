@@ -1,8 +1,8 @@
 // Top-level component groups
+pub mod editor;
 pub mod layout;
 pub mod pages;
 pub mod ui;
-pub mod editor;
 
 // Re-exports
 pub use layout::header::Header;

@@ -112,10 +112,7 @@ pub fn visible_chunks(
 /// Evict the farthest cached chunks until the cache is at or below
 /// [`MAX_CACHED_CHUNKS`]. Eviction is by squared distance from the
 /// camera's current world position.
-pub fn evict_excess_cache(
-    cache: &mut HashMap<SectorKey, Vec<ResponseStar>>,
-    cam_pos: (f32, f32),
-) {
+pub fn evict_excess_cache(cache: &mut HashMap<SectorKey, Vec<ResponseStar>>, cam_pos: (f32, f32)) {
     if cache.len() <= MAX_CACHED_CHUNKS {
         return;
     }
@@ -123,7 +120,9 @@ pub fn evict_excess_cache(
     keys.sort_unstable_by(|&a, &b| {
         let dist_a = chunk_distance_sq(a, cam_pos);
         let dist_b = chunk_distance_sq(b, cam_pos);
-        dist_a.partial_cmp(&dist_b).unwrap_or(std::cmp::Ordering::Equal)
+        dist_a
+            .partial_cmp(&dist_b)
+            .unwrap_or(std::cmp::Ordering::Equal)
     });
     let to_remove = keys.len() - MAX_CACHED_CHUNKS;
     for key in keys.iter().rev().take(to_remove) {

@@ -106,10 +106,7 @@ pub enum ValidationError {
     },
 
     #[error("response contained {count} invalid entries in field {field}")]
-    ResponseContainedInvalid {
-        field: &'static str,
-        count: usize,
-    },
+    ResponseContainedInvalid { field: &'static str, count: usize },
 }
 
 impl ValidationError {
@@ -274,8 +271,18 @@ pub fn validate_g_mag(v: f32) -> ValidationResult<f32> {
 
 pub fn validate_sector_key(key: (i32, i32)) -> ValidationResult<(i32, i32)> {
     let (x, y) = key;
-    check_range_int(x, limits::SECTOR_KEY_MIN, limits::SECTOR_KEY_MAX, "sector_key.x")?;
-    check_range_int(y, limits::SECTOR_KEY_MIN, limits::SECTOR_KEY_MAX, "sector_key.y")?;
+    check_range_int(
+        x,
+        limits::SECTOR_KEY_MIN,
+        limits::SECTOR_KEY_MAX,
+        "sector_key.x",
+    )?;
+    check_range_int(
+        y,
+        limits::SECTOR_KEY_MIN,
+        limits::SECTOR_KEY_MAX,
+        "sector_key.y",
+    )?;
     Ok(key)
 }
 
@@ -284,7 +291,9 @@ pub fn validate_sector_key(key: (i32, i32)) -> ValidationResult<(i32, i32)> {
 /// physical parameters.
 pub fn validate_response_star(star: &ResponseStar) -> ValidationResult<&ResponseStar> {
     if !is_finite(star.x) || !is_finite(star.y) || !is_finite(star.z) {
-        return Err(ValidationError::NotFinite { field: "star.coords" });
+        return Err(ValidationError::NotFinite {
+            field: "star.coords",
+        });
     }
     for (field, v) in [
         ("star.temperature_k", star.temperature_k),
@@ -385,8 +394,6 @@ pub fn validate_pipeline(pipeline: &PipelineResponse) -> ValidationResult<&Pipel
     }
     Ok(pipeline)
 }
-
-
 
 #[cfg(test)]
 mod tests {

@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
 use burn::prelude::*;
 use polars::prelude::*;
-use rand::seq::SliceRandom;
 use rand::rng;
+use rand::seq::SliceRandom;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::fs::File;
@@ -60,7 +60,8 @@ impl SirenDataset {
         let u_coords = generate_uv_grid(texture_size);
         let n_pixels = texture_size * texture_size;
         let total_samples = n_stars * n_pixels;
-        let ram_gb = total_samples as f64 * (SIREN_INPUT_DIM + TARGET_DIM) as f64 * 4.0 / 1073741824.0;
+        let ram_gb =
+            total_samples as f64 * (SIREN_INPUT_DIM + TARGET_DIM) as f64 * 4.0 / 1073741824.0;
         println!(
             "Texture grid: {}x{} = {} pixels/star",
             texture_size, texture_size, n_pixels
@@ -92,7 +93,10 @@ impl SirenDataset {
                 all_inputs.push(n_teff);
 
                 let (r, g, b) = generate_pixel(
-                    u, v, &base_color, &spot_params,
+                    u,
+                    v,
+                    &base_color,
+                    &spot_params,
                     seed.wrapping_add((star_idx as u64) * 1000),
                 );
                 all_targets.push(r);
@@ -101,7 +105,11 @@ impl SirenDataset {
             }
 
             if (star_idx + 1) % 500 == 0 || star_idx + 1 == n_stars {
-                print!("\r  Generated textures for {}/{} stars...", star_idx + 1, n_stars);
+                print!(
+                    "\r  Generated textures for {}/{} stars...",
+                    star_idx + 1,
+                    n_stars
+                );
                 use std::io::Write;
                 std::io::stdout().flush().ok();
             }
@@ -144,7 +152,9 @@ impl SirenDataset {
     pub fn shuffle(&mut self) {
         use rand::seq::SliceRandom;
         let n = self.n_samples;
-        if n == 0 { return; }
+        if n == 0 {
+            return;
+        }
         let mut rng = rng();
         let mut perm: Vec<usize> = (0..n).collect();
         perm.shuffle(&mut rng);
@@ -184,7 +194,10 @@ impl PrefetchBatcher {
         }
     }
 
-    pub fn next_batch<B: Backend>(&mut self, device: &B::Device) -> Option<(Tensor<B, 2>, Tensor<B, 2>)> {
+    pub fn next_batch<B: Backend>(
+        &mut self,
+        device: &B::Device,
+    ) -> Option<(Tensor<B, 2>, Tensor<B, 2>)> {
         if self.current >= self.n_samples {
             return None;
         }
@@ -202,34 +215,28 @@ impl PrefetchBatcher {
 
         self.current = end;
 
-        let inputs = Tensor::<B, 2>::from_data(
-            TensorData::new(inp_batch, [rows, SIREN_INPUT_DIM]),
-            device,
-        );
-        let targets = Tensor::<B, 2>::from_data(
-            TensorData::new(tgt_batch, [rows, TARGET_DIM]),
-            device,
-        );
+        let inputs =
+            Tensor::<B, 2>::from_data(TensorData::new(inp_batch, [rows, SIREN_INPUT_DIM]), device);
+        let targets =
+            Tensor::<B, 2>::from_data(TensorData::new(tgt_batch, [rows, TARGET_DIM]), device);
         Some((inputs, targets))
     }
 }
 
-fn gather_rows(
-    inputs: &[f32],
-    targets: &[f32],
-    indices: &[usize],
-) -> (Vec<f32>, Vec<f32>) {
+fn gather_rows(inputs: &[f32], targets: &[f32], indices: &[usize]) -> (Vec<f32>, Vec<f32>) {
     let n = indices.len();
     let mut new_inputs = vec![0.0f32; n * SIREN_INPUT_DIM];
     let mut new_targets = vec![0.0f32; n * TARGET_DIM];
 
-    new_inputs.par_chunks_mut(SIREN_INPUT_DIM)
+    new_inputs
+        .par_chunks_mut(SIREN_INPUT_DIM)
         .zip(indices.par_iter())
         .for_each(|(chunk, &src)| {
             let s = src * SIREN_INPUT_DIM;
             chunk.copy_from_slice(&inputs[s..s + SIREN_INPUT_DIM]);
         });
-    new_targets.par_chunks_mut(TARGET_DIM)
+    new_targets
+        .par_chunks_mut(TARGET_DIM)
         .zip(indices.par_iter())
         .for_each(|(chunk, &src)| {
             let s = src * TARGET_DIM;
@@ -252,7 +259,9 @@ fn extract_star_params(df: &DataFrame) -> Result<Vec<StarParams>> {
 
     let mg: Vec<f32> = x
         .par_iter()
-        .zip(&y).zip(&z).zip(&g_mag)
+        .zip(&y)
+        .zip(&z)
+        .zip(&g_mag)
         .map(|(((xi, yi), zi), &g)| {
             let d = (xi * xi + yi * yi + zi * zi).sqrt().max(1e-6);
             g - 5.0 * d.log10() + 5.0
@@ -267,8 +276,14 @@ fn extract_star_params(df: &DataFrame) -> Result<Vec<StarParams>> {
             let r = rad[i];
             let m = mass[i];
             let l = lum[i];
-            if t.is_finite() && r.is_finite() && m.is_finite() && l.is_finite()
-                && t > 0.0 && r > 0.0 && m > 0.0 && l > 0.0
+            if t.is_finite()
+                && r.is_finite()
+                && m.is_finite()
+                && l.is_finite()
+                && t > 0.0
+                && r > 0.0
+                && m > 0.0
+                && l > 0.0
             {
                 Some(StarParams {
                     bp_rp: bp_rp[i],
@@ -294,17 +309,29 @@ fn compute_norm(stars: &[StarParams]) -> SirenNorm {
     let (log_teff_mean, log_teff_std) = mean_std(&log_teffs);
 
     SirenNorm {
-        bp_rp_mean, bp_rp_std,
-        mg_mean, mg_std,
-        log_teff_mean, log_teff_std,
+        bp_rp_mean,
+        bp_rp_std,
+        mg_mean,
+        mg_std,
+        log_teff_mean,
+        log_teff_std,
     }
 }
 
 fn print_norm(norm: &SirenNorm) {
     println!("SIREN normalization parameters:");
-    println!("  bp_rp:      mean={:.4}, std={:.4}", norm.bp_rp_mean, norm.bp_rp_std);
-    println!("  M_G:        mean={:.4}, std={:.4}", norm.mg_mean, norm.mg_std);
-    println!("  log_teff:   mean={:.4}, std={:.4}", norm.log_teff_mean, norm.log_teff_std);
+    println!(
+        "  bp_rp:      mean={:.4}, std={:.4}",
+        norm.bp_rp_mean, norm.bp_rp_std
+    );
+    println!(
+        "  M_G:        mean={:.4}, std={:.4}",
+        norm.mg_mean, norm.mg_std
+    );
+    println!(
+        "  log_teff:   mean={:.4}, std={:.4}",
+        norm.log_teff_mean, norm.log_teff_std
+    );
 }
 
 fn generate_uv_grid(size: usize) -> Vec<f32> {
@@ -325,26 +352,38 @@ fn mean_std(data: &[f32]) -> (f32, f32) {
     let mean = data.par_iter().map(|&v| v as f64).sum::<f64>() / n;
     let variance = data
         .par_iter()
-        .map(|&v| { let d = v as f64 - mean; d * d })
-        .sum::<f64>() / n;
+        .map(|&v| {
+            let d = v as f64 - mean;
+            d * d
+        })
+        .sum::<f64>()
+        / n;
     (mean as f32, variance.sqrt() as f32)
 }
 
 fn extract_f32(df: &DataFrame, name: &str) -> Result<Vec<f32>> {
-    let s = df.column(name).context(format!("column {name} not found"))?;
-    let s = s.cast(&DataType::Float64).context(format!("column {name} cast to f64 failed"))?;
+    let s = df
+        .column(name)
+        .context(format!("column {name} not found"))?;
+    let s = s
+        .cast(&DataType::Float64)
+        .context(format!("column {name} cast to f64 failed"))?;
     let ca = s.f64().context(format!("column {name} is not f64"))?;
-    Ok(ca.into_iter().map(|opt| opt.map(|v| v as f32).unwrap_or(0.0f32)).collect())
+    Ok(ca
+        .into_iter()
+        .map(|opt| opt.map(|v| v as f32).unwrap_or(0.0f32))
+        .collect())
 }
 
 fn read_filtered_parquet(parquet_path: &Path) -> Result<(DataFrame, usize)> {
     println!("Loading parquet: {}", parquet_path.display());
     let file = File::open(parquet_path).context("failed to open parquet")?;
-    let df = ParquetReader::new(file).finish().context("failed to read parquet")?;
+    let df = ParquetReader::new(file)
+        .finish()
+        .context("failed to read parquet")?;
 
     let required_cols: &[&str] = &[
-        "x_pc", "y_pc", "z_pc", "bp_rp", "g_mag",
-        "st_teff", "st_rad", "st_mass", "st_lum",
+        "x_pc", "y_pc", "z_pc", "bp_rp", "g_mag", "st_teff", "st_rad", "st_mass", "st_lum",
     ];
 
     for &col_name in required_cols {
@@ -353,12 +392,16 @@ fn read_filtered_parquet(parquet_path: &Path) -> Result<(DataFrame, usize)> {
         }
     }
 
-    let df = df.drop_nulls(Some(required_cols)).context("drop_nulls failed")?;
+    let df = df
+        .drop_nulls(Some(required_cols))
+        .context("drop_nulls failed")?;
 
     let df = df
         .lazy()
         .filter(
-            col("x_pc").abs().lt(lit(10000.0))
+            col("x_pc")
+                .abs()
+                .lt(lit(10000.0))
                 .and(col("y_pc").abs().lt(lit(10000.0)))
                 .and(col("z_pc").abs().lt(lit(10000.0)))
                 .and(col("bp_rp").gt(lit(-1.0)))
@@ -376,7 +419,11 @@ fn read_filtered_parquet(parquet_path: &Path) -> Result<(DataFrame, usize)> {
     Ok((df, n))
 }
 
-struct BaseColor { r: f32, g: f32, b: f32 }
+struct BaseColor {
+    r: f32,
+    g: f32,
+    b: f32,
+}
 
 fn star_base_color(log_teff: f32, bp_rp: f32) -> BaseColor {
     let t = 10f32.powf(log_teff);
@@ -433,8 +480,20 @@ fn compute_spot_params(log_teff: f32, bp_rp: f32) -> SpotParams {
         (0.35, 3.5, 0.18, 0.12, 6.0)
     };
 
-    let limb = if t > 10000.0 { 0.2 } else if t > 6000.0 { 0.5 } else { 0.7 };
-    let corona = if t > 7000.0 { 0.15 } else if t > 5000.0 { 0.05 } else { 0.01 };
+    let limb = if t > 10000.0 {
+        0.2
+    } else if t > 6000.0 {
+        0.5
+    } else {
+        0.7
+    };
+    let corona = if t > 7000.0 {
+        0.15
+    } else if t > 5000.0 {
+        0.05
+    } else {
+        0.01
+    };
 
     let rad_factor = (bp_rp / 2.0 - 0.5).max(0.0);
     let spot_contrast = (spot_contrast + rad_factor * 0.1).min(0.5);
@@ -450,7 +509,13 @@ fn compute_spot_params(log_teff: f32, bp_rp: f32) -> SpotParams {
     }
 }
 
-fn generate_pixel(u: f32, v: f32, base: &BaseColor, params: &SpotParams, seed: u64) -> (f32, f32, f32) {
+fn generate_pixel(
+    u: f32,
+    v: f32,
+    base: &BaseColor,
+    params: &SpotParams,
+    seed: u64,
+) -> (f32, f32, f32) {
     let r_sq = u * u + v * v;
     let disk_mask = if r_sq <= 1.0 { 1.0 } else { 0.0 };
     let limb_factor = if r_sq < 1.0 {
@@ -461,7 +526,14 @@ fn generate_pixel(u: f32, v: f32, base: &BaseColor, params: &SpotParams, seed: u
     };
 
     let gran = granulation_noise(u, v, seed, params.granulation_frequency);
-    let spot = sunspot_pattern(u, v, seed, params.spot_contrast, params.spot_frequency, params.spot_size);
+    let spot = sunspot_pattern(
+        u,
+        v,
+        seed,
+        params.spot_contrast,
+        params.spot_frequency,
+        params.spot_size,
+    );
 
     let inside = disk_mask * limb_factor;
 
@@ -480,7 +552,11 @@ fn generate_pixel(u: f32, v: f32, base: &BaseColor, params: &SpotParams, seed: u
     let g_out = inside * g + (1.0 - inside) * edge_glow * base.b * 0.15 + edge_glow * base.g * 0.05;
     let b_out = inside * b + (1.0 - inside) * edge_glow * 0.5 + edge_glow * base.b * 0.3;
 
-    (r_out.clamp(0.0, 1.0), g_out.clamp(0.0, 1.0), b_out.clamp(0.0, 1.0))
+    (
+        r_out.clamp(0.0, 1.0),
+        g_out.clamp(0.0, 1.0),
+        b_out.clamp(0.0, 1.0),
+    )
 }
 
 fn granulation_noise(u: f32, v: f32, seed: u64, freq: f32) -> f32 {
@@ -512,7 +588,11 @@ fn sunspot_pattern(u: f32, v: f32, seed: u64, contrast: f32, freq: f32, size: f3
 
 fn hash_float(seed: u64, idx: u32) -> f32 {
     let mut s = seed.wrapping_add(idx as u64);
-    s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-    s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+    s = s
+        .wrapping_mul(6364136223846793005)
+        .wrapping_add(1442695040888963407);
+    s = s
+        .wrapping_mul(6364136223846793005)
+        .wrapping_add(1442695040888963407);
     ((s >> 33) as f32) / (1u64 << 31) as f32 * 2.0 - 1.0
 }

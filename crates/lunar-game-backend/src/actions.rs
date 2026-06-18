@@ -147,18 +147,15 @@ impl ActionBuffer {
     /// window.
     pub fn prune(&mut self) {
         let cutoff = Instant::now() - self.window;
-        self.records.retain(|r| r.when.map_or(true, |t| t >= cutoff));
-        let first_in_window = self
-            .camera_snapshots
-            .iter()
-            .position(|(_, t)| *t >= cutoff);
+        self.records
+            .retain(|r| r.when.map_or(true, |t| t >= cutoff));
+        let first_in_window = self.camera_snapshots.iter().position(|(_, t)| *t >= cutoff);
         if let Some(pos) = first_in_window {
             let keep_from = pos.saturating_sub(1);
             self.camera_snapshots.drain(..keep_from);
         } else if let Some(last) = self.camera_snapshots.last() {
             let last_instant = last.1;
-            self.camera_snapshots
-                .retain(|(_, t)| *t == last_instant);
+            self.camera_snapshots.retain(|(_, t)| *t == last_instant);
         }
     }
 
@@ -177,10 +174,7 @@ impl ActionBuffer {
 
         match (oldest, newest) {
             (Some(old), Some(new)) => CameraMovement {
-                offset_delta: (
-                    new.offset.0 - old.offset.0,
-                    new.offset.1 - old.offset.1,
-                ),
+                offset_delta: (new.offset.0 - old.offset.0, new.offset.1 - old.offset.1),
                 zoom: new.zoom,
                 dragging: new.dragging,
             },

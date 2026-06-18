@@ -1,5 +1,7 @@
 use crate::api;
-use crate::components::ui::{base64_encode, NumberFieldF64, NumberFieldU32, PageHeader, StatusDot, Tag};
+use crate::components::ui::{
+    NumberFieldF64, NumberFieldU32, PageHeader, StatusDot, Tag, base64_encode,
+};
 use dioxus::prelude::*;
 use serde_json::json;
 
@@ -218,5 +220,3 @@ pub fn Pipeline() -> Element {
         }
     }
 }
-
-

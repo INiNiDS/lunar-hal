@@ -1,6 +1,6 @@
 use crate::ai::{
-    generate_hybrid_metadata, get_gnn, get_lore_cache, get_pinn,
-    gnn_infer, pinn_infer, PinnInputs, SimpleRng, StarFeatures,
+    PinnInputs, SimpleRng, StarFeatures, generate_hybrid_metadata, get_gnn, get_lore_cache,
+    get_pinn, gnn_infer, pinn_infer,
 };
 use axum::{
     Json,
@@ -8,8 +8,8 @@ use axum::{
     http::StatusCode,
 };
 use lunar_structures::{
-    CreateWorldRequest, ResponseStar, World, WorldListResponse, WorldSummary,
-    PinnRequest, PinnResponse, GnnRequest, GnnResponse, SectorRequest,
+    CreateWorldRequest, GnnRequest, GnnResponse, PinnRequest, PinnResponse, ResponseStar,
+    SectorRequest, World, WorldListResponse, WorldSummary,
 };
 use std::collections::HashMap;
 use std::path::{Path as StdPath, PathBuf};
@@ -30,11 +30,9 @@ pub fn calculate_absolute_magnitude(x: f32, y: f32, z: f32, g_mag: f32) -> f32 {
 
 pub async fn infer_pinn_async(inputs: PinnInputs) -> [f32; 4] {
     let pinn = get_pinn().await;
-    tokio::task::spawn_blocking(move || {
-        pinn_infer(&pinn.model, &pinn.device, &pinn.norm, inputs)
-    })
-    .await
-    .unwrap_or([0.0, 0.0, 0.0, 0.0])
+    tokio::task::spawn_blocking(move || pinn_infer(&pinn.model, &pinn.device, &pinn.norm, inputs))
+        .await
+        .unwrap_or([0.0, 0.0, 0.0, 0.0])
 }
 
 pub fn sector_seed(cx: f32, cy: f32, cz: f32) -> u64 {
@@ -94,9 +92,9 @@ pub fn generate_sector_stars(spec: SectorSeed) -> Vec<StarFeatures> {
         let z = cz + dist * angle2.sin();
 
         let noise_teff = 1.0 + (rng.gaussian() * 0.08).clamp(-0.2, 0.2);
-        let noise_rad  = 1.0 + (rng.gaussian() * 0.10).clamp(-0.25, 0.25);
+        let noise_rad = 1.0 + (rng.gaussian() * 0.10).clamp(-0.25, 0.25);
         let noise_mass = 1.0 + (rng.gaussian() * 0.10).clamp(-0.25, 0.25);
-        let noise_lum  = 1.0 + (rng.gaussian() * 0.12).clamp(-0.3, 0.3);
+        let noise_lum = 1.0 + (rng.gaussian() * 0.12).clamp(-0.3, 0.3);
 
         let mg_val = base_mg + rng.gaussian() * 0.3;
 
@@ -113,10 +111,7 @@ pub fn generate_sector_stars(spec: SectorSeed) -> Vec<StarFeatures> {
     stars
 }
 
-pub async fn compile_response_stars(
-    stars: &[StarFeatures],
-    temperature: f32,
-) -> Vec<ResponseStar> {
+pub async fn compile_response_stars(stars: &[StarFeatures], temperature: f32) -> Vec<ResponseStar> {
     if stars.is_empty() {
         return Vec::new();
     }
@@ -145,10 +140,7 @@ pub async fn compile_response_stars(
             let m = 10f32.powf(star.log_mass);
             let l = 10f32.powf(star.log_lum);
 
-            let metadata = generate_hybrid_metadata(
-                t, r, m, l,
-                temperature, lore.as_deref(),
-            );
+            let metadata = generate_hybrid_metadata(t, r, m, l, temperature, lore.as_deref());
 
             ResponseStar {
                 id: i as u32,
@@ -187,9 +179,13 @@ pub async fn generate_sector_internal(query: SectorQuery) -> Vec<ResponseStar> {
         position: query.center,
         bp_rp: query.bp_rp,
         g_mag: query.g_mag,
-    }).await;
+    })
+    .await;
     let mg = calculate_absolute_magnitude(
-        query.center[0], query.center[1], query.center[2], query.g_mag,
+        query.center[0],
+        query.center[1],
+        query.center[2],
+        query.g_mag,
     );
 
     let stars = tokio::task::spawn_blocking(move || {
@@ -205,7 +201,9 @@ pub async fn generate_sector_internal(query: SectorQuery) -> Vec<ResponseStar> {
             },
             seed: query.seed,
         })
-    }).await.unwrap_or_default();
+    })
+    .await
+    .unwrap_or_default();
 
     compile_response_stars(&stars, query.temperature).await
 }
@@ -240,7 +238,8 @@ pub async fn gnn(Json(payload): Json<GnnRequest>) -> Json<GnnResponse> {
         bp_rp: payload.bp_rp,
         g_mag: payload.g_mag,
         seed,
-    }).await;
+    })
+    .await;
 
     Json(GnnResponse { stars })
 }
@@ -254,10 +253,10 @@ pub async fn sector_stars(Json(payload): Json<SectorRequest>) -> Json<GnnRespons
         bp_rp: payload.bp_rp,
         g_mag: payload.g_mag,
         seed,
-    }).await;
+    })
+    .await;
     Json(GnnResponse { stars })
 }
-
 
 #[derive(Default)]
 pub struct WorldStore {
@@ -296,7 +295,10 @@ impl WorldStore {
         let bytes = std::fs::read(path)?;
         let world = serde_json::from_slice::<World>(&bytes)?;
 
-        let mut guard = self.inner.write().map_err(|_| "failed to acquire write lock")?;
+        let mut guard = self
+            .inner
+            .write()
+            .map_err(|_| "failed to acquire write lock")?;
         guard.insert(id.to_string(), world);
 
         Ok(())
@@ -452,7 +454,8 @@ async fn generate_world_stars(
         position: [req.center_x, req.center_y, req.center_z],
         bp_rp: world_bp_rp,
         g_mag: world_g_mag,
-    }).await;
+    })
+    .await;
 
     let mg = calculate_absolute_magnitude(req.center_x, req.center_y, req.center_z, world_g_mag);
 

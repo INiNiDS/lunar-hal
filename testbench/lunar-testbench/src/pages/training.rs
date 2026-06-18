@@ -1,5 +1,8 @@
 use crate::api;
-use crate::components::ui::{fmt_age, fmt_ms, LossChart, NumberFieldF64, NumberFieldU32, PageHeader, ProgressBar, StatusDot, Tag, TextField, tokio_time_sleep};
+use crate::components::ui::{
+    LossChart, NumberFieldF64, NumberFieldU32, PageHeader, ProgressBar, StatusDot, Tag, TextField,
+    fmt_age, fmt_ms, tokio_time_sleep,
+};
 use dioxus::prelude::*;
 use lunar_structures_testbench::{Job, JobStatus, ModelKind, TrainSpec};
 
@@ -84,13 +87,37 @@ fn TrainingBody(
             val_frac: val_frac() as f32,
             data_path: data_path(),
             output_dir: output_dir(),
-            resume_from: if resume().is_empty() { None } else { Some(resume()) },
-            holdout: if holdout().is_empty() { None } else { Some(holdout()) },
+            resume_from: if resume().is_empty() {
+                None
+            } else {
+                Some(resume())
+            },
+            holdout: if holdout().is_empty() {
+                None
+            } else {
+                Some(holdout())
+            },
             gpu_index: gpu_index(),
-            knn_k: if model_kind() == ModelKind::Gnn { Some(knn_k()) } else { None },
-            hidden_dim: if model_kind() == ModelKind::Gnn { Some(hidden_dim()) } else { None },
-            texture_size: if model_kind() == ModelKind::Siren { Some(texture_size()) } else { None },
-            max_stars: if model_kind() == ModelKind::Siren { Some(max_stars()) } else { None },
+            knn_k: if model_kind() == ModelKind::Gnn {
+                Some(knn_k())
+            } else {
+                None
+            },
+            hidden_dim: if model_kind() == ModelKind::Gnn {
+                Some(hidden_dim())
+            } else {
+                None
+            },
+            texture_size: if model_kind() == ModelKind::Siren {
+                Some(texture_size())
+            } else {
+                None
+            },
+            max_stars: if model_kind() == ModelKind::Siren {
+                Some(max_stars())
+            } else {
+                None
+            },
             patience: patience(),
             grad_accum: grad_accum(),
             clip_grad_norm: clip_grad_norm(),
@@ -353,5 +380,3 @@ fn KindSelector(kind: Signal<ModelKind>, on_change: EventHandler<ModelKind>) -> 
         }
     }
 }
-
-

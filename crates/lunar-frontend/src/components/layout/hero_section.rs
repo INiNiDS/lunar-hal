@@ -1,5 +1,7 @@
 use crate::assets::{BG_LUNAR_LANDSCAPE, BG_LUNAR_LANDSCAPE_PC};
-use crate::components::{Divider, GlowingButton, GlowingSubtitle, GlowingTitle, Header, JourneyModal};
+use crate::components::{
+    Divider, GlowingButton, GlowingSubtitle, GlowingTitle, Header, JourneyModal,
+};
 use dioxus::prelude::*;
 
 #[cfg(feature = "web")]
@@ -21,11 +23,13 @@ pub fn HeroSection() -> Element {
     let start_journey = move |_| {
         #[cfg(feature = "web")]
         {
-            let _ = dioxus::document::eval(r#"
+            let _ = dioxus::document::eval(
+                r#"
                 if (!document.fullscreenElement) {
                     document.documentElement.requestFullscreen().catch(e => console.log(e));
                 }
-            "#);
+            "#,
+            );
         }
         #[cfg(not(feature = "web"))]
         let _ = ();
@@ -40,8 +44,16 @@ pub fn HeroSection() -> Element {
     };
 
     let dive_class = if is_diving() { "is-diving" } else { "" };
-    let bg_scale = if is_diving() { "scale-[3] blur-lg transition-all duration-[1500ms] ease-in" } else { "scale-100 transition-all duration-700" };
-    let ui_opacity = if is_diving() { "opacity-0 scale-150 blur-xl transition-all duration-1000" } else { "opacity-100 scale-100" };
+    let bg_scale = if is_diving() {
+        "scale-[3] blur-lg transition-all duration-[1500ms] ease-in"
+    } else {
+        "scale-100 transition-all duration-700"
+    };
+    let ui_opacity = if is_diving() {
+        "opacity-0 scale-150 blur-xl transition-all duration-1000"
+    } else {
+        "opacity-100 scale-100"
+    };
 
     rsx! {
         div {

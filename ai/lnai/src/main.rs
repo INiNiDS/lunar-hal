@@ -2,26 +2,29 @@ mod dataset;
 mod loss;
 
 use anyhow::Result;
-use burn::backend::cuda::CudaDevice;
 use burn::backend::Autodiff;
-use burn::module::{AutodiffModule, Module};
+use burn::backend::cuda::CudaDevice;
 use burn::grad_clipping::GradientClippingConfig;
-use burn::optim::{GradientsAccumulator, GradientsParams, Optimizer, AdamWConfig};
+use burn::module::{AutodiffModule, Module};
+use burn::optim::{AdamWConfig, GradientsAccumulator, GradientsParams, Optimizer};
 use burn::tensor::{ElementConversion, Tensor, TensorData};
 use burn_store::{BurnpackStore, ModuleSnapshot};
 use clap::Parser;
-use dataset::{PrefetchBatcher, StellarDataset, INPUT_DIM, TARGET_DIM};
+use dataset::{INPUT_DIM, PrefetchBatcher, StellarDataset, TARGET_DIM};
+use lnai_models::{MLP_INPUT_DIM, StellarMlp, StellarMlpConfig};
 use loss::{compute_data_loss, compute_physics_loss, compute_pinn_loss};
-use lnai_models::{StellarMlp, StellarMlpConfig, MLP_INPUT_DIM};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 type TrainBackend = Autodiff<burn::backend::Cuda<f32, i32>>;
 type InferBackend = burn::backend::Cuda<f32, i32>;
 
 #[derive(Parser)]
-#[command(name = "lnai", about = "Stellar MLP trainer with Fourier features and PINN loss")]
+#[command(
+    name = "lnai",
+    about = "Stellar MLP trainer with Fourier features and PINN loss"
+)]
 struct Args {
     #[arg(long, default_value = "")]
     data: String,
@@ -68,8 +71,13 @@ fn main() -> Result<()> {
     };
 
     let output_dir = Path::new(&args.output_dir);
-    std::fs::create_dir_all(output_dir)
-        .map_err(|e| anyhow::anyhow!("failed to create output dir {}: {}", output_dir.display(), e))?;
+    std::fs::create_dir_all(output_dir).map_err(|e| {
+        anyhow::anyhow!(
+            "failed to create output dir {}: {}",
+            output_dir.display(),
+            e
+        )
+    })?;
     let out_model_path = output_dir.join(&args.model_file);
     let out_norm_path = output_dir.join(&args.norm_file);
 
@@ -106,11 +114,8 @@ fn main() -> Result<()> {
             .load_from(&mut store)
             .map_err(|e| anyhow::anyhow!("failed to load model: {e}"))?;
 
-        let dataset: StellarDataset<TrainBackend> = StellarDataset::load_with_norm(
-            data_path.as_path(),
-            loaded_norm.clone(),
-            &device,
-        )?;
+        let dataset: StellarDataset<TrainBackend> =
+            StellarDataset::load_with_norm(data_path.as_path(), loaded_norm.clone(), &device)?;
 
         println!("=== Fine-tuning mode (using loaded normalization) ===");
         (loaded_model, loaded_norm, dataset)
@@ -128,7 +133,10 @@ fn main() -> Result<()> {
 
     println!();
     println!("=== Model Architecture ===");
-    println!("Fourier levels:       {}", StellarMlpConfig::fourier_levels());
+    println!(
+        "Fourier levels:       {}",
+        StellarMlpConfig::fourier_levels()
+    );
     println!("Fourier dim:          {}", lnai_models::FOURIER_DIM);
     println!("Conditional inputs:   2 (bp_rp, M_G)");
     println!("MLP input dim:        {}", MLP_INPUT_DIM);
@@ -143,7 +151,9 @@ fn main() -> Result<()> {
         .with_beta_2(0.999)
         .with_epsilon(1e-8)
         .with_weight_decay(0.01)
-        .with_grad_clipping(Some(GradientClippingConfig::Norm(args.clip_grad_norm as f32)))
+        .with_grad_clipping(Some(GradientClippingConfig::Norm(
+            args.clip_grad_norm as f32,
+        )))
         .init();
 
     let effective_batch = args.batch_size * args.grad_accum;
@@ -172,7 +182,8 @@ fn main() -> Result<()> {
     ctrlc::set_handler(move || {
         eprintln!("\nCtrl+C received, finishing current epoch and saving model...");
         interrupted_clone.store(true, Ordering::SeqCst);
-    }).expect("failed to set Ctrl+C handler");
+    })
+    .expect("failed to set Ctrl+C handler");
 
     for epoch in 1..=args.epochs {
         if interrupted.load(Ordering::SeqCst) {
@@ -199,14 +210,11 @@ fn main() -> Result<()> {
             GradientsAccumulator::new();
         let mut accum_count = 0usize;
 
-        while let Some((batch_inputs, batch_targets)) = prefetcher.next_batch::<TrainBackend>(&device) {
+        while let Some((batch_inputs, batch_targets)) =
+            prefetcher.next_batch::<TrainBackend>(&device)
+        {
             let predictions = model.forward(batch_inputs);
-            let loss = compute_pinn_loss(
-                predictions,
-                batch_targets,
-                args.physics_weight,
-                &norm,
-            );
+            let loss = compute_pinn_loss(predictions, batch_targets, args.physics_weight, &norm);
 
             let loss_scalar = loss.clone().into_scalar().elem::<f32>();
             let scaled_loss = if args.grad_accum > 1 {
@@ -259,8 +267,8 @@ fn main() -> Result<()> {
         if val_loss < best_val_loss {
             best_val_loss = val_loss;
             epochs_without_improvement = 0;
-            let mut store = BurnpackStore::from_file(out_model_path.to_str().unwrap())
-                .overwrite(true);
+            let mut store =
+                BurnpackStore::from_file(out_model_path.to_str().unwrap()).overwrite(true);
             model
                 .save_into(&mut store)
                 .expect("failed to save best model");
@@ -280,7 +288,10 @@ fn main() -> Result<()> {
         );
 
         if epochs_without_improvement >= args.patience {
-            println!("\nEarly stopping: no improvement for {} epochs.", args.patience);
+            println!(
+                "\nEarly stopping: no improvement for {} epochs.",
+                args.patience
+            );
             break;
         }
     }
@@ -326,7 +337,9 @@ fn main() -> Result<()> {
                 println!("Holdout loss is close to validation loss - model generalizes well!");
             } else {
                 println!("WARNING: Holdout loss is significantly higher than validation loss.");
-                println!("         The model may be overfitting. Consider regularization or more data.");
+                println!(
+                    "         The model may be overfitting. Consider regularization or more data."
+                );
             }
         } else {
             println!("Holdout file not found: {}", holdout_path.display());
@@ -400,10 +413,7 @@ fn evaluate_physics_infer(
         );
 
         let preds = model.forward(batch_inputs);
-        let loss = compute_physics_loss(
-            preds,
-            norm,
-        );
+        let loss = compute_physics_loss(preds, norm);
         let value: f32 = loss.into_scalar().elem();
         total_loss += value as f64;
         n += 1;
@@ -431,5 +441,7 @@ fn find_parquet() -> Result<std::path::PathBuf> {
             return Ok(p.to_path_buf());
         }
     }
-    anyhow::bail!("No parquet dataset found in ai_data/. Run 'lnaicli fetch && lnaicli clean' first.");
+    anyhow::bail!(
+        "No parquet dataset found in ai_data/. Run 'lnaicli fetch && lnaicli clean' first."
+    );
 }

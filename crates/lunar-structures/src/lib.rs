@@ -17,7 +17,6 @@ pub struct PinnResponse {
     pub luminosity_solar: f32,
 }
 
-
 #[derive(Deserialize, Serialize, Debug)]
 pub struct GnnRequest {
     pub center_x: f32,
@@ -79,7 +78,6 @@ pub struct StarLore {
     pub visual_profile: String,
     pub system_lore: String,
 }
-
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct SirenTextureRequest {
@@ -185,4 +183,3 @@ pub struct SectorRequest {
     pub g_mag: f32,
     pub search_radius: Option<f32>,
 }
-

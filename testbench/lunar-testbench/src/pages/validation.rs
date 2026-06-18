@@ -1,5 +1,8 @@
 use crate::api;
-use crate::components::ui::{fmt_age, fmt_ms, LossChart, NumberFieldF64, NumberFieldU32, PageHeader, ProgressBar, StatusDot, Tag, TextField, tokio_time_sleep};
+use crate::components::ui::{
+    LossChart, NumberFieldF64, NumberFieldU32, PageHeader, ProgressBar, StatusDot, Tag, TextField,
+    fmt_age, fmt_ms, tokio_time_sleep,
+};
 use dioxus::prelude::*;
 use lunar_structures_testbench::{Job, JobStatus, ModelKind, ValidateSpec};
 
@@ -43,9 +46,21 @@ fn ValidationBody(
     let on_kind_change = move |k: ModelKind| {
         model_kind.set(k.clone());
         match k {
-            ModelKind::Pinn => { data_path.set("ai_data/clean_stars2.parquet".to_string()); epochs.set(3); batch_size.set(2048); }
-            ModelKind::Gnn => { data_path.set("ai_data/clean_gnn_stars.parquet".to_string()); epochs.set(2); batch_size.set(4096); }
-            ModelKind::Siren => { data_path.set("ai_data/clean_stars2.parquet".to_string()); epochs.set(1); batch_size.set(512); }
+            ModelKind::Pinn => {
+                data_path.set("ai_data/clean_stars2.parquet".to_string());
+                epochs.set(3);
+                batch_size.set(2048);
+            }
+            ModelKind::Gnn => {
+                data_path.set("ai_data/clean_gnn_stars.parquet".to_string());
+                epochs.set(2);
+                batch_size.set(4096);
+            }
+            ModelKind::Siren => {
+                data_path.set("ai_data/clean_stars2.parquet".to_string());
+                epochs.set(1);
+                batch_size.set(512);
+            }
         }
     };
 
@@ -59,10 +74,26 @@ fn ValidationBody(
             epochs: epochs(),
             batch_size: batch_size(),
             val_frac: val_frac() as f32,
-            hidden_dim: if model_kind() == ModelKind::Gnn { Some(hidden_dim()) } else { None },
-            knn_k: if model_kind() == ModelKind::Gnn { Some(knn_k()) } else { None },
-            texture_size: if model_kind() == ModelKind::Siren { Some(texture_size()) } else { None },
-            max_stars: if model_kind() == ModelKind::Siren { Some(max_stars()) } else { None },
+            hidden_dim: if model_kind() == ModelKind::Gnn {
+                Some(hidden_dim())
+            } else {
+                None
+            },
+            knn_k: if model_kind() == ModelKind::Gnn {
+                Some(knn_k())
+            } else {
+                None
+            },
+            texture_size: if model_kind() == ModelKind::Siren {
+                Some(texture_size())
+            } else {
+                None
+            },
+            max_stars: if model_kind() == ModelKind::Siren {
+                Some(max_stars())
+            } else {
+                None
+            },
         };
         let mut res = jobs;
         spawn(async move {
@@ -299,5 +330,3 @@ fn KindSelector(kind: Signal<ModelKind>, on_change: EventHandler<ModelKind>) -> 
         }
     }
 }
-
-

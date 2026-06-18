@@ -1,5 +1,5 @@
-use crate::api::{system_snapshot, SystemSnapshot};
-use crate::components::ui::{bytes_human, fmt_age, PageHeader, StatusDot, Tag};
+use crate::api::{SystemSnapshot, system_snapshot};
+use crate::components::ui::{PageHeader, StatusDot, Tag, bytes_human, fmt_age};
 use dioxus::prelude::*;
 
 #[component]

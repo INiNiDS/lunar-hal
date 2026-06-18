@@ -1,7 +1,6 @@
 use crate::pages::{
     backend_api::BackendApi, dashboard::Dashboard, datasets::Datasets, models::Models,
-    pipeline::Pipeline, siren_gallery::SirenGallery, training::Training,
-    validation::Validation,
+    pipeline::Pipeline, siren_gallery::SirenGallery, training::Training, validation::Validation,
 };
 use dioxus::prelude::*;
 
@@ -62,9 +61,7 @@ fn Sidebar(current: Route) -> Element {
         Route::BackendApi {} => "/backend",
         Route::Datasets {} => "/datasets",
     };
-    let cls = |target: &'static str| -> &'static str {
-        if path == target { "active" } else { "" }
-    };
+    let cls = |target: &'static str| -> &'static str { if path == target { "active" } else { "" } };
 
     rsx! {
         aside { class: "sidebar",

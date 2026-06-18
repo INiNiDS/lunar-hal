@@ -849,7 +849,10 @@ impl Game {
     ///
     /// `mouse_world` — положение мыши в мировых координатах (парсеки).
     pub fn tick_attention(&self, dt: f32, mouse_world: Option<(f32, f32)>, stars: &[ResponseStar]) {
-        self.state.write().attention_map.tick(dt, mouse_world, stars);
+        self.state
+            .write()
+            .attention_map
+            .tick(dt, mouse_world, stars);
     }
 
     /// Сбросить Tneglect для звезды — игрок навёл на неё курсор.

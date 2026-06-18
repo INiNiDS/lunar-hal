@@ -1,6 +1,6 @@
 use crate::api;
 use crate::components::StarShaderCanvas;
-use crate::components::ui::{base64_encode, NumberFieldU32, PageHeader, StatusDot};
+use crate::components::ui::{NumberFieldU32, PageHeader, StatusDot, base64_encode};
 use dioxus::prelude::*;
 
 #[component]

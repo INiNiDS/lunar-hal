@@ -1,8 +1,7 @@
 use std::path::PathBuf;
 
 pub fn get_host() -> String {
-    std::env::var("LUNAR_BACKEND_HOST")
-        .unwrap_or_else(|_| "127.0.0.1".to_string())
+    std::env::var("LUNAR_BACKEND_HOST").unwrap_or_else(|_| "127.0.0.1".to_string())
 }
 
 pub fn get_port() -> u16 {

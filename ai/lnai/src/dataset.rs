@@ -104,8 +104,7 @@ impl<B: Backend> StellarDataset<B> {
 
         let (train_inputs, train_targets) =
             gather_rows(&self.inputs_cpu, &self.targets_cpu, train_idx);
-        let (val_inputs, val_targets) =
-            gather_rows(&self.inputs_cpu, &self.targets_cpu, val_idx);
+        let (val_inputs, val_targets) = gather_rows(&self.inputs_cpu, &self.targets_cpu, val_idx);
 
         let train = StellarDataset {
             inputs_cpu: train_inputs,
@@ -168,12 +167,13 @@ impl PrefetchBatcher {
                     tgt_batch.extend_from_slice(&targets[j..j + TARGET_DIM]);
                 }
 
-                if tx.send(PrefetchBatch {
-                    input_data: inp_batch,
-                    target_data: tgt_batch,
-                    rows,
-                })
-                .is_err()
+                if tx
+                    .send(PrefetchBatch {
+                        input_data: inp_batch,
+                        target_data: tgt_batch,
+                        rows,
+                    })
+                    .is_err()
                 {
                     break;
                 }
@@ -228,11 +228,12 @@ fn gather_rows(inputs: &[f32], targets: &[f32], indices: &[usize]) -> (Vec<f32>,
 fn read_filtered_parquet(parquet_path: &Path) -> Result<(DataFrame, usize)> {
     println!("Loading parquet: {}", parquet_path.display());
     let file = File::open(parquet_path).context("failed to open parquet")?;
-    let df = ParquetReader::new(file).finish().context("failed to read parquet")?;
+    let df = ParquetReader::new(file)
+        .finish()
+        .context("failed to read parquet")?;
 
     let required_cols: &[&str] = &[
-        "x_pc", "y_pc", "z_pc", "bp_rp", "g_mag",
-        "st_teff", "st_rad", "st_mass", "st_lum",
+        "x_pc", "y_pc", "z_pc", "bp_rp", "g_mag", "st_teff", "st_rad", "st_mass", "st_lum",
     ];
 
     for &col_name in required_cols {
@@ -246,7 +247,9 @@ fn read_filtered_parquet(parquet_path: &Path) -> Result<(DataFrame, usize)> {
         }
     }
 
-    let df = df.drop_nulls(Some(required_cols)).context("drop_nulls failed")?;
+    let df = df
+        .drop_nulls(Some(required_cols))
+        .context("drop_nulls failed")?;
 
     let df = df
         .lazy()
@@ -291,17 +294,33 @@ impl RawColumns {
         let mass = extract_f32(df, "st_mass")?;
         let lum = extract_f32(df, "st_lum")?;
 
-        let mg: Vec<f32> = x.par_iter().zip(&y).zip(&z).zip(&g_mag).map(|(((xi, yi), zi), &g)| {
-            let d = (xi * xi + yi * yi + zi * zi).sqrt().max(1e-6);
-            g - 5.0 * d.log10() + 5.0
-        }).collect();
+        let mg: Vec<f32> = x
+            .par_iter()
+            .zip(&y)
+            .zip(&z)
+            .zip(&g_mag)
+            .map(|(((xi, yi), zi), &g)| {
+                let d = (xi * xi + yi * yi + zi * zi).sqrt().max(1e-6);
+                g - 5.0 * d.log10() + 5.0
+            })
+            .collect();
 
         let log_teff: Vec<f32> = teff.par_iter().map(|&v| v.max(1e-10).log10()).collect();
         let log_rad: Vec<f32> = rad.par_iter().map(|&v| v.max(1e-10).log10()).collect();
         let log_mass: Vec<f32> = mass.par_iter().map(|&v| v.max(1e-10).log10()).collect();
         let log_lum: Vec<f32> = lum.par_iter().map(|&v| v.max(1e-10).log10()).collect();
 
-        Ok(Self { x, y, z, bp_rp, mg, log_teff, log_rad, log_mass, log_lum })
+        Ok(Self {
+            x,
+            y,
+            z,
+            bp_rp,
+            mg,
+            log_teff,
+            log_rad,
+            log_mass,
+            log_lum,
+        })
     }
 
     fn compute_norm(&self) -> NormParams {
@@ -316,29 +335,65 @@ impl RawColumns {
         let (ll_m, ll_s) = mean_std(&self.log_lum);
 
         NormParams {
-            x_mean: x_m, x_std: x_s,
-            y_mean: y_m, y_std: y_s,
-            z_mean: z_m, z_std: z_s,
-            bp_rp_mean: bp_rp_m, bp_rp_std: bp_rp_s,
-            mg_mean: mg_m, mg_std: mg_s,
-            log_teff_mean: lt_m, log_teff_std: lt_s,
-            log_rad_mean: lr_m, log_rad_std: lr_s,
-            log_mass_mean: lm_m, log_mass_std: lm_s,
-            log_lum_mean: ll_m, log_lum_std: ll_s,
+            x_mean: x_m,
+            x_std: x_s,
+            y_mean: y_m,
+            y_std: y_s,
+            z_mean: z_m,
+            z_std: z_s,
+            bp_rp_mean: bp_rp_m,
+            bp_rp_std: bp_rp_s,
+            mg_mean: mg_m,
+            mg_std: mg_s,
+            log_teff_mean: lt_m,
+            log_teff_std: lt_s,
+            log_rad_mean: lr_m,
+            log_rad_std: lr_s,
+            log_mass_mean: lm_m,
+            log_mass_std: lm_s,
+            log_lum_mean: ll_m,
+            log_lum_std: ll_s,
         }
     }
 
     fn print_norm(&self, norm: &NormParams) {
         println!("Normalization parameters:");
-        println!("  x_pc:      mean={:.4}, std={:.4}", norm.x_mean, norm.x_std);
-        println!("  y_pc:      mean={:.4}, std={:.4}", norm.y_mean, norm.y_std);
-        println!("  z_pc:      mean={:.4}, std={:.4}", norm.z_mean, norm.z_std);
-        println!("  bp_rp:     mean={:.4}, std={:.4}", norm.bp_rp_mean, norm.bp_rp_std);
-        println!("  M_G:       mean={:.4}, std={:.4}", norm.mg_mean, norm.mg_std);
-        println!("  log_teff:  mean={:.4}, std={:.4}", norm.log_teff_mean, norm.log_teff_std);
-        println!("  log_rad:   mean={:.4}, std={:.4}", norm.log_rad_mean, norm.log_rad_std);
-        println!("  log_mass:  mean={:.4}, std={:.4}", norm.log_mass_mean, norm.log_mass_std);
-        println!("  log_lum:   mean={:.4}, std={:.4}", norm.log_lum_mean, norm.log_lum_std);
+        println!(
+            "  x_pc:      mean={:.4}, std={:.4}",
+            norm.x_mean, norm.x_std
+        );
+        println!(
+            "  y_pc:      mean={:.4}, std={:.4}",
+            norm.y_mean, norm.y_std
+        );
+        println!(
+            "  z_pc:      mean={:.4}, std={:.4}",
+            norm.z_mean, norm.z_std
+        );
+        println!(
+            "  bp_rp:     mean={:.4}, std={:.4}",
+            norm.bp_rp_mean, norm.bp_rp_std
+        );
+        println!(
+            "  M_G:       mean={:.4}, std={:.4}",
+            norm.mg_mean, norm.mg_std
+        );
+        println!(
+            "  log_teff:  mean={:.4}, std={:.4}",
+            norm.log_teff_mean, norm.log_teff_std
+        );
+        println!(
+            "  log_rad:   mean={:.4}, std={:.4}",
+            norm.log_rad_mean, norm.log_rad_std
+        );
+        println!(
+            "  log_mass:  mean={:.4}, std={:.4}",
+            norm.log_mass_mean, norm.log_mass_std
+        );
+        println!(
+            "  log_lum:   mean={:.4}, std={:.4}",
+            norm.log_lum_mean, norm.log_lum_std
+        );
     }
 
     fn build_cpu(&self, norm: &NormParams) -> (Vec<f32>, Vec<f32>) {
@@ -359,8 +414,12 @@ impl RawColumns {
 }
 
 fn extract_f32(df: &DataFrame, name: &str) -> Result<Vec<f32>> {
-    let s = df.column(name).context(format!("column {name} not found"))?;
-    let s = s.cast(&DataType::Float64).context(format!("column {name} cast to f64 failed"))?;
+    let s = df
+        .column(name)
+        .context(format!("column {name} not found"))?;
+    let s = s
+        .cast(&DataType::Float64)
+        .context(format!("column {name} cast to f64 failed"))?;
     let ca = s.f64().context(format!("column {name} is not f64"))?;
     let values: Vec<f32> = ca
         .into_iter()

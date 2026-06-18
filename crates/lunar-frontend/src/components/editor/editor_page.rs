@@ -3,16 +3,14 @@ use crate::components::editor::sidebar::StarSidebar;
 use crate::components::editor::star_map::StarMap;
 use crate::components::editor::world_panel::{WorldCreator, WorldPicker};
 use crate::game_state::{
-    hydrate_world_camera_from_storage, use_provide_world_camera_persistence, use_game,
-    use_game_snapshot, use_persist_world_camera, use_pipeline_snapshot,
-    use_world_id_change,
+    hydrate_world_camera_from_storage, use_game, use_game_snapshot, use_persist_world_camera,
+    use_pipeline_snapshot, use_provide_world_camera_persistence, use_world_id_change,
 };
-use base64::{engine::general_purpose::STANDARD, Engine as _};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use dioxus::prelude::*;
 use lunar_game_backend::{Game, GameSnapshot};
 use lunar_structures::{
-    PinnResponse, PipelineResponse, ResponseStar, StarLore, StellarMetadata, World,
-    WorldSummary,
+    PinnResponse, PipelineResponse, ResponseStar, StarLore, StellarMetadata, World, WorldSummary,
 };
 use std::io::Cursor;
 use tracing::warn;
@@ -135,11 +133,7 @@ fn use_sync_star_pipeline(game: Signal<Game>, version: Signal<u64>) {
     });
 }
 
-fn use_editor_synchronization(
-    game: Signal<Game>,
-    version: Signal<u64>,
-    refresh_tick: Signal<u32>,
-) {
+fn use_editor_synchronization(game: Signal<Game>, version: Signal<u64>, refresh_tick: Signal<u32>) {
     use_provide_world_camera_persistence();
     use_persist_world_camera();
 
@@ -290,7 +284,6 @@ fn ActiveWorldOverlays(
     }
 }
 
-
 #[component]
 pub fn Editor() -> Element {
     let game = use_game();
@@ -335,7 +328,13 @@ pub fn Editor() -> Element {
     };
 
     let on_created_world = move |w| {
-        handle_world_creation(game.read().clone(), w, show_creator, show_picker, sidebar_open);
+        handle_world_creation(
+            game.read().clone(),
+            w,
+            show_creator,
+            show_picker,
+            sidebar_open,
+        );
     };
 
     let on_delete_world = move |id| {

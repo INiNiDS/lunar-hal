@@ -1,15 +1,15 @@
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use axum::extract::Query;
 use axum::Json;
+use axum::extract::Query;
 use reqwest::Client;
 use serde::Deserialize;
 use walkdir::WalkDir;
 
 use lunar_structures_testbench::{
-    BackendStatus, BinaryInfo, DatasetInfo, HostInfo, Job, ModelArtifact,
-    NormSnapshot, SystemSnapshot,
+    BackendStatus, BinaryInfo, DatasetInfo, HostInfo, Job, ModelArtifact, NormSnapshot,
+    SystemSnapshot,
 };
 
 use crate::jobs::{now_ms, workspace_root};
@@ -184,7 +184,7 @@ pub fn read_norm_file(ws: &Path, file: &str) -> NormSnapshot {
                 path: path.to_string_lossy().to_string(),
                 exists: true,
                 data: None,
-            }
+            };
         }
     };
     let data = serde_json::from_str(&raw).ok();
@@ -217,10 +217,15 @@ pub async fn ping_url(client: &Client, url: &str) -> BackendStatus {
     let resp = client.get(url).send().await;
     let (reachable, latency, hint) = match resp {
         Ok(r) => {
-            let latency = start.duration_since(SystemTime::UNIX_EPOCH)
+            let latency = start
+                .duration_since(SystemTime::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_millis() as u64;
-            let hint = if r.status().is_success() { "HTTP 200" } else { "HTTP non-2xx" };
+            let hint = if r.status().is_success() {
+                "HTTP 200"
+            } else {
+                "HTTP non-2xx"
+            };
             (true, Some(latency), hint.to_string())
         }
         Err(_) => (false, None, "unreachable".into()),
@@ -244,7 +249,15 @@ pub async fn system_snapshot(Query(q): Query<SnapshotQuery>) -> Json<SystemSnaps
     let ws = workspace_root();
     let models = scan_models(&ws);
     let datasets = scan_datasets(&ws);
-    let binary_names = ["lnai", "lnai-gnn", "lnai-siren", "lunar-ai-cli", "lunar-backend", "lunar-testbench", "lunar-testbench-backend"];
+    let binary_names = [
+        "lnai",
+        "lnai-gnn",
+        "lnai-siren",
+        "lunar-ai-cli",
+        "lunar-backend",
+        "lunar-testbench",
+        "lunar-testbench-backend",
+    ];
     let binaries = binary_names
         .iter()
         .map(|n| binary_status(&ws, n))

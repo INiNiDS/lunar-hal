@@ -23,7 +23,8 @@ pub fn compute_gnn_physics_loss<B: Backend>(
     let mean_vy = pred_vy.clone().mean_dim(0);
     let mean_vz = pred_vz.clone().mean_dim(0);
 
-    let momentum_loss = mean_vx.clone().square() + mean_vy.clone().square() + mean_vz.clone().square();
+    let momentum_loss =
+        mean_vx.clone().square() + mean_vy.clone().square() + mean_vz.clone().square();
 
     let vx_var = (pred_vx - mean_vx).square().mean_dim(0);
     let vy_var = (pred_vy - mean_vy).square().mean_dim(0);

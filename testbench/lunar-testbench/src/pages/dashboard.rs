@@ -1,5 +1,5 @@
-use crate::api::{system_snapshot, SystemSnapshot};
-use crate::components::ui::{bytes_human, fmt_age, PageHeader, StatusDot, Tag};
+use crate::api::{SystemSnapshot, system_snapshot};
+use crate::components::ui::{PageHeader, StatusDot, Tag, bytes_human, fmt_age};
 use dioxus::prelude::*;
 
 #[component]
@@ -27,17 +27,53 @@ pub fn Dashboard() -> Element {
 
 #[component]
 fn DashboardBody(snap: SystemSnapshot) -> Element {
-    let pinn = snap.models.iter().find(|m| m.kind == "pinn" && m.name.ends_with(".bpk"));
-    let gnn = snap.models.iter().find(|m| m.kind == "gnn" && m.name.ends_with(".bpk"));
-    let siren = snap.models.iter().find(|m| m.kind == "siren" && m.name.ends_with(".bpk"));
+    let pinn = snap
+        .models
+        .iter()
+        .find(|m| m.kind == "pinn" && m.name.ends_with(".bpk"));
+    let gnn = snap
+        .models
+        .iter()
+        .find(|m| m.kind == "gnn" && m.name.ends_with(".bpk"));
+    let siren = snap
+        .models
+        .iter()
+        .find(|m| m.kind == "siren" && m.name.ends_with(".bpk"));
 
-    let pinn_norm_exists = snap.norms.iter().find(|n| n.kind == "stellar_norm.json").map(|n| n.exists).unwrap_or(false);
-    let gnn_norm_exists = snap.norms.iter().find(|n| n.kind == "stellar_gnn_norm.json").map(|n| n.exists).unwrap_or(false);
-    let siren_norm_exists = snap.norms.iter().find(|n| n.kind == "stellar_siren_norm.json").map(|n| n.exists).unwrap_or(false);
+    let pinn_norm_exists = snap
+        .norms
+        .iter()
+        .find(|n| n.kind == "stellar_norm.json")
+        .map(|n| n.exists)
+        .unwrap_or(false);
+    let gnn_norm_exists = snap
+        .norms
+        .iter()
+        .find(|n| n.kind == "stellar_gnn_norm.json")
+        .map(|n| n.exists)
+        .unwrap_or(false);
+    let siren_norm_exists = snap
+        .norms
+        .iter()
+        .find(|n| n.kind == "stellar_siren_norm.json")
+        .map(|n| n.exists)
+        .unwrap_or(false);
 
-    let running_jobs = snap.jobs.iter().filter(|j| j.status == lunar_structures_testbench::JobStatus::Running).count();
-    let completed_jobs = snap.jobs.iter().filter(|j| j.status == lunar_structures_testbench::JobStatus::Completed).count();
-    let failed_jobs = snap.jobs.iter().filter(|j| j.status == lunar_structures_testbench::JobStatus::Failed).count();
+    let running_jobs = snap
+        .jobs
+        .iter()
+        .filter(|j| j.status == lunar_structures_testbench::JobStatus::Running)
+        .count();
+    let completed_jobs = snap
+        .jobs
+        .iter()
+        .filter(|j| j.status == lunar_structures_testbench::JobStatus::Completed)
+        .count();
+    let failed_jobs = snap
+        .jobs
+        .iter()
+        .filter(|j| j.status == lunar_structures_testbench::JobStatus::Failed)
+        .count();
 
     rsx! {
         div { class: "grid grid-3",
@@ -171,7 +207,10 @@ fn BackendCard(snap: SystemSnapshot) -> Element {
 fn TestbenchBackendCard(snap: SystemSnapshot) -> Element {
     let tb = snap.testbench_backend.clone();
     let status = tb.as_ref().map(|b| b.reachable).unwrap_or(false);
-    let url = tb.as_ref().map(|b| b.url.clone()).unwrap_or_else(|| "—".into());
+    let url = tb
+        .as_ref()
+        .map(|b| b.url.clone())
+        .unwrap_or_else(|| "—".into());
     let latency = tb
         .as_ref()
         .and_then(|b| b.latency_ms)

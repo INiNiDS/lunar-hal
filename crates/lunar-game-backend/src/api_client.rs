@@ -4,7 +4,6 @@
 //! through this client. The frontend (or test harness) supplies the
 //! base URL, the client is constructed by [`Game`].
 
-use std::time::Duration;
 use lunar_structures::{
     CreateWorldRequest, GnnResponse, PipelineRequest, PipelineResponse, RandomStarRequest,
     RandomStarResponse, SectorRequest, World, WorldListResponse,
@@ -13,6 +12,7 @@ use lunar_utils::env::get_url;
 use parking_lot::RwLock;
 use serde::Serialize;
 use serde_json::Value;
+use std::time::Duration;
 use thiserror::Error;
 
 /// Errors that can occur when communicating with the AI backend.
@@ -66,9 +66,7 @@ impl ApiClient {
             builder = builder.timeout(Duration::from_mins(1));
         }
 
-        let http = builder
-            .build()
-            .expect("reqwest client should build");
+        let http = builder.build().expect("reqwest client should build");
 
         Self {
             base_url: RwLock::new(base_url.into()),
@@ -134,10 +132,7 @@ impl ApiClient {
         self.delete(&format!("/worlds/{id}")).await
     }
 
-    pub async fn sector_stars(
-        &self,
-        req: SectorRequest,
-    ) -> Result<GnnResponse, ApiError> {
+    pub async fn sector_stars(&self, req: SectorRequest) -> Result<GnnResponse, ApiError> {
         self.post_json("/sector/stars", &req).await
     }
 
@@ -150,21 +145,14 @@ impl ApiClient {
 
     // === Pipeline ===
 
-    pub async fn pipeline(
-        &self,
-        req: PipelineRequest,
-    ) -> Result<PipelineResponse, ApiError> {
+    pub async fn pipeline(&self, req: PipelineRequest) -> Result<PipelineResponse, ApiError> {
         self.post_json("/pipeline", &req).await
     }
 }
 
 /// Raw value passthrough for endpoints that should remain flexible
 /// (e.g., testbench probes). The game layer itself does not use this.
-pub async fn raw_post(
-    client: &ApiClient,
-    path: &str,
-    body: &Value,
-) -> Result<Value, ApiError> {
+pub async fn raw_post(client: &ApiClient, path: &str, body: &Value) -> Result<Value, ApiError> {
     let url = format!("{}{}", client.base_url(), path);
     let builder = client.http.post(url).json(body);
     let resp = send_and_validate(builder).await?;
@@ -173,7 +161,9 @@ pub async fn raw_post(
 
 /// Helper function to perform the request and validate the response status,
 /// reducing duplicate error handling across different HTTP methods.
-async fn send_and_validate(builder: reqwest::RequestBuilder) -> Result<reqwest::Response, ApiError> {
+async fn send_and_validate(
+    builder: reqwest::RequestBuilder,
+) -> Result<reqwest::Response, ApiError> {
     let resp = builder.send().await?;
     let status = resp.status();
     if !status.is_success() {

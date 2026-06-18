@@ -10,7 +10,9 @@ pub struct GcnLayer<B: Backend> {
 impl<B: Backend> GcnLayer<B> {
     pub fn new(device: &Device<B>, input_dim: usize, output_dim: usize, eps: f64) -> Self {
         let linear = LinearConfig::new(input_dim, output_dim).init(device);
-        let norm = LayerNormConfig::new(output_dim).with_epsilon(eps).init(device);
+        let norm = LayerNormConfig::new(output_dim)
+            .with_epsilon(eps)
+            .init(device);
         Self { linear, norm }
     }
 
@@ -46,7 +48,12 @@ impl StellarGnnConfig {
         let gcn3 = GcnLayer::new(device, self.hidden_dim, self.hidden_dim, eps);
         let readout = LinearConfig::new(self.hidden_dim, self.output_dim).init(device);
 
-        StellarGnn { gcn1, gcn2, gcn3, readout }
+        StellarGnn {
+            gcn1,
+            gcn2,
+            gcn3,
+            readout,
+        }
     }
 }
 

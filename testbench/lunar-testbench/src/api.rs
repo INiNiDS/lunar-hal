@@ -1,10 +1,10 @@
 use gloo_net::http::Request;
 use gloo_net::http::Response;
-use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use serde_json::Value;
 
-use lunar_utils::env::{get_url, get_testbench_url};
+use lunar_utils::env::{get_testbench_url, get_url};
 
 fn err_to_string(e: impl std::fmt::Display) -> String {
     e.to_string()
@@ -21,10 +21,7 @@ async fn decode_json<T: DeserializeOwned>(resp: Response) -> Result<T, String> {
 
 async fn get_json<T: DeserializeOwned>(base: &str, path: &str) -> Result<T, String> {
     let url = format!("{base}{path}");
-    let resp = Request::get(&url)
-        .send()
-        .await
-        .map_err(err_to_string)?;
+    let resp = Request::get(&url).send().await.map_err(err_to_string)?;
     decode_json(resp).await
 }
 
@@ -59,10 +56,8 @@ async fn post_json_value<T: DeserializeOwned>(
 }
 
 pub use lunar_structures_testbench::{
-    Job, JobIdPayload, ModelArtifact, SystemSnapshot, TrainSpec,
-    ValidateSpec,
+    Job, JobIdPayload, ModelArtifact, SystemSnapshot, TrainSpec, ValidateSpec,
 };
-
 
 pub async fn system_snapshot() -> Result<SystemSnapshot, String> {
     let tb_url = get_testbench_url();
@@ -102,7 +97,6 @@ pub async fn cancel_job(id: &str) -> Result<(), String> {
     }
     Ok(())
 }
-
 
 pub async fn pinn_infer(body: &Value) -> Result<Value, String> {
     post_json_value(&get_url(), "/pinn", body).await
@@ -191,10 +185,34 @@ pub async fn backend_proxy(
     let m = method.to_uppercase();
     let resp = if let Some(b) = body {
         match m.as_str() {
-            "GET" => Request::get(&url).json(b).map_err(err_to_string)?.send().await,
-            "POST" => Request::post(&url).json(b).map_err(err_to_string)?.send().await,
-            "PUT" => Request::put(&url).json(b).map_err(err_to_string)?.send().await,
-            "DELETE" => Request::delete(&url).json(b).map_err(err_to_string)?.send().await,
+            "GET" => {
+                Request::get(&url)
+                    .json(b)
+                    .map_err(err_to_string)?
+                    .send()
+                    .await
+            }
+            "POST" => {
+                Request::post(&url)
+                    .json(b)
+                    .map_err(err_to_string)?
+                    .send()
+                    .await
+            }
+            "PUT" => {
+                Request::put(&url)
+                    .json(b)
+                    .map_err(err_to_string)?
+                    .send()
+                    .await
+            }
+            "DELETE" => {
+                Request::delete(&url)
+                    .json(b)
+                    .map_err(err_to_string)?
+                    .send()
+                    .await
+            }
             _ => return Err(format!("unsupported method: {method}")),
         }
     } else {
@@ -218,7 +236,6 @@ pub async fn backend_proxy(
     }
     serde_json::from_str(&text).map_err(err_to_string)
 }
-
 
 pub fn read_png_dims(bytes: &[u8]) -> Option<(u32, u32)> {
     if bytes.len() < 24 || &bytes[0..8] != b"\x89PNG\r\n\x1a\n" {

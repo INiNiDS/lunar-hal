@@ -2,20 +2,20 @@ mod dataset;
 mod loss;
 
 use anyhow::Result;
-use burn::backend::cuda::CudaDevice;
 use burn::backend::Autodiff;
-use burn::module::{AutodiffModule, Module};
+use burn::backend::cuda::CudaDevice;
 use burn::grad_clipping::GradientClippingConfig;
-use burn::optim::{GradientsAccumulator, GradientsParams, Optimizer, AdamWConfig};
+use burn::module::{AutodiffModule, Module};
+use burn::optim::{AdamWConfig, GradientsAccumulator, GradientsParams, Optimizer};
 use burn::tensor::{ElementConversion, Tensor, TensorData};
 use burn_store::{BurnpackStore, ModuleSnapshot};
 use clap::Parser;
 use dataset::{PrefetchBatcher, SirenDataset, SirenNorm, TARGET_DIM};
-use lnai_models::{StellarSiren, StellarSirenConfig, SIREN_INPUT_DIM};
+use lnai_models::{SIREN_INPUT_DIM, StellarSiren, StellarSirenConfig};
 use loss::{compute_data_loss, compute_siren_loss};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 type TrainBackend = Autodiff<burn::backend::Cuda<f32, i32>>;
 type InferBackend = burn::backend::Cuda<f32, i32>;
@@ -72,8 +72,13 @@ fn main() -> Result<()> {
     };
 
     let output_dir = Path::new(&args.output_dir);
-    std::fs::create_dir_all(output_dir)
-        .map_err(|e| anyhow::anyhow!("failed to create output dir {}: {}", output_dir.display(), e))?;
+    std::fs::create_dir_all(output_dir).map_err(|e| {
+        anyhow::anyhow!(
+            "failed to create output dir {}: {}",
+            output_dir.display(),
+            e
+        )
+    })?;
     let out_model_path = output_dir.join(&args.model_file);
     let out_norm_path = output_dir.join(&args.norm_file);
 
@@ -88,10 +93,16 @@ fn main() -> Result<()> {
         let norm_path = resume_path.join(&args.norm_file);
 
         if !model_path.exists() {
-            anyhow::bail!("Resume requested but model file not found: {}", model_path.display());
+            anyhow::bail!(
+                "Resume requested but model file not found: {}",
+                model_path.display()
+            );
         }
         if !norm_path.exists() {
-            anyhow::bail!("Resume requested but norm file not found: {}", norm_path.display());
+            anyhow::bail!(
+                "Resume requested but norm file not found: {}",
+                norm_path.display()
+            );
         }
 
         let norm_json = std::fs::read_to_string(&norm_path)?;
@@ -136,7 +147,10 @@ fn main() -> Result<()> {
     println!("Hidden dim:       64");
     println!("Layers:           4 (first + 2 hidden + output)");
     println!("Omega_0:          30.0");
-    println!("Texture grid:     {}x{}", args.texture_size, args.texture_size);
+    println!(
+        "Texture grid:     {}x{}",
+        args.texture_size, args.texture_size
+    );
     println!("Max stars:        {}", args.max_stars);
     println!("Total parameters: {}", n_params);
     println!("=========================");
@@ -147,7 +161,9 @@ fn main() -> Result<()> {
         .with_beta_2(0.999)
         .with_epsilon(1e-8)
         .with_weight_decay(0.01)
-        .with_grad_clipping(Some(GradientClippingConfig::Norm(args.clip_grad_norm as f32)))
+        .with_grad_clipping(Some(GradientClippingConfig::Norm(
+            args.clip_grad_norm as f32,
+        )))
         .init();
 
     let effective_batch = args.batch_size * args.grad_accum;
@@ -176,7 +192,8 @@ fn main() -> Result<()> {
     ctrlc::set_handler(move || {
         eprintln!("\nCtrl+C received, finishing current epoch and saving model...");
         interrupted_clone.store(true, Ordering::SeqCst);
-    }).expect("failed to set Ctrl+C handler");
+    })
+    .expect("failed to set Ctrl+C handler");
 
     for epoch in 1..=args.epochs {
         if interrupted.load(Ordering::SeqCst) {
@@ -252,8 +269,8 @@ fn main() -> Result<()> {
         if val_loss < best_val_loss {
             best_val_loss = val_loss;
             epochs_without_improvement = 0;
-            let mut store = BurnpackStore::from_file(out_model_path.to_str().unwrap())
-                .overwrite(true);
+            let mut store =
+                BurnpackStore::from_file(out_model_path.to_str().unwrap()).overwrite(true);
             model
                 .save_into(&mut store)
                 .expect("failed to save best model");
@@ -272,7 +289,10 @@ fn main() -> Result<()> {
         );
 
         if epochs_without_improvement >= args.patience {
-            println!("\nEarly stopping: no improvement for {} epochs.", args.patience);
+            println!(
+                "\nEarly stopping: no improvement for {} epochs.",
+                args.patience
+            );
             break;
         }
     }
@@ -380,5 +400,7 @@ fn find_parquet() -> Result<std::path::PathBuf> {
             return Ok(p.to_path_buf());
         }
     }
-    anyhow::bail!("No parquet dataset found in ai_data/. Run 'lnaicli fetch && lnaicli clean' first.");
+    anyhow::bail!(
+        "No parquet dataset found in ai_data/. Run 'lnaicli fetch && lnaicli clean' first."
+    );
 }

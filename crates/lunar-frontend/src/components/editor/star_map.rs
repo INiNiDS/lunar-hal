@@ -1,7 +1,7 @@
 use crate::components::editor::enemy::Enemy;
 use crate::game_state::use_game_version;
 use dioxus::prelude::*;
-use lunar_game_backend::{chunk_center, Game, SectorKey, CHUNK_SIZE_PC, PX_PER_PC};
+use lunar_game_backend::{CHUNK_SIZE_PC, Game, PX_PER_PC, SectorKey, chunk_center};
 use lunar_structures::ResponseStar;
 use std::collections::HashSet;
 
@@ -53,7 +53,9 @@ fn render_star(
     let mid_size = size * 4.0;
 
     let border_style = if is_selected {
-        format!("border: 1.5px solid {inner}; box-shadow: 0 0 {size}px {inner}, 0 0 {mid_size}px {mid};")
+        format!(
+            "border: 1.5px solid {inner}; box-shadow: 0 0 {size}px {inner}, 0 0 {mid_size}px {mid};"
+        )
     } else {
         format!("box-shadow: 0 0 {size}px {inner}, 0 0 {mid_size}px {mid};")
     };
@@ -90,11 +92,7 @@ fn render_star(
     }
 }
 
-fn render_loading_chunk(
-    chunk: SectorKey,
-    center_x: f32,
-    center_y: f32,
-) -> Element {
+fn render_loading_chunk(chunk: SectorKey, center_x: f32, center_y: f32) -> Element {
     let (cx, cy) = chunk_center(chunk);
     let px = (cx - center_x) * PX_PER_PC;
     let py = (cy - center_y) * PX_PER_PC;
@@ -202,13 +200,19 @@ fn use_sync_sector_loading(game: Signal<Game>, version: Signal<u64>, viewport: S
         for (chunk, center) in pending {
             spawn(async move {
                 let g: Game = game.read().clone();
-                let _ = g.fetch_sector(chunk, center, temperature, bp_rp, g_mag).await;
+                let _ = g
+                    .fetch_sector(chunk, center, temperature, bp_rp, g_mag)
+                    .await;
             });
         }
     });
 }
 
-fn use_sync_sector_eviction(game: Signal<Game>, version: Signal<u64>, viewport: Signal<(f32, f32)>) {
+fn use_sync_sector_eviction(
+    game: Signal<Game>,
+    version: Signal<u64>,
+    viewport: Signal<(f32, f32)>,
+) {
     use_resource(move || async move {
         let _ = version();
         let vp = *viewport.read();
@@ -496,13 +500,7 @@ fn starfield(seed_offset: u32, count: usize, half_extent: i32) -> String {
         if i > 0 {
             out.push_str(", ");
         }
-        let _ = write!(
-            out,
-            "{}px {}px rgba(255,255,255,{:.2})",
-            x,
-            y,
-            opacity
-        );
+        let _ = write!(out, "{}px {}px rgba(255,255,255,{:.2})", x, y, opacity);
     }
     out
 }

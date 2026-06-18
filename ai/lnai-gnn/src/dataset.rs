@@ -8,8 +8,8 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::path::Path;
-use std::sync::mpsc;
 use std::sync::Arc;
+use std::sync::mpsc;
 
 pub const NODE_FEATURE_DIM: usize = 8;
 pub const VELOCITY_DIM: usize = 3;
@@ -69,7 +69,8 @@ impl GnnDataset {
         max_group_size: usize,
         radius_pc: f32,
     ) -> Result<Self> {
-        let (groups, norm) = build_groups_from_parquet(parquet_path, knn_k, max_group_size, radius_pc)?;
+        let (groups, norm) =
+            build_groups_from_parquet(parquet_path, knn_k, max_group_size, radius_pc)?;
         let n = groups.len();
         println!("Built {} star groups from parquet", n);
 
@@ -87,7 +88,13 @@ impl GnnDataset {
         max_group_size: usize,
         radius_pc: f32,
     ) -> Result<Self> {
-        let (groups, _) = build_groups_from_parquet_with_norm(parquet_path, &norm, knn_k, max_group_size, radius_pc)?;
+        let (groups, _) = build_groups_from_parquet_with_norm(
+            parquet_path,
+            &norm,
+            knn_k,
+            max_group_size,
+            radius_pc,
+        )?;
         let n = groups.len();
         println!("Built {} star groups (external norm)", n);
 
@@ -109,7 +116,8 @@ impl GnnDataset {
         let train_idx = &split_indices[..n_train];
         let val_idx = &split_indices[n_train..];
 
-        let train_groups: Vec<StarGroup> = train_idx.iter().map(|&i| self.groups[i].clone()).collect();
+        let train_groups: Vec<StarGroup> =
+            train_idx.iter().map(|&i| self.groups[i].clone()).collect();
         let val_groups: Vec<StarGroup> = val_idx.iter().map(|&i| self.groups[i].clone()).collect();
 
         println!("Train groups: {}, Validation groups: {}", n_train, n_val);
@@ -204,12 +212,15 @@ impl PrefetchBatchedBatcher {
                     col_off += n;
                 }
 
-                if tx.send(PrefetchBatchedItem {
-                    nodes_data,
-                    adj_data: block_adj,
-                    target_data: targets_data,
-                    total_nodes,
-                }).is_err() {
+                if tx
+                    .send(PrefetchBatchedItem {
+                        nodes_data,
+                        adj_data: block_adj,
+                        target_data: targets_data,
+                        total_nodes,
+                    })
+                    .is_err()
+                {
                     break;
                 }
             }
@@ -228,10 +239,7 @@ impl PrefetchBatchedBatcher {
                 TensorData::new(batch.nodes_data, [n, NODE_FEATURE_DIM]),
                 device,
             );
-            let adj = Tensor::<B, 2>::from_data(
-                TensorData::new(batch.adj_data, [n, n]),
-                device,
-            );
+            let adj = Tensor::<B, 2>::from_data(TensorData::new(batch.adj_data, [n, n]), device);
             let targets = Tensor::<B, 2>::from_data(
                 TensorData::new(batch.target_data, [n, VELOCITY_DIM]),
                 device,
@@ -289,17 +297,28 @@ fn build_groups_from_parquet(
     let (vz_m, vz_s) = mean_std(&vz);
 
     let norm = GnnNormParams {
-        log_teff_mean: log_teff_m, log_teff_std: log_teff_s,
-        log_rad_mean: log_rad_m, log_rad_std: log_rad_s,
-        log_mass_mean: log_mass_m, log_mass_std: log_mass_s,
-        log_lum_mean: log_lum_m, log_lum_std: log_lum_s,
-        mg_mean: mg_m, mg_std: mg_s,
-        x_mean: x_m, x_std: x_s,
-        y_mean: y_m, y_std: y_s,
-        z_mean: z_m, z_std: z_s,
-        vx_mean: vx_m, vx_std: vx_s,
-        vy_mean: vy_m, vy_std: vy_s,
-        vz_mean: vz_m, vz_std: vz_s,
+        log_teff_mean: log_teff_m,
+        log_teff_std: log_teff_s,
+        log_rad_mean: log_rad_m,
+        log_rad_std: log_rad_s,
+        log_mass_mean: log_mass_m,
+        log_mass_std: log_mass_s,
+        log_lum_mean: log_lum_m,
+        log_lum_std: log_lum_s,
+        mg_mean: mg_m,
+        mg_std: mg_s,
+        x_mean: x_m,
+        x_std: x_s,
+        y_mean: y_m,
+        y_std: y_s,
+        z_mean: z_m,
+        z_std: z_s,
+        vx_mean: vx_m,
+        vx_std: vx_s,
+        vy_mean: vy_m,
+        vy_std: vy_s,
+        vz_mean: vz_m,
+        vz_std: vz_s,
     };
 
     let groups = build_star_groups(&GroupBuildConfig {
@@ -407,7 +426,19 @@ struct GroupBuildConfig<'a> {
 }
 
 fn build_star_groups(config: &GroupBuildConfig<'_>) -> Vec<StarGroup> {
-    let StarFeatures { x, y, z, log_teff, log_rad, log_mass, log_lum, mg, vx, vy, vz } = config.features;
+    let StarFeatures {
+        x,
+        y,
+        z,
+        log_teff,
+        log_rad,
+        log_mass,
+        log_lum,
+        mg,
+        vx,
+        vy,
+        vz,
+    } = config.features;
     let norm = config.norm;
     let knn_k = config.knn_k;
     let max_group_size = config.max_group_size;
@@ -453,32 +484,33 @@ fn build_star_groups(config: &GroupBuildConfig<'_>) -> Vec<StarGroup> {
             assigned[m] = true;
         }
 
-        let coords: Vec<[f32; 3]> = members
-            .iter()
-            .map(|&i| [x[i], y[i], z[i]])
-            .collect();
+        let coords: Vec<[f32; 3]> = members.iter().map(|&i| [x[i], y[i], z[i]]).collect();
 
         let node_features: Vec<[f32; NODE_FEATURE_DIM]> = members
             .iter()
-            .map(|&i| [
-                (log_teff[i] - norm.log_teff_mean) / norm.log_teff_std,
-                (log_rad[i] - norm.log_rad_mean) / norm.log_rad_std,
-                (log_mass[i] - norm.log_mass_mean) / norm.log_mass_std,
-                (log_lum[i] - norm.log_lum_mean) / norm.log_lum_std,
-                (mg[i] - norm.mg_mean) / norm.mg_std,
-                (x[i] - norm.x_mean) / norm.x_std,
-                (y[i] - norm.y_mean) / norm.y_std,
-                (z[i] - norm.z_mean) / norm.z_std,
-            ])
+            .map(|&i| {
+                [
+                    (log_teff[i] - norm.log_teff_mean) / norm.log_teff_std,
+                    (log_rad[i] - norm.log_rad_mean) / norm.log_rad_std,
+                    (log_mass[i] - norm.log_mass_mean) / norm.log_mass_std,
+                    (log_lum[i] - norm.log_lum_mean) / norm.log_lum_std,
+                    (mg[i] - norm.mg_mean) / norm.mg_std,
+                    (x[i] - norm.x_mean) / norm.x_std,
+                    (y[i] - norm.y_mean) / norm.y_std,
+                    (z[i] - norm.z_mean) / norm.z_std,
+                ]
+            })
             .collect();
 
         let velocities: Vec<[f32; VELOCITY_DIM]> = members
             .iter()
-            .map(|&i| [
-                (vx[i] - norm.vx_mean) / norm.vx_std,
-                (vy[i] - norm.vy_mean) / norm.vy_std,
-                (vz[i] - norm.vz_mean) / norm.vz_std,
-            ])
+            .map(|&i| {
+                [
+                    (vx[i] - norm.vx_mean) / norm.vx_std,
+                    (vy[i] - norm.vy_mean) / norm.vy_std,
+                    (vz[i] - norm.vz_mean) / norm.vz_std,
+                ]
+            })
             .collect();
 
         let adjacency = compute_knn_adjacency(&coords, knn_k);
@@ -504,12 +536,13 @@ fn build_star_groups(config: &GroupBuildConfig<'_>) -> Vec<StarGroup> {
 fn read_gnn_parquet(path: &Path) -> Result<DataFrame> {
     println!("Loading parquet: {}", path.display());
     let file = File::open(path).context("failed to open parquet")?;
-    let df = ParquetReader::new(file).finish().context("failed to read parquet")?;
+    let df = ParquetReader::new(file)
+        .finish()
+        .context("failed to read parquet")?;
 
     let required_cols: &[&str] = &[
-        "x_pc", "y_pc", "z_pc", "bp_rp", "g_mag",
-        "st_teff", "st_rad", "st_mass", "st_lum",
-        "vx", "vy", "vz",
+        "x_pc", "y_pc", "z_pc", "bp_rp", "g_mag", "st_teff", "st_rad", "st_mass", "st_lum", "vx",
+        "vy", "vz",
     ];
 
     for &col_name in required_cols {
@@ -521,7 +554,9 @@ fn read_gnn_parquet(path: &Path) -> Result<DataFrame> {
         }
     }
 
-    let df = df.drop_nulls(Some(required_cols)).context("drop_nulls failed")?;
+    let df = df
+        .drop_nulls(Some(required_cols))
+        .context("drop_nulls failed")?;
 
     let df = df
         .lazy()
@@ -543,8 +578,12 @@ fn read_gnn_parquet(path: &Path) -> Result<DataFrame> {
 }
 
 pub fn extract_f32(df: &DataFrame, name: &str) -> Result<Vec<f32>> {
-    let s = df.column(name).context(format!("column {name} not found"))?;
-    let s = s.cast(&DataType::Float64).context(format!("column {name} cast to f64 failed"))?;
+    let s = df
+        .column(name)
+        .context(format!("column {name} not found"))?;
+    let s = s
+        .cast(&DataType::Float64)
+        .context(format!("column {name} cast to f64 failed"))?;
     let ca = s.f64().context(format!("column {name} is not f64"))?;
     let values: Vec<f32> = ca
         .into_iter()

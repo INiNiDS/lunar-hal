@@ -44,12 +44,7 @@ impl Camera {
 
     /// Compute a new camera state that zooms by `factor` around a
     /// specific viewport-space anchor point.
-    pub fn zoom_around(
-        &self,
-        viewport: (f32, f32),
-        anchor: (f32, f32),
-        factor: f32,
-    ) -> Self {
+    pub fn zoom_around(&self, viewport: (f32, f32), anchor: (f32, f32), factor: f32) -> Self {
         let (vp_w, vp_h) = viewport;
         let (cx, cy) = (vp_w * 0.5, vp_h * 0.5);
         let new_zoom = (self.zoom * factor).clamp(MIN_ZOOM, MAX_ZOOM);
@@ -84,10 +79,7 @@ impl Camera {
 
     /// Pixel displacement since `prev`.
     pub fn delta(&self, prev: &Self) -> (f32, f32) {
-        (
-            self.offset.0 - prev.offset.0,
-            self.offset.1 - prev.offset.1,
-        )
+        (self.offset.0 - prev.offset.0, self.offset.1 - prev.offset.1)
     }
 }
 

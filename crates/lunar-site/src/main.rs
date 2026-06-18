@@ -15,12 +15,7 @@ const INSTALL_CMD: &str =
 const GH_URL: &str = "https://github.com/ininids/lunar-hal";
 
 const PIXEL_SIZE: f64 = 4.0;
-const BAYER: [[u8; 4]; 4] = [
-    [0, 8, 2, 10],
-    [12, 4, 14, 6],
-    [3, 11, 1, 9],
-    [15, 7, 13, 5],
-];
+const BAYER: [[u8; 4]; 4] = [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]];
 const FG: [u8; 3] = [200, 220, 255];
 const BG: [u8; 3] = [6, 8, 12];
 
@@ -139,10 +134,7 @@ fn bind_mouse_active(mut active: Signal<bool>) {
             active.set(true);
         }
     });
-    let _ = document.add_event_listener_with_callback(
-        "touchstart",
-        cb_t.as_ref().unchecked_ref(),
-    );
+    let _ = document.add_event_listener_with_callback("touchstart", cb_t.as_ref().unchecked_ref());
     cb_t.forget();
 }
 
@@ -224,7 +216,11 @@ fn start_dither() {
     *g.borrow_mut() = Some(Closure::wrap(Box::new(move || {
         let now = js_sys::Date::now() / 1000.0;
         let prev = *last_time.borrow();
-        let dt = if prev == 0.0 { 0.016 } else { (now - prev).min(0.1) };
+        let dt = if prev == 0.0 {
+            0.016
+        } else {
+            (now - prev).min(0.1)
+        };
         *last_time.borrow_mut() = now;
 
         {

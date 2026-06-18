@@ -1,14 +1,13 @@
-use std::sync::Arc;
 use burn::prelude::*;
 use burn_store::{BurnpackStore, ModuleSnapshot};
 use lnai_models::{
-    StellarGnn, StellarGnnConfig, StellarMlp, StellarMlpConfig,
-    GNN_INPUT_DIM, GNN_OUTPUT_DIM, GNN_VARIATIONAL_DIM,
-    compute_knn_adjacency,
+    GNN_INPUT_DIM, GNN_OUTPUT_DIM, GNN_VARIATIONAL_DIM, StellarGnn, StellarGnnConfig, StellarMlp,
+    StellarMlpConfig, compute_knn_adjacency,
 };
 #[cfg(feature = "siren")]
-use lnai_models::{StellarSiren, StellarSirenConfig, SIREN_INPUT_DIM};
+use lnai_models::{SIREN_INPUT_DIM, StellarSiren, StellarSirenConfig};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use tokio::sync::OnceCell;
 
 use lunar_utils::env::get_lunar_models_dir;
@@ -19,7 +18,12 @@ type B = burn::backend::Wgpu;
 type B = burn::backend::Cuda;
 #[cfg(all(not(feature = "wgpu"), not(feature = "cuda"), feature = "metal"))]
 type B = burn::backend::Metal;
-#[cfg(all(not(feature = "wgpu"), not(feature = "cuda"), not(feature = "metal"), feature = "rocm"))]
+#[cfg(all(
+    not(feature = "wgpu"),
+    not(feature = "cuda"),
+    not(feature = "metal"),
+    feature = "rocm"
+))]
 type B = burn::backend::Rocm;
 
 static PINN_MODEL: &[u8] = include_bytes!("../../../models/stellar_model.bpk");
@@ -27,15 +31,24 @@ static STELLAR_NORM: &str = include_str!("../../../models/stellar_norm.json");
 
 #[derive(Deserialize)]
 pub struct StellarNorm {
-    pub x_mean: f32, pub x_std: f32,
-    pub y_mean: f32, pub y_std: f32,
-    pub z_mean: f32, pub z_std: f32,
-    pub bp_rp_mean: f32, pub bp_rp_std: f32,
-    pub mg_mean: f32, pub mg_std: f32,
-    pub log_teff_mean: f32, pub log_teff_std: f32,
-    pub log_rad_mean: f32, pub log_rad_std: f32,
-    pub log_mass_mean: f32, pub log_mass_std: f32,
-    pub log_lum_mean: f32, pub log_lum_std: f32,
+    pub x_mean: f32,
+    pub x_std: f32,
+    pub y_mean: f32,
+    pub y_std: f32,
+    pub z_mean: f32,
+    pub z_std: f32,
+    pub bp_rp_mean: f32,
+    pub bp_rp_std: f32,
+    pub mg_mean: f32,
+    pub mg_std: f32,
+    pub log_teff_mean: f32,
+    pub log_teff_std: f32,
+    pub log_rad_mean: f32,
+    pub log_rad_std: f32,
+    pub log_mass_mean: f32,
+    pub log_mass_std: f32,
+    pub log_lum_mean: f32,
+    pub log_lum_std: f32,
 }
 
 pub struct PinnModel {
@@ -50,16 +63,24 @@ pub async fn get_pinn() -> Arc<PinnModel> {
     PINN.get_or_init(|| async {
         let device: Device<B> = Default::default();
         let model = load_pinn(&device);
-        let norm: StellarNorm = serde_json::from_str(STELLAR_NORM)
-            .expect("failed to parse stellar_norm.json");
-        Arc::new(PinnModel { model, device, norm })
-    }).await.clone()
+        let norm: StellarNorm =
+            serde_json::from_str(STELLAR_NORM).expect("failed to parse stellar_norm.json");
+        Arc::new(PinnModel {
+            model,
+            device,
+            norm,
+        })
+    })
+    .await
+    .clone()
 }
 
 fn load_pinn(device: &Device<B>) -> StellarMlp<B> {
     let mut model = StellarMlpConfig::new().init(device);
     let mut store = BurnpackStore::from_static(PINN_MODEL);
-    model.load_from(&mut store).expect("failed to load stellar model from burnpack");
+    model
+        .load_from(&mut store)
+        .expect("failed to load stellar model from burnpack");
     model
 }
 
@@ -71,7 +92,9 @@ pub struct PinnInputs {
 }
 
 pub fn pinn_infer(
-    model: &StellarMlp<B>, device: &Device<B>, norm: &StellarNorm,
+    model: &StellarMlp<B>,
+    device: &Device<B>,
+    norm: &StellarNorm,
     inputs: PinnInputs,
 ) -> [f32; 4] {
     let [x_pc, y_pc, z_pc] = inputs.position;
@@ -89,42 +112,53 @@ pub fn pinn_infer(
     let nbp = (inputs.bp_rp - norm.bp_rp_mean) / norm.bp_rp_std;
     let nmg = (mg - norm.mg_mean) / norm.mg_std;
 
-    let input = Tensor::<B, 2>::from_data(
-        TensorData::new(vec![nx, ny, nz, nbp, nmg], [1, 5]),
-        device,
-    );
+    let input =
+        Tensor::<B, 2>::from_data(TensorData::new(vec![nx, ny, nz, nbp, nmg], [1, 5]), device);
     let output = model.forward(input);
     let data = output.into_data();
     let vals: Vec<f32> = data.to_vec().expect("failed to convert output");
 
     let log_teff = vals[0] * norm.log_teff_std + norm.log_teff_mean;
-    let log_rad  = vals[1] * norm.log_rad_std  + norm.log_rad_mean;
+    let log_rad = vals[1] * norm.log_rad_std + norm.log_rad_mean;
     let log_mass = vals[2] * norm.log_mass_std + norm.log_mass_mean;
-    let log_lum  = vals[3] * norm.log_lum_std  + norm.log_lum_mean;
+    let log_lum = vals[3] * norm.log_lum_std + norm.log_lum_mean;
 
     let teff = 10f32.powf(log_teff);
-    let rad  = 10f32.powf(log_rad);
+    let rad = 10f32.powf(log_rad);
     let mass = 10f32.powf(log_mass);
-    let lum  = 10f32.powf(log_lum);
+    let lum = 10f32.powf(log_lum);
 
     [teff, rad, mass, lum]
 }
 
-fn default_one() -> f32 { 1.0 }
+fn default_one() -> f32 {
+    1.0
+}
 
 #[derive(Deserialize, Clone)]
 pub struct GnnNorm {
-    pub log_teff_mean: f32, pub log_teff_std: f32,
-    pub log_rad_mean: f32, pub log_rad_std: f32,
-    pub log_mass_mean: f32, pub log_mass_std: f32,
-    pub log_lum_mean: f32, pub log_lum_std: f32,
-    pub mg_mean: f32, pub mg_std: f32,
-    pub x_mean: f32, pub x_std: f32,
-    pub y_mean: f32, pub y_std: f32,
-    pub z_mean: f32, pub z_std: f32,
-    pub vx_mean: f32, pub vx_std: f32,
-    pub vy_mean: f32, pub vy_std: f32,
-    pub vz_mean: f32, pub vz_std: f32,
+    pub log_teff_mean: f32,
+    pub log_teff_std: f32,
+    pub log_rad_mean: f32,
+    pub log_rad_std: f32,
+    pub log_mass_mean: f32,
+    pub log_mass_std: f32,
+    pub log_lum_mean: f32,
+    pub log_lum_std: f32,
+    pub mg_mean: f32,
+    pub mg_std: f32,
+    pub x_mean: f32,
+    pub x_std: f32,
+    pub y_mean: f32,
+    pub y_std: f32,
+    pub z_mean: f32,
+    pub z_std: f32,
+    pub vx_mean: f32,
+    pub vx_std: f32,
+    pub vy_mean: f32,
+    pub vy_std: f32,
+    pub vz_mean: f32,
+    pub vz_std: f32,
     #[serde(default)]
     pub vx_logvar_mean: f32,
     #[serde(default = "default_one")]
@@ -170,9 +204,8 @@ pub async fn get_gnn() -> Option<Arc<GnnModel>> {
         let device: Device<B> = Default::default();
         let path_str = bpk_path.to_string_lossy();
 
-        let mut deterministic_model = StellarGnnConfig::new(
-            GNN_INPUT_DIM, 256, GNN_OUTPUT_DIM,
-        ).init(&device);
+        let mut deterministic_model =
+            StellarGnnConfig::new(GNN_INPUT_DIM, 256, GNN_OUTPUT_DIM).init(&device);
         let mut store = BurnpackStore::from_file(&*path_str);
         if deterministic_model.load_from(&mut store).is_ok() {
             return Some(Arc::new(GnnModel {
@@ -183,9 +216,8 @@ pub async fn get_gnn() -> Option<Arc<GnnModel>> {
             }));
         }
 
-        let mut variational_model = StellarGnnConfig::new(
-            GNN_INPUT_DIM, 256, GNN_VARIATIONAL_DIM,
-        ).init(&device);
+        let mut variational_model =
+            StellarGnnConfig::new(GNN_INPUT_DIM, 256, GNN_VARIATIONAL_DIM).init(&device);
         let mut store2 = BurnpackStore::from_file(&*path_str);
         if variational_model.load_from(&mut store2).is_ok() {
             return Some(Arc::new(GnnModel {
@@ -197,7 +229,9 @@ pub async fn get_gnn() -> Option<Arc<GnnModel>> {
         }
 
         None
-    }).await.clone()
+    })
+    .await
+    .clone()
 }
 
 #[derive(Clone)]
@@ -240,9 +274,7 @@ fn compute_variational_velocities(
         .map(|s| s.coords[0].to_bits() as u64)
         .fold(0u64, |a, b| a ^ b);
 
-    let mut rng = SimpleRng::new(
-        ((temperature * 1000.0) as u64).wrapping_add(coords_hash),
-    );
+    let mut rng = SimpleRng::new(((temperature * 1000.0) as u64).wrapping_add(coords_hash));
 
     for i in 0..n {
         let base = i * dims_per_star;
@@ -335,14 +367,9 @@ pub fn gnn_infer(
 
     let node_data = prepare_node_data(stars, norm);
 
-    let nodes = Tensor::<B, 2>::from_data(
-        TensorData::new(node_data, [n, GNN_INPUT_DIM]),
-        &gnn.device,
-    );
-    let adj_tensor = Tensor::<B, 2>::from_data(
-        TensorData::new(adj_flat, [n, n]),
-        &gnn.device,
-    );
+    let nodes =
+        Tensor::<B, 2>::from_data(TensorData::new(node_data, [n, GNN_INPUT_DIM]), &gnn.device);
+    let adj_tensor = Tensor::<B, 2>::from_data(TensorData::new(adj_flat, [n, n]), &gnn.device);
 
     let output = gnn.model.forward(nodes, adj_tensor);
     let data = output.into_data();
@@ -362,12 +389,17 @@ pub struct SimpleRng {
 impl SimpleRng {
     pub fn new(seed: u64) -> Self {
         let mut s = seed;
-        if s == 0 { s = 1; }
+        if s == 0 {
+            s = 1;
+        }
         Self { state: s }
     }
 
     pub fn next_u64(&mut self) -> u64 {
-        self.state = self.state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        self.state = self
+            .state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         self.state
     }
 
@@ -416,7 +448,13 @@ pub fn generate_random_inputs(entropy: f32, norm: &StellarNorm) -> RandomStellar
     let d = (x_pc * x_pc + y_pc * y_pc + z_pc * z_pc).sqrt().max(0.1);
     let g_mag = (mg + 5.0 * d.log10() - 5.0).clamp(0.0, 20.0);
 
-    RandomStellarInputs { x_pc, y_pc, z_pc, bp_rp, g_mag }
+    RandomStellarInputs {
+        x_pc,
+        y_pc,
+        z_pc,
+        bp_rp,
+        g_mag,
+    }
 }
 
 pub fn classify_star(teff: f32, rad: f32) -> (String, String) {
@@ -454,9 +492,7 @@ pub fn classify_star(teff: f32, rad: f32) -> (String, String) {
 }
 
 fn compute_stellar_seed(teff: f32, rad: f32, mass: f32, entropy: f32) -> u64 {
-    let base = ((teff * 100.0) as u64)
-        ^ ((rad * 1000.0) as u64)
-        ^ ((mass * 100.0) as u64);
+    let base = ((teff * 100.0) as u64) ^ ((rad * 1000.0) as u64) ^ ((mass * 100.0) as u64);
     if entropy > 0.5 {
         let epoch = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -469,7 +505,10 @@ fn compute_stellar_seed(teff: f32, rad: f32, mass: f32, entropy: f32) -> u64 {
 }
 
 pub fn generate_stochastic_metadata(
-    teff: f32, rad: f32, mass: f32, _lum: f32,
+    teff: f32,
+    rad: f32,
+    mass: f32,
+    _lum: f32,
     entropy_temperature: f32,
 ) -> lunar_structures::StellarMetadata {
     let (spectral_class, category) = classify_star(teff, rad);
@@ -477,7 +516,14 @@ pub fn generate_stochastic_metadata(
     let mut rng = SimpleRng::new(final_seed);
 
     let designated_name = generate_name(&mut rng, entropy_temperature);
-    let description = generate_description(&mut rng, &spectral_class, &category, entropy_temperature, teff, rad);
+    let description = generate_description(
+        &mut rng,
+        &spectral_class,
+        &category,
+        entropy_temperature,
+        teff,
+        rad,
+    );
 
     lunar_structures::StellarMetadata {
         spectral_class,
@@ -489,40 +535,72 @@ pub fn generate_stochastic_metadata(
 
 fn generate_name(rng: &mut SimpleRng, entropy: f32) -> String {
     let catalog_prefixes = [
-        "UVS", "AX", "KX", "ZQ", "HD", "TYC", "GSC", "BD", "LP",
-        "LHS", "Wolf", "Ross", "Gliese", "Kepler", "TrES", "XO",
-        "HAT-P", "WASP", "K2", "TOI", "LTT", "GJ", "HIP", "SAO",
-        "NGC", "IC", "Melotte", "Collinder", "Trumpler",
+        "UVS",
+        "AX",
+        "KX",
+        "ZQ",
+        "HD",
+        "TYC",
+        "GSC",
+        "BD",
+        "LP",
+        "LHS",
+        "Wolf",
+        "Ross",
+        "Gliese",
+        "Kepler",
+        "TrES",
+        "XO",
+        "HAT-P",
+        "WASP",
+        "K2",
+        "TOI",
+        "LTT",
+        "GJ",
+        "HIP",
+        "SAO",
+        "NGC",
+        "IC",
+        "Melotte",
+        "Collinder",
+        "Trumpler",
     ];
 
     let greek = ["α", "β", "γ", "δ", "ε", "ζ", "η", "θ", "ι", "κ", "λ", "μ"];
 
     let name_prefixes = [
-        "Aethel", "Belis", "Cygnia", "Draconis", "Eshana",
-        "Ferox", "Glyph", "Helios", "Iridia", "Jovant",
-        "Kael", "Lysand", "Mythrix", "Nocturn", "Orvex",
-        "Pyralis", "Quinari", "Rhadaman", "Solace", "Thalor",
-        "Umbra", "Vesper", "Wyrmborn", "Xanthic", "Ysolde",
+        "Aethel", "Belis", "Cygnia", "Draconis", "Eshana", "Ferox", "Glyph", "Helios", "Iridia",
+        "Jovant", "Kael", "Lysand", "Mythrix", "Nocturn", "Orvex", "Pyralis", "Quinari",
+        "Rhadaman", "Solace", "Thalor", "Umbra", "Vesper", "Wyrmborn", "Xanthic", "Ysolde",
         "Zephyria", "Astrar", "Celestis", "Dawnfire", "Eternis",
     ];
 
     let name_roots = [
-        "gard", "thor", "val", "nox", "ra", "mir", "dun", "fen",
-        "kal", "oth", "ven", "zur", "ash", "bel", "cor", "drak",
-        "eld", "fal", "gor", "hak", "ion", "jer", "kre", "lux",
-        "mor", "ner", "oph", "pho", "qar", "ryn",
+        "gard", "thor", "val", "nox", "ra", "mir", "dun", "fen", "kal", "oth", "ven", "zur", "ash",
+        "bel", "cor", "drak", "eld", "fal", "gor", "hak", "ion", "jer", "kre", "lux", "mor", "ner",
+        "oph", "pho", "qar", "ryn",
     ];
 
     let name_suffixes = [
-        "is", "us", "ax", "on", "ar", "el", "ix", "um", "or", "an",
-        "ia", "os", "en", "al", "ic",
+        "is", "us", "ax", "on", "ar", "el", "ix", "um", "or", "an", "ia", "os", "en", "al", "ic",
     ];
 
     let chaotic_prefixes = [
-        "Void-Slayer", "Singularity", "Rogue-Titan", "Chrono-Tear",
-        "Aether-Anomaly", "Null-Fracture", "Entropy-Well", "Quantum-Heretic",
-        "Oblivion-Seed", "Paradox-Engine", "Abyss-Walker", "Flux-Revenant",
-        "Nova-Phage", "Dark-Matter-Saint", "Gravity-Heretic",
+        "Void-Slayer",
+        "Singularity",
+        "Rogue-Titan",
+        "Chrono-Tear",
+        "Aether-Anomaly",
+        "Null-Fracture",
+        "Entropy-Well",
+        "Quantum-Heretic",
+        "Oblivion-Seed",
+        "Paradox-Engine",
+        "Abyss-Walker",
+        "Flux-Revenant",
+        "Nova-Phage",
+        "Dark-Matter-Saint",
+        "Gravity-Heretic",
     ];
 
     if entropy > 1.2 {
@@ -534,21 +612,38 @@ fn generate_name(rng: &mut SimpleRng, entropy: f32) -> String {
         let ci = (rng.next_u64() as usize) % catalog_prefixes.len();
         let gi = (rng.next_u64() as usize) % greek.len();
         let num = (rng.next_u64() % 999) + 1;
-        format!("{} {}-{} {}", catalog_prefixes[ci], greek[gi], num, name_prefixes[(rng.next_u64() as usize) % name_prefixes.len()])
+        format!(
+            "{} {}-{} {}",
+            catalog_prefixes[ci],
+            greek[gi],
+            num,
+            name_prefixes[(rng.next_u64() as usize) % name_prefixes.len()]
+        )
     } else {
         let pi = (rng.next_u64() as usize) % name_prefixes.len();
         let ri = (rng.next_u64() as usize) % name_roots.len();
         let si = (rng.next_u64() as usize) % name_suffixes.len();
         let num = (rng.next_u64() % 999) + 1;
-        format!("{}{}{}-{}", name_prefixes[pi], name_roots[ri], name_suffixes[si], num)
+        format!(
+            "{}{}{}-{}",
+            name_prefixes[pi], name_roots[ri], name_suffixes[si], num
+        )
     }
 }
 
 fn generate_description(
-    rng: &mut SimpleRng, spectral_class: &str, category: &str,
-    entropy: f32, teff: f32, rad: f32,
+    rng: &mut SimpleRng,
+    spectral_class: &str,
+    category: &str,
+    entropy: f32,
+    teff: f32,
+    rad: f32,
 ) -> String {
-    let classification = format!("Classified as {}-type {}", spectral_class, category.to_lowercase());
+    let classification = format!(
+        "Classified as {}-type {}",
+        spectral_class,
+        category.to_lowercase()
+    );
 
     let stable_traits = [
         "Stable hydrogen fusion cycle with predictable luminosity output.",
@@ -658,10 +753,15 @@ fn generate_description(
     };
 
     let connector = [
-        " Additionally, ", " Furthermore, ", " Analysis shows ",
-        " Deep scans indicate ", " Long-range sensors detect ",
-        " Survey data reveals ", " Spectral analysis confirms ",
-        " Gravitometric readings show ", " Helioseismic probing reveals ",
+        " Additionally, ",
+        " Furthermore, ",
+        " Analysis shows ",
+        " Deep scans indicate ",
+        " Long-range sensors detect ",
+        " Survey data reveals ",
+        " Spectral analysis confirms ",
+        " Gravitometric readings show ",
+        " Helioseismic probing reveals ",
         " Interferometric data indicates ",
     ];
 
@@ -693,31 +793,38 @@ pub struct LoreCache {
 static LORE_CACHE: OnceCell<Option<Arc<LoreCache>>> = OnceCell::const_new();
 
 pub async fn get_lore_cache() -> Option<Arc<LoreCache>> {
-    LORE_CACHE.get_or_init(|| async {
-        let models_dir = get_lunar_models_dir();
-        let path = models_dir.join("stellar_lore_cache.json");
+    LORE_CACHE
+        .get_or_init(|| async {
+            let models_dir = get_lunar_models_dir();
+            let path = models_dir.join("stellar_lore_cache.json");
 
-        if !path.exists() {
-            println!("  Lore cache not found ({})", path.display());
-            return None;
-        }
-
-        let json = match std::fs::read_to_string(&path) {
-            Ok(j) => j,
-            Err(_) => return None,
-        };
-
-        let entries: Vec<LoreEntry> = match serde_json::from_str(&json) {
-            Ok(e) => e,
-            Err(e) => {
-                eprintln!("  Failed to parse lore cache: {e}");
+            if !path.exists() {
+                println!("  Lore cache not found ({})", path.display());
                 return None;
             }
-        };
 
-        println!("  Lore cache loaded: {} entries from {}", entries.len(), path.display());
-        Some(Arc::new(LoreCache { entries }))
-    }).await.clone()
+            let json = match std::fs::read_to_string(&path) {
+                Ok(j) => j,
+                Err(_) => return None,
+            };
+
+            let entries: Vec<LoreEntry> = match serde_json::from_str(&json) {
+                Ok(e) => e,
+                Err(e) => {
+                    eprintln!("  Failed to parse lore cache: {e}");
+                    return None;
+                }
+            };
+
+            println!(
+                "  Lore cache loaded: {} entries from {}",
+                entries.len(),
+                path.display()
+            );
+            Some(Arc::new(LoreCache { entries }))
+        })
+        .await
+        .clone()
 }
 
 impl LoreCache {
@@ -731,7 +838,10 @@ impl LoreCache {
     }
 
     pub fn pick_by_class(&self, seed: u64, spectral_class: &str) -> Option<&LoreEntry> {
-        let matching: Vec<usize> = self.entries.iter().enumerate()
+        let matching: Vec<usize> = self
+            .entries
+            .iter()
+            .enumerate()
             .filter(|(_, e)| e.spectral_class == spectral_class)
             .map(|(i, _)| i)
             .collect();
@@ -772,7 +882,10 @@ pub fn is_rare_star(teff: f32, rad: f32, mass: f32, entropy: f32) -> bool {
 }
 
 pub fn generate_hybrid_metadata(
-    teff: f32, rad: f32, mass: f32, lum: f32,
+    teff: f32,
+    rad: f32,
+    mass: f32,
+    lum: f32,
     entropy_temperature: f32,
     lore_cache: Option<&LoreCache>,
 ) -> lunar_structures::StellarMetadata {
@@ -800,9 +913,12 @@ static SIREN_MODEL: OnceCell<Option<Arc<SirenModel>>> = OnceCell::const_new();
 #[cfg(feature = "siren")]
 #[derive(Deserialize)]
 pub struct SirenNorm {
-    pub bp_rp_mean: f32, pub bp_rp_std: f32,
-    pub mg_mean: f32, pub mg_std: f32,
-    pub log_teff_mean: f32, pub log_teff_std: f32,
+    pub bp_rp_mean: f32,
+    pub bp_rp_std: f32,
+    pub mg_mean: f32,
+    pub mg_std: f32,
+    pub log_teff_mean: f32,
+    pub log_teff_std: f32,
 }
 
 #[cfg(feature = "siren")]
@@ -814,39 +930,52 @@ pub struct SirenModel {
 
 #[cfg(feature = "siren")]
 pub async fn get_siren() -> Option<Arc<SirenModel>> {
-    SIREN_MODEL.get_or_init(|| async {
-        let models_dir = get_lunar_models_dir();
-        let norm_path = models_dir.join("stellar_siren_norm.json");
-        let bpk_path = models_dir.join("stellar_siren_model.bpk");
+    SIREN_MODEL
+        .get_or_init(|| async {
+            let models_dir = get_lunar_models_dir();
+            let norm_path = models_dir.join("stellar_siren_norm.json");
+            let bpk_path = models_dir.join("stellar_siren_model.bpk");
 
-        if !norm_path.exists() || !bpk_path.exists() {
-            println!("  SIREN model not available (files not found in {})", models_dir.display());
-            return None;
-        }
+            if !norm_path.exists() || !bpk_path.exists() {
+                println!(
+                    "  SIREN model not available (files not found in {})",
+                    models_dir.display()
+                );
+                return None;
+            }
 
-        let norm: SirenNorm = match std::fs::read_to_string(&norm_path) {
-            Ok(json) => match serde_json::from_str(&json) {
-                Ok(n) => n,
-                Err(e) => {
-                    eprintln!("  Failed to parse SIREN norm: {e}");
-                    return None;
-                }
-            },
-            Err(_) => return None,
-        };
+            let norm: SirenNorm = match std::fs::read_to_string(&norm_path) {
+                Ok(json) => match serde_json::from_str(&json) {
+                    Ok(n) => n,
+                    Err(e) => {
+                        eprintln!("  Failed to parse SIREN norm: {e}");
+                        return None;
+                    }
+                },
+                Err(_) => return None,
+            };
 
-        let device: Device<B> = Default::default();
-        let path_str = bpk_path.to_string_lossy();
+            let device: Device<B> = Default::default();
+            let path_str = bpk_path.to_string_lossy();
 
-        let mut model = StellarSirenConfig::new().init(&device);
-        let mut store = BurnpackStore::from_file(&*path_str);
-        if model.load_from(&mut store).is_err() {
-            return None;
-        }
+            let mut model = StellarSirenConfig::new().init(&device);
+            let mut store = BurnpackStore::from_file(&*path_str);
+            if model.load_from(&mut store).is_err() {
+                return None;
+            }
 
-        println!("  SIREN model loaded successfully from {}", bpk_path.display());
-        Some(Arc::new(SirenModel { model, device, norm }))
-    }).await.clone()
+            println!(
+                "  SIREN model loaded successfully from {}",
+                bpk_path.display()
+            );
+            Some(Arc::new(SirenModel {
+                model,
+                device,
+                norm,
+            }))
+        })
+        .await
+        .clone()
 }
 
 #[cfg(feature = "siren")]
@@ -870,7 +999,10 @@ pub fn siren_infer_point(
     let n_teff = (inputs.log_teff - norm.log_teff_mean) / norm.log_teff_std;
 
     let input = Tensor::<B, 2>::from_data(
-        TensorData::new(vec![inputs.uv[0], inputs.uv[1], n_bp, n_mg, n_teff], [1, SIREN_INPUT_DIM]),
+        TensorData::new(
+            vec![inputs.uv[0], inputs.uv[1], n_bp, n_mg, n_teff],
+            [1, SIREN_INPUT_DIM],
+        ),
         device,
     );
     let output = model.forward(input);
@@ -918,7 +1050,9 @@ pub fn siren_generate_texture(
     );
     let output = siren.model.forward(input);
     let data = output.into_data();
-    let vals: Vec<f32> = data.to_vec().expect("failed to convert SIREN texture output");
+    let vals: Vec<f32> = data
+        .to_vec()
+        .expect("failed to convert SIREN texture output");
 
     let mut pixels = Vec::with_capacity(total * 3);
     for i in 0..total {
@@ -935,14 +1069,25 @@ pub async fn warmup_models() {
     println!("  PINN model loaded, warming up GPU shaders...");
     tokio::task::spawn_blocking(move || {
         let _ = pinn_infer(
-            &pinn.model, &pinn.device, &pinn.norm,
-            PinnInputs { position: [0.0, 0.0, 0.0], bp_rp: 1.0, g_mag: 10.0 },
+            &pinn.model,
+            &pinn.device,
+            &pinn.norm,
+            PinnInputs {
+                position: [0.0, 0.0, 0.0],
+                bp_rp: 1.0,
+                g_mag: 10.0,
+            },
         );
-    }).await.ok();
+    })
+    .await
+    .ok();
 
     if let Some(gnn) = get_gnn().await {
         let gnn_arc = gnn.clone();
-        println!("  GNN model loaded (variational={}), warming up...", gnn_arc.variational);
+        println!(
+            "  GNN model loaded (variational={}), warming up...",
+            gnn_arc.variational
+        );
         tokio::task::spawn_blocking(move || {
             let star = StarFeatures {
                 coords: [0.0, 0.0, 0.0],
@@ -953,7 +1098,9 @@ pub async fn warmup_models() {
                 mg: 0.0,
             };
             let _ = gnn_infer(&gnn_arc, &[star], 1, 0.0);
-        }).await.ok();
+        })
+        .await
+        .ok();
     } else {
         println!("  GNN model not available (no .bpk file found)");
     }
@@ -967,10 +1114,19 @@ pub async fn warmup_models() {
         tokio::task::spawn_blocking(move || {
             let norm = &siren_arc.norm;
             let _ = siren_infer_point(
-                &siren_arc.model, &siren_arc.device, norm,
-                SirenInputs { uv: [0.0, 0.0], bp_rp: 1.0, m_g: 5.0, log_teff: 3.75 },
+                &siren_arc.model,
+                &siren_arc.device,
+                norm,
+                SirenInputs {
+                    uv: [0.0, 0.0],
+                    bp_rp: 1.0,
+                    m_g: 5.0,
+                    log_teff: 3.75,
+                },
             );
-        }).await.ok();
+        })
+        .await
+        .ok();
     }
 
     println!("  All models warmed up and ready.");

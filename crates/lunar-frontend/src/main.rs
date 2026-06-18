@@ -5,8 +5,8 @@ mod components;
 mod game_state;
 mod local_storage;
 
-use components::{About, Contact, Editor, HeroSection};
 use crate::game_state::use_provide_game;
+use components::{About, Contact, Editor, HeroSection};
 
 const MAIN_CSS: Asset = asset!("/assets/main.css");
 const TAILWIND_CSS: Asset = asset!("/assets/tailwind.css");

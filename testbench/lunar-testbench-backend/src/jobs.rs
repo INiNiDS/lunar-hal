@@ -4,10 +4,10 @@ use std::process::Stdio;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use axum::{
-    extract::{Query, State},
     Json,
+    extract::{Query, State},
 };
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
@@ -17,8 +17,7 @@ use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
 use lunar_structures_testbench::{
-    EpochMetric, Job, JobIdPayload, JobKind,
-    JobStatus, LogEntry, LogLineKind, ModelKind,
+    EpochMetric, Job, JobIdPayload, JobKind, JobStatus, LogEntry, LogLineKind, ModelKind,
     TrainSpec, ValidateSpec,
 };
 
@@ -37,10 +36,19 @@ pub struct JobRegistry {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum JobEvent {
-    Log { line: LogEntry },
-    Metric { metric: EpochMetric },
-    Status { status: JobStatus, message: Option<String> },
-    Snapshot { job: Box<Job> },
+    Log {
+        line: LogEntry,
+    },
+    Metric {
+        metric: EpochMetric,
+    },
+    Status {
+        status: JobStatus,
+        message: Option<String>,
+    },
+    Snapshot {
+        job: Box<Job>,
+    },
 }
 
 impl JobRegistry {
@@ -73,11 +81,7 @@ impl JobRegistry {
         }
     }
 
-    pub fn spawn(
-        self: &Arc<Self>,
-        mut job: Job,
-        mut cmd: Command,
-    ) -> Result<String> {
+    pub fn spawn(self: &Arc<Self>, mut job: Job, mut cmd: Command) -> Result<String> {
         let id = job.id.clone();
         let (tx, _rx) = broadcast::channel::<JobEvent>(512);
 
@@ -164,7 +168,9 @@ impl JobRegistry {
                 status,
                 message: snap.error_summary.clone(),
             });
-            let _ = tx_clone.send(JobEvent::Snapshot { job: Box::new(snap) });
+            let _ = tx_clone.send(JobEvent::Snapshot {
+                job: Box::new(snap),
+            });
         });
 
         Ok(id)
@@ -255,7 +261,11 @@ fn classify(line: &str) -> LogLineKind {
         LogLineKind::Warning
     } else if t.starts_with("ERROR") || t.starts_with("❌") {
         LogLineKind::Error
-    } else if t.starts_with("✅") || t.starts_with("✓") || t.contains("Checkpoint saved") || t.starts_with("Best model saved") {
+    } else if t.starts_with("✅")
+        || t.starts_with("✓")
+        || t.contains("Checkpoint saved")
+        || t.starts_with("Best model saved")
+    {
         LogLineKind::Checkpoint
     } else {
         LogLineKind::Raw
@@ -264,7 +274,12 @@ fn classify(line: &str) -> LogLineKind {
 
 fn parse_epoch_line(model: &ModelKind, line: &str) -> Option<EpochMetric> {
     let trimmed = line.trim_start();
-    if !trimmed.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+    if !trimmed
+        .chars()
+        .next()
+        .map(|c| c.is_ascii_digit())
+        .unwrap_or(false)
+    {
         return None;
     }
     let mut pipe_count = 0;
@@ -344,7 +359,8 @@ fn build_train_command(workspace_root: &Path, spec: &TrainSpec) -> Command {
     cmd.arg("--epochs").arg(spec.epochs.to_string());
     cmd.arg("--batch-size").arg(spec.batch_size.to_string());
     cmd.arg("--lr").arg(format!("{}", spec.lr));
-    cmd.arg("--physics-weight").arg(format!("{}", spec.physics_weight));
+    cmd.arg("--physics-weight")
+        .arg(format!("{}", spec.physics_weight));
     cmd.arg("--val-frac").arg(format!("{}", spec.val_frac));
     cmd.arg("--gpu-index").arg(spec.gpu_index.to_string());
     cmd.arg("--patience").arg(spec.patience.to_string());
@@ -414,14 +430,22 @@ pub async fn get_job(
     State(state): State<AppState>,
     Json(p): Json<JobIdPayload>,
 ) -> Result<Json<Job>, String> {
-    state.registry.get(&p.id).map(Json).ok_or_else(|| "not found".to_string())
+    state
+        .registry
+        .get(&p.id)
+        .map(Json)
+        .ok_or_else(|| "not found".to_string())
 }
 
 pub async fn cancel_job(
     State(state): State<AppState>,
     Json(p): Json<JobIdPayload>,
 ) -> Result<Json<()>, String> {
-    state.registry.cancel(&p.id).map(|_| Json(())).map_err(|e| e.to_string())
+    state
+        .registry
+        .cancel(&p.id)
+        .map(|_| Json(()))
+        .map_err(|e| e.to_string())
 }
 
 #[derive(Deserialize)]
@@ -434,7 +458,11 @@ pub async fn get_job_by_query(
     Query(q): Query<IdQuery>,
 ) -> Result<Json<Job>, String> {
     let id = q.id.ok_or_else(|| "missing id".to_string())?;
-    state.registry.get(&id).map(Json).ok_or_else(|| "not found".to_string())
+    state
+        .registry
+        .get(&id)
+        .map(Json)
+        .ok_or_else(|| "not found".to_string())
 }
 
 pub async fn cancel_job_by_query(
@@ -442,7 +470,11 @@ pub async fn cancel_job_by_query(
     Query(q): Query<IdQuery>,
 ) -> Result<Json<()>, String> {
     let id = q.id.ok_or_else(|| "missing id".to_string())?;
-    state.registry.cancel(&id).map(|_| Json(())).map_err(|e| e.to_string())
+    state
+        .registry
+        .cancel(&id)
+        .map(|_| Json(()))
+        .map_err(|e| e.to_string())
 }
 
 pub async fn start_train(
@@ -455,7 +487,11 @@ pub async fn start_train(
     let title = format!("{} train · {}", spec.model.label(), spec.data_path);
     let job = Job::new(JobKind::Train(spec), title, total_epochs);
     let id = state.registry.spawn(job, cmd).map_err(|e| e.to_string())?;
-    state.registry.get(&id).map(Json).ok_or_else(|| "job not found after spawn".to_string())
+    state
+        .registry
+        .get(&id)
+        .map(Json)
+        .ok_or_else(|| "job not found after spawn".to_string())
 }
 
 pub async fn start_validate(
@@ -468,5 +504,9 @@ pub async fn start_validate(
     let title = format!("{} validate · {}", spec.model.label(), spec.data_path);
     let job = Job::new(JobKind::Validate(spec), title, total_epochs);
     let id = state.registry.spawn(job, cmd).map_err(|e| e.to_string())?;
-    state.registry.get(&id).map(Json).ok_or_else(|| "job not found after spawn".to_string())
+    state
+        .registry
+        .get(&id)
+        .map(Json)
+        .ok_or_else(|| "job not found after spawn".to_string())
 }

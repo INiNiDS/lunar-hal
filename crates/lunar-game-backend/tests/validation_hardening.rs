@@ -5,15 +5,14 @@
 //! refuse to ship.
 
 use lunar_game_backend::validation::{
-    limits, validate_bp_rp, validate_center_x, validate_center_y, validate_center_z,
-    validate_entropy, validate_g_mag, validate_pipeline, validate_response_star,
+    ValidationError, limits, validate_bp_rp, validate_center_x, validate_center_y,
+    validate_center_z, validate_entropy, validate_g_mag, validate_pipeline, validate_response_star,
     validate_response_stars, validate_search_radius, validate_sector_key, validate_temperature,
     validate_world, validate_world_id, validate_world_name, validate_world_summary, validate_zoom,
-    ValidationError,
 };
 use lunar_game_backend::{Game, GameError};
 use lunar_structures::{
-    CreateWorldRequest, GnnResponse, PipelineRequest, PipelineResponse, PinnResponse, ResponseStar,
+    CreateWorldRequest, GnnResponse, PinnResponse, PipelineRequest, PipelineResponse, ResponseStar,
     SirenTextureResponse, StellarMetadata, World, WorldListResponse, WorldSummary,
 };
 
@@ -330,12 +329,11 @@ fn game_rejects_invalid_bp_rp_and_g_mag() {
 fn game_rejects_invalid_sector_center() {
     let game = Game::new();
     assert!(game.set_sector_center(Some((0.0, 0.0, 0.0))).is_ok());
-    assert!(game
-        .set_sector_center(Some((f32::NAN, 0.0, 0.0)))
-        .is_err());
-    assert!(game
-        .set_sector_center(Some((0.0, 1_000_001.0, 0.0)))
-        .is_err());
+    assert!(game.set_sector_center(Some((f32::NAN, 0.0, 0.0))).is_err());
+    assert!(
+        game.set_sector_center(Some((0.0, 1_000_001.0, 0.0)))
+            .is_err()
+    );
     assert!(game.set_sector_center(None).is_ok());
 }
 
@@ -346,7 +344,10 @@ fn game_rejects_invalid_world_id_in_load_delete() {
     // obviously broken id; we cannot easily observe the network in a
     // unit test, but we can prove the validator is invoked first by
     // using a sync call path that also requires a valid id.
-    assert!(game.set_world_camera("not a valid id!", Default::default()).is_err());
+    assert!(
+        game.set_world_camera("not a valid id!", Default::default())
+            .is_err()
+    );
     assert!(game.set_world_camera("", Default::default()).is_err());
     assert!(game.apply_world_camera("../bad").is_err());
     assert!(game.remember_current_camera_for("not valid").is_err());

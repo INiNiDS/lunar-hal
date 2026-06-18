@@ -1,20 +1,22 @@
 use axum::{
+    Json, Router,
     extract::Query,
     routing::{get, post},
-    Json, Router,
 };
+use lunar_utils::*;
 use serde::Deserialize;
 use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
-use lunar_utils::*;
 
+use crate::ai::{
+    RandomStellarInputs, StarFeatures, generate_hybrid_metadata, generate_random_inputs, get_gnn,
+    get_lore_cache, get_pinn, gnn_infer, warmup_models,
+};
 use lunar_structures::{
-    PipelineRequest, PipelineResponse, RandomStarRequest, RandomStarResponse,
-    SirenTextureRequest, SirenTextureResponse, StarDescriptionPayload, StarLore,
-    ResponseStar, PinnResponse,
+    PinnResponse, PipelineRequest, PipelineResponse, RandomStarRequest, RandomStarResponse,
+    ResponseStar, SirenTextureRequest, SirenTextureResponse, StarDescriptionPayload, StarLore,
 };
 use lunar_utils::env::{get_url, get_worlds_dir};
-use crate::ai::{generate_hybrid_metadata, generate_random_inputs, get_gnn, get_lore_cache, get_pinn, gnn_infer, warmup_models, RandomStellarInputs, StarFeatures};
 
 #[cfg(feature = "siren")]
 use crate::ai::{get_siren, siren_generate_texture};
@@ -23,9 +25,7 @@ pub mod ai;
 pub mod worlds;
 
 use crate::ai::PinnInputs;
-use crate::worlds::{
-    calculate_absolute_magnitude, infer_pinn_async, WorldStore,
-};
+use crate::worlds::{WorldStore, calculate_absolute_magnitude, infer_pinn_async};
 
 async fn generate_siren_pixels(
     width: u32,
@@ -80,7 +80,10 @@ async fn siren_png(Query(params): Query<SirenPngParams>) -> Vec<u8> {
 
     let Some(rgb) = generate_siren_pixels(w, h, bp_rp, m_g, log_teff).await else {
         let mut png = vec![0u8; 8];
-        png[0] = 0x89; png[1] = 0x50; png[2] = 0x4E; png[3] = 0x47;
+        png[0] = 0x89;
+        png[1] = 0x50;
+        png[2] = 0x4E;
+        png[3] = 0x47;
         return png;
     };
 
@@ -95,8 +98,12 @@ async fn description(Json(payload): Json<StarDescriptionPayload>) -> Json<StarLo
 
     let lore = get_lore_cache().await;
     let meta = generate_hybrid_metadata(
-        teff.max(0.0), rad.max(0.0), mass.max(0.0), lum.max(0.0),
-        0.5, lore.as_deref(),
+        teff.max(0.0),
+        rad.max(0.0),
+        mass.max(0.0),
+        lum.max(0.0),
+        0.5,
+        lore.as_deref(),
     );
 
     Json(StarLore {
@@ -126,7 +133,9 @@ async fn pipeline_handler(Json(payload): Json<PipelineRequest>) -> Json<Pipeline
         log_teff,
     )
     .await
-    .unwrap_or_else(|| vec![0; (payload.texture_size as usize) * (payload.texture_size as usize) * 3]);
+    .unwrap_or_else(|| {
+        vec![0; (payload.texture_size as usize) * (payload.texture_size as usize) * 3]
+    });
 
     let siren_texture = SirenTextureResponse {
         width: payload.texture_size,
@@ -145,7 +154,12 @@ async fn pipeline_handler(Json(payload): Json<PipelineRequest>) -> Json<Pipeline
     );
 
     Json(PipelineResponse {
-        pinn: PinnResponse { temperature_k: teff, radius_solar: rad, mass_solar: mass, luminosity_solar: lum },
+        pinn: PinnResponse {
+            temperature_k: teff,
+            radius_solar: rad,
+            mass_solar: mass,
+            luminosity_solar: lum,
+        },
         siren: siren_texture,
         metadata: meta,
     })
@@ -155,11 +169,15 @@ async fn random_star(Json(payload): Json<RandomStarRequest>) -> Json<RandomStarR
     let entropy = payload.entropy_temperature;
     let pinn = get_pinn().await;
 
-    let inputs = tokio::task::spawn_blocking(move || {
-        generate_random_inputs(entropy, &pinn.norm)
-    }).await.unwrap_or(RandomStellarInputs {
-        x_pc: 0.0, y_pc: 0.0, z_pc: 0.0, bp_rp: 1.0, g_mag: 10.0,
-    });
+    let inputs = tokio::task::spawn_blocking(move || generate_random_inputs(entropy, &pinn.norm))
+        .await
+        .unwrap_or(RandomStellarInputs {
+            x_pc: 0.0,
+            y_pc: 0.0,
+            z_pc: 0.0,
+            bp_rp: 1.0,
+            g_mag: 10.0,
+        });
 
     let [teff, rad, mass, lum] = infer_pinn_async(PinnInputs {
         position: [inputs.x_pc, inputs.y_pc, inputs.z_pc],
@@ -174,8 +192,12 @@ async fn random_star(Json(payload): Json<RandomStarRequest>) -> Json<RandomStarR
     let lore = get_lore_cache().await;
 
     let metadata = generate_hybrid_metadata(
-        teff.max(0.0), rad.max(0.0), mass.max(0.0), lum.max(0.0),
-        entropy, lore.as_deref(),
+        teff.max(0.0),
+        rad.max(0.0),
+        mass.max(0.0),
+        lum.max(0.0),
+        entropy,
+        lore.as_deref(),
     );
 
     let vel = if let Some(gnn) = gnn_opt {
@@ -188,9 +210,10 @@ async fn random_star(Json(payload): Json<RandomStarRequest>) -> Json<RandomStarR
             mg,
         }];
         let stars_clone = stars.clone();
-        let velocities = tokio::task::spawn_blocking(move || {
-            gnn_infer(&gnn, &stars_clone, 8, entropy)
-        }).await.unwrap_or_default();
+        let velocities =
+            tokio::task::spawn_blocking(move || gnn_infer(&gnn, &stars_clone, 8, entropy))
+                .await
+                .unwrap_or_default();
 
         velocities.first().copied().unwrap_or([0.0, 0.0, 0.0])
     } else {
@@ -256,7 +279,10 @@ async fn main() -> Result<(), anyhow::Error> {
         .route("/pipeline", post(pipeline_handler))
         .route("/worlds", get(worlds::list_worlds))
         .route("/worlds/create", post(worlds::create_world))
-        .route("/worlds/{id}", get(worlds::get_world).delete(worlds::delete_world))
+        .route(
+            "/worlds/{id}",
+            get(worlds::get_world).delete(worlds::delete_world),
+        )
         .layer(cors)
         .with_state(world_store);
 

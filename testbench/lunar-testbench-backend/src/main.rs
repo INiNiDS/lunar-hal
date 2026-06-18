@@ -1,9 +1,9 @@
-use std::sync::Arc;
 use anyhow::Result;
 use axum::{
-    routing::{get, post},
     Router,
+    routing::{get, post},
 };
+use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
 
 pub mod jobs;
@@ -20,11 +20,16 @@ pub struct AppState {
 async fn main() -> Result<()> {
     let port: u16 = {
         let args: Vec<String> = std::env::args().collect();
-        let from_args = args.windows(2)
+        let from_args = args
+            .windows(2)
             .find(|w| w[0] == "--port" || w[0] == "-p")
             .and_then(|w| w[1].parse().ok());
         from_args
-            .or_else(|| std::env::var("LUNAR_TESTBENCH_BACKEND_PORT").ok().and_then(|s| s.parse().ok()))
+            .or_else(|| {
+                std::env::var("LUNAR_TESTBENCH_BACKEND_PORT")
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+            })
             .unwrap_or(25256)
     };
 
@@ -40,7 +45,10 @@ async fn main() -> Result<()> {
         .route("/system/snapshot", get(system::system_snapshot))
         .route("/jobs", get(jobs::list_jobs))
         .route("/jobs/get", get(jobs::get_job_by_query).post(jobs::get_job))
-        .route("/jobs/cancel", post(jobs::cancel_job).get(jobs::cancel_job_by_query))
+        .route(
+            "/jobs/cancel",
+            post(jobs::cancel_job).get(jobs::cancel_job_by_query),
+        )
         .route("/jobs/train", post(jobs::start_train))
         .route("/jobs/validate", post(jobs::start_validate))
         .with_state(state)

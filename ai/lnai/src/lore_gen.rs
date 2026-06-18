@@ -90,11 +90,7 @@ pub async fn generate_batch(
         max_tokens: 2000,
     };
 
-    let resp = client
-        .post(LLM_URL)
-        .json(&request)
-        .send()
-        .await?;
+    let resp = client.post(LLM_URL).json(&request).send().await?;
 
     if !resp.status().is_success() {
         let status = resp.status();
@@ -131,7 +127,10 @@ pub async fn generate_batch(
             id: batch_idx * 5 + i as u32,
             star_type: star_type.to_string(),
             spectral_class: spectral_class.to_string(),
-            designated_name: raw["designated_name"].as_str().unwrap_or("Unknown").to_string(),
+            designated_name: raw["designated_name"]
+                .as_str()
+                .unwrap_or("Unknown")
+                .to_string(),
             visual_profile: raw["visual_profile"].as_str().unwrap_or("").to_string(),
             description: raw["description"].as_str().unwrap_or("").to_string(),
             system_lore: raw["system_lore"].as_str().unwrap_or("").to_string(),

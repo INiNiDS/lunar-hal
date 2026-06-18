@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use clap::{Parser, Subcommand};
 use polars::prelude::*;
 use rand::seq::SliceRandom;
@@ -456,7 +456,8 @@ fn run_train(opts: &TrainOptions<'_>) -> Result<()> {
     cmd.arg("--epochs").arg(opts.epochs.to_string());
     cmd.arg("--batch-size").arg(opts.batch_size.to_string());
     cmd.arg("--lr").arg(opts.lr.to_string());
-    cmd.arg("--physics-weight").arg(opts.physics_weight.to_string());
+    cmd.arg("--physics-weight")
+        .arg(opts.physics_weight.to_string());
     cmd.arg("--val-frac").arg(opts.val_frac.to_string());
     cmd.arg("--gpu-index").arg(opts.gpu_index.to_string());
     if let Some(rd) = &resume_dir {
@@ -482,8 +483,8 @@ fn run_train(opts: &TrainOptions<'_>) -> Result<()> {
 }
 
 fn sha256_file(path: &str) -> Result<String> {
-    let mut file = File::open(path)
-        .map_err(|e| anyhow!("Cannot open {} for hashing: {}", path, e))?;
+    let mut file =
+        File::open(path).map_err(|e| anyhow!("Cannot open {} for hashing: {}", path, e))?;
     let mut hasher = Sha256::new();
     let mut buf = [0u8; 1024 * 1024];
     loop {
@@ -529,7 +530,17 @@ fn fetch_stellar_data(opts: &FetchOptions<'_>) -> Result<()> {
 
     #[cfg(debug_assertions)]
     {
-        let _ = (opts.username, opts.password, opts.max_rows, opts.ra_min, opts.ra_max, opts.max_ruwe, opts.poll_initial_secs, opts.poll_max_secs, opts.include_velocities);
+        let _ = (
+            opts.username,
+            opts.password,
+            opts.max_rows,
+            opts.ra_min,
+            opts.ra_max,
+            opts.max_ruwe,
+            opts.poll_initial_secs,
+            opts.poll_max_secs,
+            opts.include_velocities,
+        );
         let url = "https://exoplanetarchive.ipac.caltech.edu/TAP/sync";
         let query = "select hostname, ra, dec, sy_dist, st_teff, st_rad, st_mass, st_lum from ps";
 
@@ -579,7 +590,7 @@ fn fetch_stellar_data(opts: &FetchOptions<'_>) -> Result<()> {
 
         let query = if opts.include_velocities {
             format!(
-        "SELECT TOP {} \
+                "SELECT TOP {} \
         CAST(gs.source_id AS varchar) AS hostname, \
         gs.ra, \
         gs.dec, \
@@ -607,11 +618,11 @@ fn fetch_stellar_data(opts: &FetchOptions<'_>) -> Result<()> {
        AND gs.bp_rp IS NOT NULL \
        AND gs.phot_g_mean_mag IS NOT NULL \
        AND gs.ruwe < {}",
-        opts.max_rows, opts.ra_min, opts.ra_max, opts.max_ruwe
-    )
+                opts.max_rows, opts.ra_min, opts.ra_max, opts.max_ruwe
+            )
         } else {
             format!(
-        "SELECT TOP {} \
+                "SELECT TOP {} \
         CAST(gs.source_id AS varchar) AS hostname, \
         gs.ra, \
         gs.dec, \
@@ -633,8 +644,8 @@ fn fetch_stellar_data(opts: &FetchOptions<'_>) -> Result<()> {
        AND gs.bp_rp IS NOT NULL \
        AND gs.phot_g_mean_mag IS NOT NULL \
        AND gs.ruwe < {}",
-        opts.max_rows, opts.ra_min, opts.ra_max, opts.max_ruwe
-    )
+                opts.max_rows, opts.ra_min, opts.ra_max, opts.max_ruwe
+            )
         };
 
         let url = "https://gea.esac.esa.int/tap-server/tap/async";
@@ -693,9 +704,7 @@ fn fetch_stellar_data(opts: &FetchOptions<'_>) -> Result<()> {
                         backoff = (backoff.saturating_mul(2)).min(backoff_max);
                         attempts += 1;
                         if attempts > 200 {
-                            return Err(anyhow!(
-                                "Gaia job aborted: too many failed phase reads"
-                            ));
+                            return Err(anyhow!("Gaia job aborted: too many failed phase reads"));
                         }
                         continue;
                     }
@@ -711,9 +720,7 @@ fn fetch_stellar_data(opts: &FetchOptions<'_>) -> Result<()> {
                     backoff = (backoff.saturating_mul(2)).min(backoff_max);
                     attempts += 1;
                     if attempts > 200 {
-                        return Err(anyhow!(
-                            "Gaia job aborted: too many network errors"
-                        ));
+                        return Err(anyhow!("Gaia job aborted: too many network errors"));
                     }
                     continue;
                 }
@@ -889,7 +896,10 @@ fn clean_and_transform(input_path: &str, output_path: &str, print_sha256: bool) 
 }
 
 fn clean_and_transform_gnn(input_path: &str, output_path: &str, print_sha256: bool) -> Result<()> {
-    println!("Reading and preprocessing (GNN velocity mode): {}", input_path);
+    println!(
+        "Reading and preprocessing (GNN velocity mode): {}",
+        input_path
+    );
 
     if !Path::new(input_path).exists() {
         return Err(anyhow!("Input file does not exist: {}", input_path));
@@ -961,7 +971,8 @@ fn clean_and_transform_gnn(input_path: &str, output_path: &str, print_sha256: bo
 
     let k_ast: f64 = 4.74047;
 
-    let cleaned_lazy = df.lazy()
+    let cleaned_lazy = df
+        .lazy()
         .drop_nulls(Some(selector.clone()))
         .group_by([col("hostname")])
         .agg(agg_exprs)
@@ -969,9 +980,7 @@ fn clean_and_transform_gnn(input_path: &str, output_path: &str, print_sha256: bo
             (col("ra") * lit(PI / 180.0)).alias("ra_rad"),
             (col("dec") * lit(PI / 180.0)).alias("dec_rad"),
         ])
-        .with_columns([
-            (lit(1000.0) / col("parallax")).alias("dist_pc"),
-        ])
+        .with_columns([(lit(1000.0) / col("parallax")).alias("dist_pc")])
         .with_columns([
             (lit(k_ast) * col("pmra") / col("parallax")).alias("v_alpha"),
             (lit(k_ast) * col("pmdec") / col("parallax")).alias("v_delta"),
@@ -984,15 +993,14 @@ fn clean_and_transform_gnn(input_path: &str, output_path: &str, print_sha256: bo
         .with_columns([
             (col("radial_velocity") * col("dec_rad").cos() * col("ra_rad").cos()
                 - col("v_alpha") * col("ra_rad").sin()
-                - col("v_delta") * col("dec_rad").sin() * col("ra_rad").cos()
-            ).alias("vx"),
+                - col("v_delta") * col("dec_rad").sin() * col("ra_rad").cos())
+            .alias("vx"),
             (col("radial_velocity") * col("dec_rad").cos() * col("ra_rad").sin()
                 + col("v_alpha") * col("ra_rad").cos()
-                - col("v_delta") * col("dec_rad").sin() * col("ra_rad").sin()
-            ).alias("vy"),
-            (col("radial_velocity") * col("dec_rad").sin()
-                + col("v_delta") * col("dec_rad").cos()
-            ).alias("vz"),
+                - col("v_delta") * col("dec_rad").sin() * col("ra_rad").sin())
+            .alias("vy"),
+            (col("radial_velocity") * col("dec_rad").sin() + col("v_delta") * col("dec_rad").cos())
+                .alias("vz"),
         ])
         .select([
             col("hostname"),

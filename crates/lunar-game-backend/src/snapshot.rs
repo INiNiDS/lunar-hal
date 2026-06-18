@@ -6,9 +6,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use lunar_structures::{
-    GnnResponse, PipelineResponse, ResponseStar, World, WorldSummary,
-};
+use lunar_structures::{GnnResponse, PipelineResponse, ResponseStar, World, WorldSummary};
 
 use crate::attention::AttentionEntry;
 use crate::camera::Camera;

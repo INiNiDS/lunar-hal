@@ -1,6 +1,6 @@
 use lunar_game_backend::sector::{
-    chunk_center, chunk_distance_sq, evict_excess_cache, sectors_to_fetch, visible_chunks,
-    CHUNK_SIZE_PC, INNER_EXCLUSION_PC, MAX_CACHED_CHUNKS, PX_PER_PC,
+    CHUNK_SIZE_PC, INNER_EXCLUSION_PC, MAX_CACHED_CHUNKS, PX_PER_PC, chunk_center,
+    chunk_distance_sq, evict_excess_cache, sectors_to_fetch, visible_chunks,
 };
 use lunar_game_backend::{Game, GameConfig};
 use lunar_structures::ResponseStar;
