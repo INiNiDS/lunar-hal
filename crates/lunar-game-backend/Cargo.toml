@@ -1,0 +1,23 @@
+[package]
+name = "lunar-game-backend"
+version.workspace = true
+license.workspace = true
+readme.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "Framework-agnostic gameplay layer: world, sector streaming, camera, selection. Frontends only render."
+
+[dependencies]
+lunar-structures = { path = "../lunar-structures" }
+lunar-utils = { path = "../lunar-utils" }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1"
+parking_lot = "0.12"
+thiserror = "2"
+tracing = "0.1"
+reqwest = { version = "0.13.4", default-features = false, features = ["json", "rustls"] }
+tokio = { version = "1.52.3", features = ["sync", "rt", "macros"] }
+nah = "0.1.2"
+
+[lints]
+workspace = true
