@@ -147,18 +147,18 @@ fn main() -> Result<()> {
             poll_initial_secs,
             poll_max_secs,
         } => {
-            fetch_stellar_data(
-                output,
-                username.as_deref(),
-                password.as_deref(),
+            fetch_stellar_data(&FetchOptions {
+                output_path: output,
+                username: username.as_deref(),
+                password: password.as_deref(),
                 max_rows,
-                *ra_min,
-                *ra_max,
-                *max_ruwe,
-                *poll_initial_secs,
-                *poll_max_secs,
-                false,
-            )?;
+                ra_min: *ra_min,
+                ra_max: *ra_max,
+                max_ruwe: *max_ruwe,
+                poll_initial_secs: *poll_initial_secs,
+                poll_max_secs: *poll_max_secs,
+                include_velocities: false,
+            })?;
         }
         Commands::FetchGnn {
             output,
@@ -171,18 +171,18 @@ fn main() -> Result<()> {
             poll_initial_secs,
             poll_max_secs,
         } => {
-            fetch_stellar_data(
-                output,
-                username.as_deref(),
-                password.as_deref(),
+            fetch_stellar_data(&FetchOptions {
+                output_path: output,
+                username: username.as_deref(),
+                password: password.as_deref(),
                 max_rows,
-                *ra_min,
-                *ra_max,
-                *max_ruwe,
-                *poll_initial_secs,
-                *poll_max_secs,
-                true,
-            )?;
+                ra_min: *ra_min,
+                ra_max: *ra_max,
+                max_ruwe: *max_ruwe,
+                poll_initial_secs: *poll_initial_secs,
+                poll_max_secs: *poll_max_secs,
+                include_velocities: true,
+            })?;
         }
         Commands::Clean {
             input,
@@ -221,22 +221,22 @@ fn main() -> Result<()> {
             model_file,
             norm_file,
         } => {
-            run_train(
-                data.as_deref(),
-                resume.as_deref(),
-                norm.as_deref(),
+            run_train(&TrainOptions {
+                data: data.as_deref(),
+                resume: resume.as_deref(),
+                norm: norm.as_deref(),
                 output_dir,
-                *epochs,
-                *batch_size,
-                *lr,
-                *physics_weight,
-                *val_frac,
-                *gpu_index,
-                holdout.as_deref(),
-                lnai_bin.as_deref(),
+                epochs: *epochs,
+                batch_size: *batch_size,
+                lr: *lr,
+                physics_weight: *physics_weight,
+                val_frac: *val_frac,
+                gpu_index: *gpu_index,
+                holdout: holdout.as_deref(),
+                lnai_bin: lnai_bin.as_deref(),
                 model_file,
                 norm_file,
-            )?;
+            })?;
         }
     }
 
@@ -330,34 +330,35 @@ fn copy_file_if_present(src: &Path, dst: &Path) -> Result<()> {
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
-fn run_train(
-    data: Option<&str>,
-    resume: Option<&str>,
-    norm: Option<&str>,
-    output_dir: &str,
+struct TrainOptions<'a> {
+    data: Option<&'a str>,
+    resume: Option<&'a str>,
+    norm: Option<&'a str>,
+    output_dir: &'a str,
     epochs: usize,
     batch_size: usize,
     lr: f64,
     physics_weight: f64,
     val_frac: f32,
     gpu_index: usize,
-    holdout: Option<&str>,
-    lnai_bin: Option<&str>,
-    model_file: &str,
-    norm_file: &str,
-) -> Result<()> {
-    let data_path = resolve_data_path(data)?;
-    let lnai = find_lnai_binary(lnai_bin)?;
+    holdout: Option<&'a str>,
+    lnai_bin: Option<&'a str>,
+    model_file: &'a str,
+    norm_file: &'a str,
+}
 
-    let output_path = Path::new(output_dir);
+fn run_train(opts: &TrainOptions<'_>) -> Result<()> {
+    let data_path = resolve_data_path(opts.data)?;
+    let lnai = find_lnai_binary(opts.lnai_bin)?;
+
+    let output_path = Path::new(opts.output_dir);
     std::fs::create_dir_all(output_path)
         .with_context(|| format!("failed to create output dir {}", output_path.display()))?;
-    let out_model = output_path.join(model_file);
-    let out_norm = output_path.join(norm_file);
+    let out_model = output_path.join(opts.model_file);
+    let out_norm = output_path.join(opts.norm_file);
 
     let mut resume_dir: Option<PathBuf> = None;
-    if let Some(resume_path) = resume {
+    if let Some(resume_path) = opts.resume {
         let resume_pb = PathBuf::from(resume_path);
         let resume_dir_path = if resume_pb.is_dir() {
             resume_pb.clone()
@@ -369,20 +370,20 @@ fn run_train(
         };
 
         let src_model = resume_pb
-            .join(model_file)
+            .join(opts.model_file)
             .components()
             .collect::<PathBuf>();
-        let src_norm = resume_pb.join(norm_file);
+        let src_norm = resume_pb.join(opts.norm_file);
 
         let resolved_model = if src_model.exists() {
             src_model
         } else {
-            resume_dir_path.join(model_file)
+            resume_dir_path.join(opts.model_file)
         };
         let resolved_norm = if src_norm.exists() {
             src_norm
         } else {
-            resume_dir_path.join(norm_file)
+            resume_dir_path.join(opts.norm_file)
         };
 
         if !resolved_model.exists() {
@@ -404,7 +405,7 @@ fn run_train(
         println!("  {} -> {}", resolved_norm.display(), out_norm.display());
         copy_file_if_present(&resolved_norm, &out_norm)?;
 
-        if let Some(extra_norm) = norm {
+        if let Some(extra_norm) = opts.norm {
             let extra_norm_path = Path::new(extra_norm);
             if !extra_norm_path.exists() {
                 anyhow::bail!("--norm file not found: {}", extra_norm_path.display());
@@ -418,7 +419,7 @@ fn run_train(
         }
 
         resume_dir = Some(output_path.to_path_buf());
-    } else if let Some(extra_norm) = norm {
+    } else if let Some(extra_norm) = opts.norm {
         let extra_norm_path = Path::new(extra_norm);
         if !extra_norm_path.exists() {
             anyhow::bail!("--norm file not found: {}", extra_norm_path.display());
@@ -443,25 +444,25 @@ fn run_train(
     println!("lnai binary: {}", lnai.display());
     println!(
         "Hyperparams: epochs={}, batch={}, lr={:.2e}, phys_w={}, val_frac={}, gpu={}",
-        epochs, batch_size, lr, physics_weight, val_frac, gpu_index
+        opts.epochs, opts.batch_size, opts.lr, opts.physics_weight, opts.val_frac, opts.gpu_index
     );
     println!();
 
     let mut cmd = Command::new(&lnai);
     cmd.arg("--data").arg(&data_path);
     cmd.arg("--output-dir").arg(output_path);
-    cmd.arg("--model-file").arg(model_file);
-    cmd.arg("--norm-file").arg(norm_file);
-    cmd.arg("--epochs").arg(epochs.to_string());
-    cmd.arg("--batch-size").arg(batch_size.to_string());
-    cmd.arg("--lr").arg(lr.to_string());
-    cmd.arg("--physics-weight").arg(physics_weight.to_string());
-    cmd.arg("--val-frac").arg(val_frac.to_string());
-    cmd.arg("--gpu-index").arg(gpu_index.to_string());
+    cmd.arg("--model-file").arg(opts.model_file);
+    cmd.arg("--norm-file").arg(opts.norm_file);
+    cmd.arg("--epochs").arg(opts.epochs.to_string());
+    cmd.arg("--batch-size").arg(opts.batch_size.to_string());
+    cmd.arg("--lr").arg(opts.lr.to_string());
+    cmd.arg("--physics-weight").arg(opts.physics_weight.to_string());
+    cmd.arg("--val-frac").arg(opts.val_frac.to_string());
+    cmd.arg("--gpu-index").arg(opts.gpu_index.to_string());
     if let Some(rd) = &resume_dir {
         cmd.arg("--resume-from").arg(rd);
     }
-    if let Some(h) = holdout {
+    if let Some(h) = opts.holdout {
         cmd.arg("--holdout").arg(h);
     }
 
@@ -506,18 +507,20 @@ fn hex_encode(bytes: &[u8]) -> String {
     s
 }
 
-fn fetch_stellar_data(
-    output_path: &str,
-    username: Option<&str>,
-    password: Option<&str>,
-    max_rows: &usize,
+struct FetchOptions<'a> {
+    output_path: &'a str,
+    username: Option<&'a str>,
+    password: Option<&'a str>,
+    max_rows: &'a usize,
     ra_min: f64,
     ra_max: f64,
     max_ruwe: f64,
     poll_initial_secs: u64,
     poll_max_secs: u64,
     include_velocities: bool,
-) -> Result<()> {
+}
+
+fn fetch_stellar_data(opts: &FetchOptions<'_>) -> Result<()> {
     let client = reqwest::blocking::Client::builder()
         .timeout(Some(std::time::Duration::from_secs(7200)))
         .pool_max_idle_per_host(0)
@@ -526,7 +529,7 @@ fn fetch_stellar_data(
 
     #[cfg(debug_assertions)]
     {
-        let _ = (username, password, max_rows, ra_min, ra_max, max_ruwe, poll_initial_secs, poll_max_secs, include_velocities);
+        let _ = (opts.username, opts.password, opts.max_rows, opts.ra_min, opts.ra_max, opts.max_ruwe, opts.poll_initial_secs, opts.poll_max_secs, opts.include_velocities);
         let url = "https://exoplanetarchive.ipac.caltech.edu/TAP/sync";
         let query = "select hostname, ra, dec, sy_dist, st_teff, st_rad, st_mass, st_lum from ps";
 
@@ -545,19 +548,19 @@ fn fetch_stellar_data(
             ));
         }
 
-        save_filtered_response(response, output_path)?;
+        save_filtered_response(response, opts.output_path)?;
     }
 
     #[cfg(not(debug_assertions))]
     {
-        if username.is_none() || password.is_none() {
+        if opts.username.is_none() || opts.password.is_none() {
             eprintln!("WARNING: No Gaia credentials provided.");
             eprintln!("         Anonymous access may limit result set size.");
             eprintln!("         Use --username and --password to authenticate.");
             eprintln!();
         }
 
-        if let (Some(user), Some(pass)) = (username, password) {
+        if let (Some(user), Some(pass)) = (opts.username, opts.password) {
             println!("Authenticating with ESA Gaia Archive as {}...", user);
             let login_url = "https://gea.esac.esa.int/tap-server/login";
             let login_resp = client
@@ -574,7 +577,7 @@ fn fetch_stellar_data(
             println!("Authentication successful!");
         }
 
-        let query = if include_velocities {
+        let query = if opts.include_velocities {
             format!(
         "SELECT TOP {} \
         CAST(gs.source_id AS varchar) AS hostname, \
@@ -604,7 +607,7 @@ fn fetch_stellar_data(
        AND gs.bp_rp IS NOT NULL \
        AND gs.phot_g_mean_mag IS NOT NULL \
        AND gs.ruwe < {}",
-        max_rows, ra_min, ra_max, max_ruwe
+        opts.max_rows, opts.ra_min, opts.ra_max, opts.max_ruwe
     )
         } else {
             format!(
@@ -630,7 +633,7 @@ fn fetch_stellar_data(
        AND gs.bp_rp IS NOT NULL \
        AND gs.phot_g_mean_mag IS NOT NULL \
        AND gs.ruwe < {}",
-        max_rows, ra_min, ra_max, max_ruwe
+        opts.max_rows, opts.ra_min, opts.ra_max, opts.max_ruwe
     )
         };
 
@@ -638,7 +641,7 @@ fn fetch_stellar_data(
         println!("Submitting asynchronous job to ESA Gaia Archive...");
         println!(
             "Query TOP {} rows, RA=[{}, {}], ruwe<{} ...",
-            max_rows, ra_min, ra_max, max_ruwe
+            opts.max_rows, opts.ra_min, opts.ra_max, opts.max_ruwe
         );
 
         let response = client
@@ -668,8 +671,8 @@ fn fetch_stellar_data(
         let phase_url = format!("{}/phase", job_url);
         let result_url = format!("{}/results/result", job_url);
 
-        let mut backoff = poll_initial_secs.max(1);
-        let backoff_max = poll_max_secs.max(backoff);
+        let mut backoff = opts.poll_initial_secs.max(1);
+        let backoff_max = opts.poll_max_secs.max(backoff);
         let mut attempts: u32 = 0;
         loop {
             let phase_resp = client
@@ -717,7 +720,7 @@ fn fetch_stellar_data(
             };
 
             attempts = 0;
-            backoff = poll_initial_secs.max(1);
+            backoff = opts.poll_initial_secs.max(1);
             println!("  Job phase: {} (next poll in {}s)", phase, backoff);
 
             match phase.as_str() {
@@ -748,7 +751,7 @@ fn fetch_stellar_data(
             ));
         }
 
-        save_filtered_response(response, output_path)?;
+        save_filtered_response(response, opts.output_path)?;
     }
 
     Ok(())
