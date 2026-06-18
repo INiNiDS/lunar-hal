@@ -4,7 +4,7 @@ members = [
     "crates/lunar-backend", "crates/lunar-frontend", "crates/lunar-site",
     "crates/lunar-start", "crates/lunar-structures", "crates/lunar-ui-shared",
     "testbench/lunar-structures-testbench",
-    "testbench/lunar-testbench", "testbench/lunar-testbench-backend", "crates/lunar-utils",
+    "testbench/lunar-testbench", "testbench/lunar-testbench-backend", "crates/lunar-utils", "crates/lunar-game-backend",
 ]
 resolver = "3"
 
@@ -14,3 +14,15 @@ license = "AGPL-3"
 readme = "README.md"
 edition = "2024"
 authors = ["Nikita Goncharov <ininids@ininids.in.rs>"]
+
+
+[workspace.lints.clippy]
+all = "warn"
+pedantic = "warn"
+nursery = "warn"
+complexity = "warn"
+perf = "warn"
+cargo = "warn"
+
+cognitive_complexity = "warn"
+type_complexity = "warn"

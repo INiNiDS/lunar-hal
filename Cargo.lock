@@ -6091,18 +6091,35 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "dioxus",
- "gloo-timers 0.3.0",
+ "gloo-timers 0.4.0",
  "image",
  "js-sys",
+ "lunar-game-backend",
  "lunar-structures",
  "lunar-ui-shared",
  "lunar-utils",
  "nah",
- "reqwest 0.13.4",
  "serde_json",
  "tokio",
+ "tracing",
  "wasm-bindgen",
  "web-sys",
+]
+
+[[package]]
+name = "lunar-game-backend"
+version = "0.1.0"
+dependencies = [
+ "lunar-structures",
+ "lunar-utils",
+ "nah",
+ "parking_lot",
+ "reqwest 0.13.4",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
