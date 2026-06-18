@@ -1,6 +1,7 @@
-use crate::api;
 use crate::assets::FONT_SANS;
+use crate::game_state::use_game;
 use dioxus::prelude::*;
+use lunar_game_backend::Game;
 use lunar_structures::{CreateWorldRequest, World, WorldSummary};
 
 fn world_accent_color(id: &str) -> (String, String) {
@@ -92,7 +93,11 @@ pub fn WorldPicker(
 }
 
 #[component]
-fn WorldCard(world: WorldSummary, on_select: EventHandler<String>, on_delete: EventHandler<String>) -> Element {
+fn WorldCard(
+    world: WorldSummary,
+    on_select: EventHandler<String>,
+    on_delete: EventHandler<String>,
+) -> Element {
     let id = world.id.clone();
     let id_for_delete = world.id.clone();
     let (accent, glow) = world_accent_color(&world.id);
@@ -141,37 +146,40 @@ fn WorldCard(world: WorldSummary, on_select: EventHandler<String>, on_delete: Ev
 }
 
 #[component]
-pub fn WorldCreator(
-    on_cancel: EventHandler<()>,
-    on_created: EventHandler<World>,
-) -> Element {
+pub fn WorldCreator(on_cancel: EventHandler<()>, on_created: EventHandler<World>) -> Element {
+    let game = use_game();
     let name = use_signal(String::new);
-    let mut cx = use_signal(|| 0.0_f32);
-    let mut cy = use_signal(|| 0.0_f32);
-    let mut cz = use_signal(|| 0.0_f32);
+
+    // Initialize coordinate signals directly inside their closures
+    let mut cx = use_signal(|| {
+        let mut rng = 0x9E3779B97F4A7C15;
+        let next_f32 = |state: &mut u64| {
+            *state ^= *state << 13;
+            *state ^= *state >> 7;
+            *state ^= *state << 17;
+            (*state as f32) / (u64::MAX as f32)
+        };
+        (next_f32(&mut rng) * 2000.0) - 1000.0
+    });
+    let mut cy = use_signal(|| {
+        let mut rng = 0x9E3779B97F4A7C15 ^ 0x12345;
+        (next_f32(&mut rng) * 2000.0) - 1000.0
+    });
+    let mut cz = use_signal(|| {
+        let mut rng = 0x9E3779B97F4A7C15 ^ 0x54321;
+        (next_f32(&mut rng) * 1000.0) - 500.0
+    });
+
     let mut temperature = use_signal(|| 0.7_f32);
     let mut submitting = use_signal(|| false);
     let mut error_msg = use_signal(|| Option::<String>::None);
 
-    let mut rng_state: u64 = 0x9E3779B97F4A7C15;
-    let next_f32 = |state: &mut u64| -> f32 {
-        *state ^= *state << 13;
-        *state ^= *state >> 7;
-        *state ^= *state << 17;
-        (*state as f32) / (u64::MAX as f32)
-    };
-
     let mut randomize = move || {
-        cx.set((next_f32(&mut rng_state) * 2000.0) - 1000.0);
-        cy.set((next_f32(&mut rng_state) * 2000.0) - 1000.0);
-        cz.set((next_f32(&mut rng_state) * 1000.0) - 500.0);
+        let mut rng = rng_seed();
+        cx.set((next_f32(&mut rng) * 2000.0) - 1000.0);
+        cy.set((next_f32(&mut rng) * 2000.0) - 1000.0);
+        cz.set((next_f32(&mut rng) * 1000.0) - 500.0);
     };
-
-    use_effect(move || {
-        if cx() == 0.0 && cy() == 0.0 && cz() == 0.0 {
-            randomize();
-        }
-    });
 
     let submit = move |_| {
         let n = name().trim().to_string();
@@ -189,10 +197,11 @@ pub fn WorldCreator(
             temperature: temperature(),
         };
         spawn(async move {
-            match api::create_world(req).await {
+            let g: Game = game.read().clone();
+            match g.create_world(req).await {
                 Ok(w) => on_created.call(w),
                 Err(e) => {
-                    error_msg.set(Some(format!("{e}")));
+                    error_msg.set(Some(e.to_string()));
                     submitting.set(false);
                 }
             }
@@ -273,13 +282,25 @@ pub fn WorldCreator(
 }
 
 #[component]
-fn EntropySlider(mut temperature: Signal<f32>, on_change: EventHandler<f32>) -> Element {
+fn EntropySlider(temperature: Signal<f32>, on_change: EventHandler<f32>) -> Element {
     let (color, label, description) = if temperature() < 0.5 {
-        ("#60a5fa", "Classical Cosmos", "Deterministic Newtonian physics. Perfectly circular orbits. Stable and predictable.")
+        (
+            "#60a5fa",
+            "Classical Cosmos",
+            "Deterministic Newtonian physics. Perfectly circular orbits. Stable and predictable.",
+        )
     } else if temperature() < 1.2 {
-        ("#a78bfa", "Explorer Space", "Eccentric orbits, binary spirals. Unusual magnetic fields, crystalline coronas.")
+        (
+            "#a78bfa",
+            "Explorer Space",
+            "Eccentric orbits, binary spirals. Unusual magnetic fields, crystalline coronas.",
+        )
     } else {
-        ("#f472b6", "Chaotic Multiverse", "Rogue stars, chrono-tears, Dyson relics. Physics bends at the edge of reality.")
+        (
+            "#f472b6",
+            "Chaotic Multiverse",
+            "Rogue stars, chrono-tears, Dyson relics. Physics bends at the edge of reality.",
+        )
     };
     let temp_display = format!("{:.2}", temperature());
 
@@ -305,7 +326,6 @@ fn EntropySlider(mut temperature: Signal<f32>, on_change: EventHandler<f32>) -> 
                 class: "w-full h-1 rounded-full appearance-none cursor-pointer bg-white/10 accent-white",
                 oninput: move |e| {
                     let val: f32 = e.value().parse().unwrap_or(0.7);
-                    temperature.set(val);
                     on_change.call(val);
                 },
             }
@@ -365,6 +385,34 @@ fn NumberInput(label: String, mut value: Signal<f32>, step: f32) -> Element {
                     }
                 },
             }
+        }
+    }
+}
+
+fn next_f32(state: &mut u64) -> f32 {
+    *state ^= *state << 13;
+    *state ^= *state >> 7;
+    *state ^= *state << 17;
+    (*state as f32) / (u64::MAX as f32)
+}
+
+fn rng_seed() -> u64 {
+    #[cfg(all(target_family = "wasm", not(target_os = "wasi")))]
+    {
+        let nanos = web_sys::window()
+            .map(|w| {
+                w.performance()
+                    .map(|p| (p.now() * 1_000_000.0) as u64)
+                    .unwrap_or(0x9E3779B97F4A7C15)
+            })
+            .unwrap_or(0x9E3779B97F4A7C15);
+        nanos.wrapping_mul(0x9E3779B97F4A7C15)
+    }
+    #[cfg(not(all(target_family = "wasm", not(target_os = "wasi"))))]
+    {
+        match std::time::SystemTime::now().duration_since(std::time::SystemTime::UNIX_EPOCH) {
+            Ok(d) => d.as_nanos() as u64,
+            Err(_) => 0x9E3779B97F4A7C15,
         }
     }
 }
