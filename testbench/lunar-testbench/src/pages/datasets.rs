@@ -27,7 +27,7 @@ pub fn Datasets() -> Element {
 #[component]
 fn DatasetsBody(snap: SystemSnapshot) -> Element {
     let mut datasets = snap.datasets.clone();
-    datasets.sort_by(|a, b| b.mtime_ms.cmp(&a.mtime_ms));
+    datasets.sort_by_key(|d| std::cmp::Reverse(d.mtime_ms));
 
     rsx! {
         div { class: "card",

@@ -15,8 +15,8 @@ pub fn Training() -> Element {
         }
         div { class: "page",
             TrainingBody {
-                jobs_resource: jobs.clone(),
-                selected: selected.clone(),
+                jobs_resource: jobs,
+                selected,
             }
         }
     }
@@ -43,8 +43,8 @@ fn TrainingBody(
     let hidden_dim = use_signal(|| 256_u32);
     let texture_size = use_signal(|| 64_u32);
     let max_stars = use_signal(|| 5000_u32);
-    let resume = use_signal(|| String::new());
-    let holdout = use_signal(|| String::new());
+    let resume = use_signal(String::new);
+    let holdout = use_signal(String::new);
     let mut error = use_signal(|| None::<String>);
     let mut starting = use_signal(|| false);
 
@@ -95,7 +95,7 @@ fn TrainingBody(
             grad_accum: grad_accum(),
             clip_grad_norm: clip_grad_norm(),
         };
-        let mut res = jobs_resource.clone();
+        let mut res = jobs_resource;
         spawn(async move {
             match api::start_train(&spec).await {
                 Ok(job) => selected.set(Some(job.id)),
@@ -167,11 +167,11 @@ fn TrainingBody(
             div { class: "card",
                 JobsList {
                     jobs: jobs_now.clone(),
-                    selected: selected.clone(),
+                    selected,
                 }
                 if let Some(job) = current {
                     JobDetail { job: job.clone(), on_cancel: move |id: String| {
-                        let mut res = jobs_resource.clone();
+                        let mut res = jobs_resource;
                         spawn(async move {
                             let _ = api::cancel_job(&id).await;
                             res.restart();

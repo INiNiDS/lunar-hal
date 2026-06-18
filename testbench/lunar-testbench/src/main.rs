@@ -1,3 +1,5 @@
+#![allow(non_snake_case)]
+
 mod api;
 mod components;
 mod pages;
@@ -12,7 +14,6 @@ fn main() {
     launch(App);
 }
 
-#[allow(non_snake_case)]
 fn App() -> Element {
     rsx! {
         document::Link { rel: "stylesheet", href: MAIN_CSS }

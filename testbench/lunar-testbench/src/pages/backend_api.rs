@@ -315,10 +315,10 @@ fn ResponsePanel(
                         class: "btn btn-sm",
                         style: "margin-left: auto;",
                         onclick: move |_| {
-                            if let Some(raw) = raw_response_signal() {
-                                if let Ok(f) = fmt_json(&raw) {
-                                    raw_response_signal.set(Some(f));
-                                }
+                            if let Some(raw) = raw_response_signal()
+                                && let Ok(f) = fmt_json(&raw)
+                            {
+                                raw_response_signal.set(Some(f));
                             }
                         },
                         title: "Format JSON",
@@ -327,10 +327,10 @@ fn ResponsePanel(
                     button {
                         class: "btn btn-sm",
                         onclick: move |_| {
-                            if let Some(raw) = raw_response_signal() {
-                                if let Ok(m) = minify_json(&raw) {
-                                    raw_response_signal.set(Some(m));
-                                }
+                            if let Some(raw) = raw_response_signal()
+                                && let Ok(m) = minify_json(&raw)
+                            {
+                                raw_response_signal.set(Some(m));
                             }
                         },
                         title: "Minify JSON",
@@ -402,7 +402,7 @@ pub fn BackendApi() -> Element {
     let method = use_signal(|| "GET".to_string());
     let path = use_signal(|| "/".to_string());
     let body = use_signal(|| "{}".to_string());
-    let query = use_signal(|| String::new());
+    let query = use_signal(String::new);
     let mut response = use_signal(|| None::<serde_json::Value>);
     let mut status_code = use_signal(|| None::<u16>);
     let mut raw_response = use_signal(|| None::<String>);

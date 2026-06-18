@@ -15,8 +15,8 @@ pub fn Validation() -> Element {
         }
         div { class: "page",
             ValidationBody {
-                jobs: jobs.clone(),
-                selected: selected.clone(),
+                jobs,
+                selected,
             }
         }
     }
@@ -64,7 +64,7 @@ fn ValidationBody(
             texture_size: if model_kind() == ModelKind::Siren { Some(texture_size()) } else { None },
             max_stars: if model_kind() == ModelKind::Siren { Some(max_stars()) } else { None },
         };
-        let mut res = jobs.clone();
+        let mut res = jobs;
         spawn(async move {
             match api::start_validate(&spec).await {
                 Ok(job) => selected.set(Some(job.id)),
@@ -126,11 +126,11 @@ fn ValidationBody(
             div { class: "card",
                 JobsList {
                     jobs: jobs_now.clone(),
-                    selected: selected.clone(),
+                    selected,
                 }
                 if let Some(job) = current {
                     JobDetail { job: job.clone(), on_cancel: move |id: String| {
-                        let mut res = jobs.clone();
+                        let mut res = jobs;
                         spawn(async move {
                             let _ = api::cancel_job(&id).await;
                             res.restart();

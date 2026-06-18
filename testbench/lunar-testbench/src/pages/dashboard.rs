@@ -139,7 +139,7 @@ fn BackendCard(snap: SystemSnapshot) -> Element {
     rsx! {
         div { class: "card",
             div { class: "card-title",
-                StatusDot { status: snap.backend.reachable.then(|| "ok".to_string()).unwrap_or_else(|| "err".to_string()) }
+                StatusDot { status: if snap.backend.reachable { "ok".to_string() } else { "err".to_string() } }
                 span { "Backend HTTP" }
             }
             div { class: "metric",
@@ -157,7 +157,7 @@ fn BackendCard(snap: SystemSnapshot) -> Element {
                 div { class: "kv-row",
                     span { class: "kv-key", "Status" }
                     span { class: "kv-val",
-                        StatusDot { status: snap.backend.reachable.then(|| "ok".to_string()).unwrap_or_else(|| "err".to_string()) }
+                        StatusDot { status: if snap.backend.reachable { "ok".to_string() } else { "err".to_string() } }
                         span { class: "mono", " " }
                         span { class: "mono", if snap.backend.reachable { "ONLINE" } else { "OFFLINE" } }
                     }

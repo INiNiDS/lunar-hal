@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -40,7 +40,7 @@ pub enum JobEvent {
     Log { line: LogEntry },
     Metric { metric: EpochMetric },
     Status { status: JobStatus, message: Option<String> },
-    Snapshot { job: Job },
+    Snapshot { job: Box<Job> },
 }
 
 impl JobRegistry {
@@ -164,7 +164,7 @@ impl JobRegistry {
                 status,
                 message: snap.error_summary.clone(),
             });
-            let _ = tx_clone.send(JobEvent::Snapshot { job: snap });
+            let _ = tx_clone.send(JobEvent::Snapshot { job: Box::new(snap) });
         });
 
         Ok(id)
@@ -208,13 +208,13 @@ async fn process_line(
         kind: kind.clone(),
     };
 
-    if let Some(mk) = model_kind {
-        if let Some(metric) = parse_epoch_line(mk, &raw) {
-            let mut j = job_arc.write();
-            maybe_update_best_loss(&mut j, &metric);
-            drop(j);
-            let _ = tx.send(JobEvent::Metric { metric });
-        }
+    if let Some(mk) = model_kind
+        && let Some(metric) = parse_epoch_line(mk, &raw)
+    {
+        let mut j = job_arc.write();
+        maybe_update_best_loss(&mut j, &metric);
+        drop(j);
+        let _ = tx.send(JobEvent::Metric { metric });
     }
 
     {
@@ -255,9 +255,7 @@ fn classify(line: &str) -> LogLineKind {
         LogLineKind::Warning
     } else if t.starts_with("ERROR") || t.starts_with("❌") {
         LogLineKind::Error
-    } else if t.starts_with("✅") || t.starts_with("✓") {
-        LogLineKind::Checkpoint
-    } else if t.contains("Checkpoint saved") || t.starts_with("Best model saved") {
+    } else if t.starts_with("✅") || t.starts_with("✓") || t.contains("Checkpoint saved") || t.starts_with("Best model saved") {
         LogLineKind::Checkpoint
     } else {
         LogLineKind::Raw
@@ -335,7 +333,7 @@ pub fn workspace_root() -> PathBuf {
     cwd
 }
 
-fn build_train_command(workspace_root: &PathBuf, spec: &TrainSpec) -> Command {
+fn build_train_command(workspace_root: &Path, spec: &TrainSpec) -> Command {
     let mut cmd = Command::new(
         workspace_root
             .join("target")
@@ -355,15 +353,15 @@ fn build_train_command(workspace_root: &PathBuf, spec: &TrainSpec) -> Command {
     cmd.arg("--grad-accum").arg(spec.grad_accum.to_string());
     cmd.arg("--output-dir").arg(&spec.output_dir);
 
-    if let Some(resume) = &spec.resume_from {
-        if !resume.is_empty() {
-            cmd.arg("--resume-from").arg(resume);
-        }
+    if let Some(resume) = &spec.resume_from
+        && !resume.is_empty()
+    {
+        cmd.arg("--resume-from").arg(resume);
     }
-    if let Some(holdout) = &spec.holdout {
-        if !holdout.is_empty() {
-            cmd.arg("--holdout").arg(holdout);
-        }
+    if let Some(holdout) = &spec.holdout
+        && !holdout.is_empty()
+    {
+        cmd.arg("--holdout").arg(holdout);
     }
     if let Some(k) = spec.knn_k {
         cmd.arg("--knn-k").arg(k.to_string());
@@ -380,7 +378,7 @@ fn build_train_command(workspace_root: &PathBuf, spec: &TrainSpec) -> Command {
     cmd
 }
 
-fn build_validate_command(workspace_root: &PathBuf, spec: &ValidateSpec) -> Command {
+fn build_validate_command(workspace_root: &Path, spec: &ValidateSpec) -> Command {
     let mut cmd = Command::new(
         workspace_root
             .join("target")

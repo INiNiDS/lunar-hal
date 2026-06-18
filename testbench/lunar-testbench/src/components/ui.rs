@@ -273,7 +273,7 @@ pub fn ProgressBar(value: f32, kind: String) -> Element {
 
 pub fn base64_encode(bytes: &[u8]) -> String {
     const CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity((bytes.len() + 2) / 3 * 4);
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     let mut i = 0;
     while i + 3 <= bytes.len() {
         let b0 = bytes[i];
