@@ -3,7 +3,7 @@ use crate::components::editor::sidebar::StarSidebar;
 use crate::components::editor::star_map::StarMap;
 use crate::components::editor::world_panel::{WorldCreator, WorldPicker};
 use crate::game_state::{
-    hydrate_world_camera_from_storage, provide_world_camera_persistence, use_game,
+    hydrate_world_camera_from_storage, use_provide_world_camera_persistence, use_game,
     use_game_snapshot, use_persist_world_camera, use_pipeline_snapshot,
     use_world_id_change,
 };
@@ -15,6 +15,7 @@ use lunar_structures::{
     WorldSummary,
 };
 use std::io::Cursor;
+use tracing::warn;
 
 fn build_star_lore(metadata: &StellarMetadata) -> StarLore {
     StarLore {
@@ -28,33 +29,152 @@ fn build_star_lore(metadata: &StellarMetadata) -> StarLore {
 fn encode_siren_to_png_b64(siren: &lunar_structures::SirenTextureResponse) -> Option<String> {
     let img = image::RgbImage::from_raw(siren.width, siren.height, siren.pixels.clone())?;
     let mut png_data = Cursor::new(Vec::new());
-    if img.write_to(&mut png_data, image::ImageFormat::Png).is_ok() {
-        Some(STANDARD.encode(png_data.into_inner()))
-    } else {
-        None
-    }
+    img.write_to(&mut png_data, image::ImageFormat::Png).ok()?;
+    Some(STANDARD.encode(png_data.into_inner()))
 }
 
 fn process_pipeline_data(
     pipeline: &PipelineResponse,
 ) -> (Option<PinnResponse>, Option<StarLore>, Option<String>) {
-    let pinn = pipeline.pinn.clone();
-    let lore = build_star_lore(&pipeline.metadata);
-    let texture = encode_siren_to_png_b64(&pipeline.siren);
-    (Some(pinn), Some(lore), texture)
+    (
+        Some(pipeline.pinn.clone()),
+        Some(build_star_lore(&pipeline.metadata)),
+        encode_siren_to_png_b64(&pipeline.siren),
+    )
 }
 
 fn resolve_map_inputs(snap: &GameSnapshot) -> (f32, f32, f32, Vec<ResponseStar>) {
     if let Some(w) = &snap.active_world {
         return (w.center_x, w.center_y, w.center_z, w.stars.clone());
     }
-    if let Some(resp) = &snap.pregen
-        && let Some(s) = resp.stars.first()
-    {
-        let (cx, cy, cz) = snap.sector_center.unwrap_or((s.x, s.y, s.z));
-        return (cx, cy, cz, resp.stars.clone());
+    if let Some(resp) = &snap.pregen {
+        if let Some(s) = resp.stars.first() {
+            let (cx, cy, cz) = snap.sector_center.unwrap_or((s.x, s.y, s.z));
+            return (cx, cy, cz, resp.stars.clone());
+        }
     }
     (0.0, 0.0, 0.0, Vec::new())
+}
+
+fn use_sync_world_camera_loader(game: Signal<Game>) {
+    use_world_id_change(move |_prev, current| {
+        if let Some(id) = current {
+            let g = game.read().clone();
+            hydrate_world_camera_from_storage(&g, id);
+            if let Err(e) = g.apply_world_camera(id) {
+                warn!(error = %e, "apply_world_camera failed");
+            }
+        }
+    });
+}
+
+fn use_sync_worlds_list(game: Signal<Game>, refresh_tick: Signal<u32>) {
+    use_resource(move || async move {
+        let _ = refresh_tick();
+        let g = game.read().clone();
+        if let Err(e) = g.refresh_worlds().await {
+            warn!(error = %e, "refresh_worlds failed");
+        }
+    });
+}
+
+fn use_sync_sector_center_alignment(game: Signal<Game>, version: Signal<u64>) {
+    use_resource(move || async move {
+        let _ = version();
+        let g = game.read().clone();
+        let has_no_world_or_center = g.active_world().is_none() && g.sector_center().is_none();
+        if has_no_world_or_center {
+            if let Some(s) = g.pregen().and_then(|p| p.stars.first().cloned()) {
+                if let Err(e) = g.set_sector_center(Some((s.x, s.y, s.z))) {
+                    warn!(error = %e, "set_sector_center failed");
+                }
+            }
+        }
+    });
+}
+
+fn use_sync_temperature_tracker(game: Signal<Game>, version: Signal<u64>) {
+    use_resource(move || async move {
+        let _ = version();
+        let g = game.read().clone();
+        let temp = g.temperature();
+        let last = g.last_temp();
+        if (temp - last).abs() > f32::EPSILON {
+            g.set_last_temp(temp);
+            if let Err(e) = g.set_sector_center(None) {
+                warn!(error = %e, "set_sector_center failed");
+            }
+            g.set_pregen(None);
+        }
+    });
+}
+
+fn use_sync_pregen_stars(game: Signal<Game>, version: Signal<u64>) {
+    use_resource(move || async move {
+        let _ = version();
+        let g = game.read().clone();
+        if g.active_world().is_none() && g.pregen().is_none() {
+            if let Err(e) = g.fetch_pregen().await {
+                warn!(error = %e, "fetch_pregen failed");
+            }
+        }
+    });
+}
+
+fn use_sync_star_pipeline(game: Signal<Game>, version: Signal<u64>) {
+    use_resource(move || async move {
+        let _ = version();
+        let g = game.read().clone();
+        if let Some(star) = g.selected_star() {
+            if g.pipeline().is_none() {
+                if let Err(e) = g.fetch_pipeline(star).await {
+                    warn!(error = %e, "fetch_pipeline failed");
+                }
+            }
+        }
+    });
+}
+
+fn use_editor_synchronization(
+    game: Signal<Game>,
+    version: Signal<u64>,
+    refresh_tick: Signal<u32>,
+) {
+    use_provide_world_camera_persistence();
+    use_persist_world_camera();
+
+    use_sync_world_camera_loader(game);
+    use_sync_worlds_list(game, refresh_tick);
+    use_sync_sector_center_alignment(game, version);
+    use_sync_temperature_tracker(game, version);
+    use_sync_pregen_stars(game, version);
+    use_sync_star_pipeline(game, version);
+}
+
+async fn delete_world_action(g: Game, id: String, mut refresh_tick: Signal<u32>) {
+    if let Err(e) = g.delete_world(&id).await {
+        warn!(error = %e, "delete_world failed");
+    }
+    refresh_tick.set(refresh_tick() + 1);
+}
+
+async fn load_world_action(g: Game, id: String) {
+    if let Err(e) = g.load_world(&id).await {
+        warn!(error = %e, "load_world failed");
+    }
+}
+
+fn handle_world_creation(
+    g: Game,
+    w: World,
+    mut show_creator: Signal<bool>,
+    mut show_picker: Signal<bool>,
+    mut sidebar_open: Signal<bool>,
+) {
+    g.adopt_world(Some(w));
+    show_creator.set(false);
+    show_picker.set(false);
+    sidebar_open.set(false);
 }
 
 #[component]
@@ -63,8 +183,7 @@ fn WorldBadge(world: World, game: Signal<Game>, show_picker: Signal<bool>) -> El
         div {
             class: "absolute left-4 top-4 px-3 py-2 bg-black/40 backdrop-blur-xl border border-white/10 rounded-xl text-white/70 text-[10px] font-bold uppercase tracking-[0.2em] cursor-pointer hover:bg-white/10 hover:text-white transition-colors shadow-lg pointer-events-auto flex items-center gap-2",
             onclick: move |_| {
-                let g = game.read().clone();
-                g.clear_active_world();
+                game.read().clone().clear_active_world();
                 show_picker.set(true);
             },
             div { class: "w-1.5 h-1.5 rounded-full bg-amber-300" }
@@ -105,7 +224,6 @@ fn SidebarOrScanner(
     lore_data: Option<StarLore>,
     siren_texture_b64: Option<String>,
 ) -> Element {
-    let has_active_world = game.read().active_world().is_some();
     if open() {
         rsx! {
             StarSidebar {
@@ -116,7 +234,7 @@ fn SidebarOrScanner(
                 siren_texture_b64,
             }
         }
-    } else if has_active_world {
+    } else if game.read().active_world().is_some() {
         rsx! { OpenScannerButton { sidebar_open: open } }
     } else {
         rsx! {}
@@ -136,118 +254,64 @@ fn EditorOverlays(
     on_created_world: EventHandler<World>,
 ) -> Element {
     if show_creator {
-        return rsx! {
+        rsx! {
             WorldCreator {
                 on_cancel: move |_| on_cancel_create.call(()),
                 on_created: move |w: World| on_created_world.call(w),
             }
-        };
-    }
-    if show_picker {
-        return rsx! {
+        }
+    } else if show_picker {
+        rsx! {
             WorldPicker {
                 worlds: worlds_list,
                 loading: worlds_loading,
-                on_select: move |id: String| on_select_world.call(id),
+                on_select: move |id| on_select_world.call(id),
                 on_create: move |_| on_create_world.call(()),
-                on_delete: move |id: String| on_delete_world.call(id),
+                on_delete: move |id| on_delete_world.call(id),
             }
-        };
+        }
+    } else {
+        rsx! {}
     }
-    rsx! {}
+}
+
+#[component]
+fn ActiveWorldOverlays(
+    active_world: Option<World>,
+    game: Signal<Game>,
+    show_picker: Signal<bool>,
+) -> Element {
+    let Some(w) = active_world else {
+        return rsx! {};
+    };
+    rsx! {
+        WorldBadge { world: w.clone(), game, show_picker }
+        WorldStatusBar { world: w.clone() }
+    }
 }
 
 
-#[nah::high_complexity]
 #[component]
 pub fn Editor() -> Element {
     let game = use_game();
     let version = use_context::<Signal<u64>>();
 
     let mut sidebar_open = use_signal(|| false);
-    let mut show_picker = use_signal(|| true);
+    let show_picker = use_signal(|| true);
     let mut show_creator = use_signal(|| false);
-    let mut refresh_tick = use_signal(|| 0u32);
+    let refresh_tick = use_signal(|| 0u32);
 
-    provide_world_camera_persistence();
-    use_persist_world_camera();
-    use_world_id_change(move |_prev, current| {
-        if let Some(id) = current {
-            let g: Game = game.read().clone();
-            hydrate_world_camera_from_storage(&g, id);
-            if let Err(e) = g.apply_world_camera(id) {
-                warn!(error = %e, "apply_world_camera failed");
-            }
-        }
-    });
-
-    use_resource(move || async move {
-        let _ = refresh_tick();
-        let g: Game = game.read().clone();
-        if let Err(e) = g.refresh_worlds().await {
-            warn!(error = %e, "refresh_worlds failed");
-        }
-    });
-
-    use_resource(move || async move {
-        let _ = version();
-        let g: Game = game.read().clone();
-        if g.active_world().is_none()
-            && g.sector_center().is_none()
-            && g.pregen().is_some()
-            && let Some(s) = g.pregen().and_then(|p| p.stars.first().cloned())
-        {
-            if let Err(e) = g.set_sector_center(Some((s.x, s.y, s.z))) {
-                warn!(error = %e, "set_sector_center failed");
-            }
-        }
-    });
-
-    use_resource(move || async move {
-        let _ = version();
-        let g: Game = game.read().clone();
-        let temp = g.temperature();
-        let last = g.last_temp();
-        if (temp - last).abs() > f32::EPSILON {
-            g.set_last_temp(temp);
-            if let Err(e) = g.set_sector_center(None) {
-                warn!(error = %e, "set_sector_center failed");
-            }
-            g.set_pregen(None);
-        }
-    });
-
-    use_resource(move || async move {
-        let _ = version();
-        let g: Game = game.read().clone();
-        if g.active_world().is_none() && g.pregen().is_none() {
-            if let Err(e) = g.fetch_pregen().await {
-                warn!(error = %e, "fetch_pregen failed");
-            }
-        }
-    });
-
-    use_resource(move || async move {
-        let _ = version();
-        let g: Game = game.read().clone();
-        if let Some(star) = g.selected_star()
-            && g.pipeline().is_none()
-        {
-            if let Err(e) = g.fetch_pipeline(star).await {
-                warn!(error = %e, "fetch_pipeline failed");
-            }
-        }
-    });
+    use_editor_synchronization(game, version, refresh_tick);
 
     let snap = use_game_snapshot();
     let worlds_list = snap.worlds.clone();
     let worlds_loading = false;
 
     let pipeline_data = use_pipeline_snapshot();
-    let (pinn_data, lore_data, siren_texture_b64) = match &pipeline_data {
-        Some(p) => process_pipeline_data(p),
-        None => (None, None, None),
-    };
+    let (pinn_data, lore_data, siren_texture_b64) = pipeline_data
+        .as_ref()
+        .map(process_pipeline_data)
+        .unwrap_or_default();
 
     let (center_x, center_y, _center_z, world_stars) = resolve_map_inputs(&snap);
     let selected_id = snap.selected_star.as_ref().map(|s| s.id);
@@ -258,8 +322,7 @@ pub fn Editor() -> Element {
         .unwrap_or(5778.0);
 
     let on_select_star = move |star: ResponseStar| {
-        let g = game.read().clone();
-        g.select_star(Some(star));
+        game.read().clone().select_star(Some(star));
         sidebar_open.set(true);
     };
 
@@ -271,31 +334,16 @@ pub fn Editor() -> Element {
         show_creator.set(false);
     };
 
-    let on_created_world = move |w: World| {
-        let g: Game = game.read().clone();
-        g.adopt_world(Some(w));
-        show_creator.set(false);
-        show_picker.set(false);
-        sidebar_open.set(false);
+    let on_created_world = move |w| {
+        handle_world_creation(game.read().clone(), w, show_creator, show_picker, sidebar_open);
     };
 
-    let on_delete_world = move |id: String| {
-        let g: Game = game.read().clone();
-        spawn(async move {
-            if let Err(e) = g.delete_world(&id).await {
-                warn!(error = %e, "delete_world failed");
-            }
-            refresh_tick.set(refresh_tick() + 1);
-        });
+    let on_delete_world = move |id| {
+        spawn(delete_world_action(game.read().clone(), id, refresh_tick));
     };
 
-    let on_select_world = move |id: String| {
-        let g: Game = game.read().clone();
-        spawn(async move {
-            if let Err(e) = g.load_world(&id).await {
-                warn!(error = %e, "load_world failed");
-            }
-        });
+    let on_select_world = move |id| {
+        spawn(load_world_action(game.read().clone(), id));
     };
 
     rsx! {
@@ -312,9 +360,7 @@ pub fn Editor() -> Element {
                 on_select: on_select_star,
             }
 
-            if let Some(w) = &snap.active_world {
-                WorldBadge { world: w.clone(), game, show_picker }
-            }
+            ActiveWorldOverlays { active_world: snap.active_world.clone(), game, show_picker }
 
             SidebarOrScanner {
                 game,
@@ -324,10 +370,6 @@ pub fn Editor() -> Element {
                 pinn_data,
                 lore_data,
                 siren_texture_b64,
-            }
-
-            if let Some(w) = &snap.active_world {
-                WorldStatusBar { world: w.clone() }
             }
 
             EditorOverlays {

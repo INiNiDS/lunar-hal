@@ -4,7 +4,6 @@ use dioxus::prelude::*;
 use lunar_game_backend::{chunk_center, Game, SectorKey, CHUNK_SIZE_PC, PX_PER_PC};
 use lunar_structures::ResponseStar;
 use std::collections::HashSet;
-use nah::high_complexity;
 
 const FIELD_HALF: i32 = 18000;
 
@@ -43,6 +42,7 @@ fn render_star(
     center_y: f32,
     is_selected: bool,
     on_select: EventHandler<ResponseStar>,
+    on_hover: Option<EventHandler<u32>>,
 ) -> Element {
     let px = (star.x - center_x) * PX_PER_PC;
     let py = (star.y - center_y) * PX_PER_PC;
@@ -60,6 +60,8 @@ fn render_star(
 
     let delay = (star.id as f32 * 1.7).fract() * 5.0;
     let star_cloned = star.clone();
+    let on_hover = on_hover.clone();
+    let star_id = star.id;
 
     rsx! {
         div {
@@ -78,6 +80,11 @@ fn render_star(
             onclick: move |e| {
                 e.stop_propagation();
                 on_select.call(star_cloned.clone());
+            },
+            onmouseenter: move |_| {
+                if let Some(ref h) = on_hover {
+                    h.call(star_id);
+                }
             }
         }
     }
@@ -124,62 +131,61 @@ fn measure_viewport_size() -> Option<(f32, f32)> {
     })
 }
 
-#[high_complexity]
-#[component]
-pub fn StarMap(
-    game: Signal<Game>,
-    world_stars: Vec<ResponseStar>,
-    center_x: f32,
-    center_y: f32,
-    selected_id: Option<u32>,
-    on_select: EventHandler<ResponseStar>,
-) -> Element {
+async fn delay_tick() {
+    #[cfg(feature = "web")]
+    {
+        use gloo_timers::future::TimeoutFuture;
+        TimeoutFuture::new(80).await;
+    }
+    #[cfg(not(feature = "web"))]
+    {
+        tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+    }
+}
+
+fn get_viewport_dimensions() -> Option<(f32, f32)> {
+    #[cfg(feature = "web")]
+    {
+        measure_viewport_size()
+    }
+    #[cfg(not(feature = "web"))]
+    {
+        Some((1280.0_f32, 800.0_f32))
+    }
+}
+
+fn use_viewport_measurement() -> Signal<(f32, f32)> {
     let mut viewport = use_signal(|| (0.0_f32, 0.0_f32));
-    let mut last_mouse = use_signal(|| (0.0_f32, 0.0_f32));
-    let mut enemy_pos = use_signal(|| (0.0_f32, 0.0_f32));
-    let mut enemy_dragging = use_signal(|| false);
-    let mut enemy_drag_mouse_start = use_signal(|| (0.0_f32, 0.0_f32));
-    let mut enemy_drag_world_start = use_signal(|| (0.0_f32, 0.0_f32));
-    let mut enemy_drag_moved = use_signal(|| false);
 
     use_future(move || async move {
         let mut last = (0.0_f32, 0.0_f32);
+
         for _ in 0..6 {
-            #[cfg(feature = "web")]
-            {
-                use gloo_timers::future::TimeoutFuture;
-                TimeoutFuture::new(80).await;
-            }
-            #[cfg(not(feature = "web"))]
-            {
-                tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+            delay_tick().await;
+
+            let Some((w, h)) = get_viewport_dimensions() else {
+                continue;
+            };
+
+            if w <= 0.0 || h <= 0.0 {
+                continue;
             }
 
-            #[cfg(feature = "web")]
-            let measured = measure_viewport_size();
-            #[cfg(not(feature = "web"))]
-            let measured = Some((1280.0_f32, 800.0_f32));
+            if (w, h) != last {
+                last = (w, h);
+                viewport.set((w, h));
+            }
 
-            if let Some((w, h)) = measured
-                && w > 0.0 && h > 0.0
-            {
-                if (w, h) != last {
-                    last = (w, h);
-                    viewport.set((w, h));
-                }
-                if w >= 800.0 && h >= 400.0 {
-                    break;
-                }
+            if w >= 800.0 && h >= 400.0 {
+                break;
             }
         }
     });
 
-    // The version signal is bumped on every game mutation (pan, zoom,
-    // sector apply, etc.). Reading it inside the resource subscribes
-    // it to camera moves, so `sectors_to_fetch` is re-evaluated
-    // whenever the viewport scrolls into new chunk territory.
-    let version = use_game_version();
+    viewport
+}
 
+fn use_sync_sector_loading(game: Signal<Game>, version: Signal<u64>, viewport: Signal<(f32, f32)>) {
     use_resource(move || async move {
         let _ = version();
         let vp = *viewport.read();
@@ -200,7 +206,9 @@ pub fn StarMap(
             });
         }
     });
+}
 
+fn use_sync_sector_eviction(game: Signal<Game>, version: Signal<u64>, viewport: Signal<(f32, f32)>) {
     use_resource(move || async move {
         let _ = version();
         let vp = *viewport.read();
@@ -208,6 +216,76 @@ pub fn StarMap(
             return;
         }
         game.read().evict_excess_sectors();
+    });
+}
+
+fn use_starfield_backgrounds() -> (Memo<String>, Memo<String>, Memo<String>) {
+    let starfield_small = use_memo(move || starfield(0, 3000, FIELD_HALF));
+    let starfield_medium = use_memo(move || starfield(10000, 1200, FIELD_HALF));
+    let starfield_distant = use_memo(move || starfield(20000, 2000, FIELD_HALF));
+    (starfield_small, starfield_medium, starfield_distant)
+}
+
+#[derive(Clone)]
+struct InteractionState {
+    last_mouse: Signal<(f32, f32)>,
+    mouse_world: Signal<(f32, f32)>,
+    enemy_pos: Signal<(f32, f32)>,
+    enemy_dragging: Signal<bool>,
+    enemy_drag_mouse_start: Signal<(f32, f32)>,
+    enemy_drag_world_start: Signal<(f32, f32)>,
+    enemy_drag_moved: Signal<bool>,
+}
+
+fn use_star_map_interactions() -> InteractionState {
+    let last_mouse = use_signal(|| (0.0_f32, 0.0_f32));
+    let mouse_world = use_signal(|| (0.0_f32, 0.0_f32));
+    let enemy_pos = use_signal(|| (0.0_f32, 0.0_f32));
+    let enemy_dragging = use_signal(|| false);
+    let enemy_drag_mouse_start = use_signal(|| (0.0_f32, 0.0_f32));
+    let enemy_drag_world_start = use_signal(|| (0.0_f32, 0.0_f32));
+    let enemy_drag_moved = use_signal(|| false);
+
+    InteractionState {
+        last_mouse,
+        mouse_world,
+        enemy_pos,
+        enemy_dragging,
+        enemy_drag_mouse_start,
+        enemy_drag_world_start,
+        enemy_drag_moved,
+    }
+}
+
+#[component]
+pub fn StarMap(
+    game: Signal<Game>,
+    world_stars: Vec<ResponseStar>,
+    center_x: f32,
+    center_y: f32,
+    selected_id: Option<u32>,
+    on_select: EventHandler<ResponseStar>,
+) -> Element {
+    let viewport = use_viewport_measurement();
+    let version = use_game_version();
+
+    use_sync_sector_loading(game, version, viewport);
+    use_sync_sector_eviction(game, version, viewport);
+
+    let mut interact = use_star_map_interactions();
+
+    let g_attn = game;
+    let int_attn = interact.clone();
+    use_future(move || async move {
+        loop {
+            delay_tick().await;
+            let g = g_attn.read();
+            let snap = g.snapshot();
+            let (mx, my) = (int_attn.mouse_world)();
+            if !snap.sector_stars.is_empty() {
+                g.tick_attention(0.08, Some((mx, my)), &snap.sector_stars);
+            }
+        }
     });
 
     let snap = game.read().snapshot();
@@ -218,12 +296,7 @@ pub fn StarMap(
     let sector_stars: Vec<ResponseStar> = snap.sector_stars.clone();
     let loading: HashSet<SectorKey> = snap.sector_loading.clone();
 
-    // Generate the three background starfield layers once and cache
-    // them. Generating ~6000 box-shadows on every render (without the
-    // memo) freezes the renderer.
-    let starfield_small = use_memo(move || starfield(0, 3000, FIELD_HALF));
-    let starfield_medium = use_memo(move || starfield(10000, 1200, FIELD_HALF));
-    let starfield_distant = use_memo(move || starfield(20000, 2000, FIELD_HALF));
+    let (starfield_small, starfield_medium, starfield_distant) = use_starfield_backgrounds();
 
     let handle_zoom = move |factor: f32| {
         let vp = *viewport.read();
@@ -231,46 +304,53 @@ pub fn StarMap(
         g.zoom_camera(vp, factor);
     };
 
+    let game_for_hover = game;
+    let on_star_hover = EventHandler::new(move |star_id: u32| {
+        game_for_hover.read().look_at_star(star_id);
+    });
+
     rsx! {
         div {
             class: "starmap-root absolute inset-0 cursor-grab active:cursor-grabbing",
             onmousedown: move |e| {
                 let g = game.read().clone();
                 g.set_dragging(true);
-                last_mouse.set((e.client_coordinates().x as f32, e.client_coordinates().y as f32));
+                interact.last_mouse.set((e.client_coordinates().x as f32, e.client_coordinates().y as f32));
             },
             onmousemove: move |e| {
                 let nx = e.client_coordinates().x as f32;
                 let ny = e.client_coordinates().y as f32;
-                if enemy_dragging() {
-                    let (sx, sy) = enemy_drag_mouse_start();
+                let vp = *viewport.read();
+                let mw = mouse_to_world(nx, ny, vp, offset, zoom, center_x, center_y);
+                interact.mouse_world.set(mw);
+                if (interact.enemy_dragging)() {
+                    let (sx, sy) = (interact.enemy_drag_mouse_start)();
                     let dx = nx - sx;
                     let dy = ny - sy;
                     if dx * dx + dy * dy > 9.0 {
-                        enemy_drag_moved.set(true);
+                        interact.enemy_drag_moved.set(true);
                     }
-                    let (wx0, wy0) = enemy_drag_world_start();
-                    let z = zoom;
-                    enemy_pos.set((
-                        wx0 + dx / (z * PX_PER_PC),
-                        wy0 + dy / (z * PX_PER_PC),
+                    let (wx0, wy0) = (interact.enemy_drag_world_start)();
+                    interact.enemy_pos.set((
+                        wx0 + dx / (zoom * PX_PER_PC),
+                        wy0 + dy / (zoom * PX_PER_PC),
                     ));
                 } else if dragging {
-                    let (lx, ly) = last_mouse();
+                    let (lx, ly) = (interact.last_mouse)();
                     let g = game.read().clone();
                     g.pan_camera((nx - lx, ny - ly));
-                    last_mouse.set((nx, ny));
+                    interact.last_mouse.set((nx, ny));
                 }
             },
             onmouseup: move |_| {
                 let g = game.read().clone();
                 g.set_dragging(false);
-                enemy_dragging.set(false);
+                interact.enemy_dragging.set(false);
             },
             onmouseleave: move |_| {
                 let g = game.read().clone();
                 g.set_dragging(false);
-                enemy_dragging.set(false);
+                interact.enemy_dragging.set(false);
             },
             onwheel: move |e| {
                 let dy = e.delta().strip_units().y;
@@ -317,14 +397,14 @@ pub fn StarMap(
                 for star in sector_stars {
                     {
                         let is_sel = selected_id.map(|id| id == star.id).unwrap_or(false);
-                        render_star("sector", &star, center_x, center_y, is_sel, on_select)
+                        render_star("sector", &star, center_x, center_y, is_sel, on_select, Some(on_star_hover))
                     }
                 }
 
                 for star in world_stars {
                     {
                         let is_sel = selected_id.map(|id| id == star.id).unwrap_or(false);
-                        render_star("world", &star, center_x, center_y, is_sel, on_select)
+                        render_star("world", &star, center_x, center_y, is_sel, on_select, Some(on_star_hover))
                     }
                 }
 
@@ -335,7 +415,7 @@ pub fn StarMap(
                 }
 
                 {
-                    let pos = enemy_pos();
+                    let pos = (interact.enemy_pos)();
                     let ex = (pos.0 - center_x) * PX_PER_PC;
                     let ey = (pos.1 - center_y) * PX_PER_PC;
                     rsx! {
@@ -346,18 +426,18 @@ pub fn StarMap(
                                 e.stop_propagation();
                                 let g = game.read().clone();
                                 g.set_dragging(false);
-                                enemy_dragging.set(true);
-                                enemy_drag_mouse_start.set((
+                                interact.enemy_dragging.set(true);
+                                interact.enemy_drag_mouse_start.set((
                                     e.client_coordinates().x as f32,
                                     e.client_coordinates().y as f32,
                                 ));
-                                enemy_drag_world_start.set(pos);
-                                enemy_drag_moved.set(false);
+                                interact.enemy_drag_world_start.set(pos);
+                                interact.enemy_drag_moved.set(false);
                             },
                             on_click: move |e: MouseEvent| {
                                 e.stop_propagation();
-                                if !enemy_drag_moved() {
-                                    let (wx, wy) = enemy_pos();
+                                if !(interact.enemy_drag_moved)() {
+                                    let (wx, wy) = (interact.enemy_pos)();
                                     let msg = format!(
                                         "[enemy] clicked at world ({:.2}, {:.2})",
                                         wx, wy
@@ -432,4 +512,20 @@ fn prng(mut seed: u32) -> f32 {
     seed = (seed ^ (seed >> 16)).wrapping_mul(0x45d9f3b);
     seed ^= seed >> 16;
     (seed as f32) / (u32::MAX as f32)
+}
+
+fn mouse_to_world(
+    mx: f32,
+    my: f32,
+    vp: (f32, f32),
+    offset: (f32, f32),
+    zoom: f32,
+    center_x: f32,
+    center_y: f32,
+) -> (f32, f32) {
+    let cx = vp.0 * 0.5;
+    let cy = vp.1 * 0.5;
+    let wx = (mx - cx - offset.0) / zoom / PX_PER_PC + center_x;
+    let wy = (my - cy - offset.1) / zoom / PX_PER_PC + center_y;
+    (wx, wy)
 }

@@ -6,7 +6,7 @@ mod game_state;
 mod local_storage;
 
 use components::{About, Contact, Editor, HeroSection};
-use game_state::provide_game;
+use crate::game_state::use_provide_game;
 
 const MAIN_CSS: Asset = asset!("/assets/main.css");
 const TAILWIND_CSS: Asset = asset!("/assets/tailwind.css");
@@ -36,7 +36,7 @@ fn Home() -> Element {
 
 #[component]
 fn App() -> Element {
-    let _game = provide_game();
+    let _game = use_provide_game();
     rsx! {
         document::Link { rel: "stylesheet", href: MAIN_CSS }
         document::Link { rel: "stylesheet", href: TAILWIND_CSS }
