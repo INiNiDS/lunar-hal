@@ -138,8 +138,6 @@ struct PrefetchBatchedItem {
     adj_data: Vec<f32>,
     target_data: Vec<f32>,
     total_nodes: usize,
-    #[allow(dead_code)]
-    n_graphs: usize,
 }
 
 pub struct PrefetchBatchedBatcher {
@@ -160,7 +158,6 @@ impl PrefetchBatchedBatcher {
                 let mut nodes_data = Vec::new();
                 let mut targets_data = Vec::new();
                 let mut total_nodes = 0usize;
-                let mut n_graphs = 0usize;
                 let mut batch_groups: Vec<usize> = Vec::new();
 
                 while idx < n_groups {
@@ -171,7 +168,6 @@ impl PrefetchBatchedBatcher {
                     }
                     batch_groups.push(gi);
                     total_nodes += group_size;
-                    n_graphs += 1;
                     idx += 1;
                 }
 
@@ -213,7 +209,6 @@ impl PrefetchBatchedBatcher {
                     adj_data: block_adj,
                     target_data: targets_data,
                     total_nodes,
-                    n_graphs,
                 }).is_err() {
                     break;
                 }
@@ -307,11 +302,25 @@ fn build_groups_from_parquet(
         vz_mean: vz_m, vz_std: vz_s,
     };
 
-    let groups = build_star_groups(
-        &x, &y, &z, &log_teff, &log_rad, &log_mass, &log_lum, &mg,
-        &vx, &vy, &vz,
-        &norm, knn_k, max_group_size, radius_pc,
-    );
+    let groups = build_star_groups(&GroupBuildConfig {
+        features: StarFeatures {
+            x: &x,
+            y: &y,
+            z: &z,
+            log_teff: &log_teff,
+            log_rad: &log_rad,
+            log_mass: &log_mass,
+            log_lum: &log_lum,
+            mg: &mg,
+            vx: &vx,
+            vy: &vy,
+            vz: &vz,
+        },
+        norm: &norm,
+        knn_k,
+        max_group_size,
+        radius_pc,
+    });
 
     Ok((groups, norm))
 }
@@ -352,24 +361,57 @@ fn build_groups_from_parquet_with_norm(
     let log_mass: Vec<f32> = mass.par_iter().map(|&v| v.max(1e-10).log10()).collect();
     let log_lum: Vec<f32> = lum.par_iter().map(|&v| v.max(1e-10).log10()).collect();
 
-    let groups = build_star_groups(
-        &x, &y, &z, &log_teff, &log_rad, &log_mass, &log_lum, &mg,
-        &vx, &vy, &vz,
-        norm, knn_k, max_group_size, radius_pc,
-    );
+    let groups = build_star_groups(&GroupBuildConfig {
+        features: StarFeatures {
+            x: &x,
+            y: &y,
+            z: &z,
+            log_teff: &log_teff,
+            log_rad: &log_rad,
+            log_mass: &log_mass,
+            log_lum: &log_lum,
+            mg: &mg,
+            vx: &vx,
+            vy: &vy,
+            vz: &vz,
+        },
+        norm,
+        knn_k,
+        max_group_size,
+        radius_pc,
+    });
 
     Ok((groups, norm.clone()))
 }
 
-fn build_star_groups(
-    x: &[f32], y: &[f32], z: &[f32],
-    log_teff: &[f32], log_rad: &[f32], log_mass: &[f32], log_lum: &[f32], mg: &[f32],
-    vx: &[f32], vy: &[f32], vz: &[f32],
-    norm: &GnnNormParams,
+struct StarFeatures<'a> {
+    x: &'a [f32],
+    y: &'a [f32],
+    z: &'a [f32],
+    log_teff: &'a [f32],
+    log_rad: &'a [f32],
+    log_mass: &'a [f32],
+    log_lum: &'a [f32],
+    mg: &'a [f32],
+    vx: &'a [f32],
+    vy: &'a [f32],
+    vz: &'a [f32],
+}
+
+struct GroupBuildConfig<'a> {
+    features: StarFeatures<'a>,
+    norm: &'a GnnNormParams,
     knn_k: usize,
     max_group_size: usize,
     radius_pc: f32,
-) -> Vec<StarGroup> {
+}
+
+fn build_star_groups(config: &GroupBuildConfig<'_>) -> Vec<StarGroup> {
+    let StarFeatures { x, y, z, log_teff, log_rad, log_mass, log_lum, mg, vx, vy, vz } = config.features;
+    let norm = config.norm;
+    let knn_k = config.knn_k;
+    let max_group_size = config.max_group_size;
+    let radius_pc = config.radius_pc;
     let n = x.len();
     let mut assigned = vec![false; n];
     let mut groups = Vec::new();

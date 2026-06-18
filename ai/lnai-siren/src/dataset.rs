@@ -33,12 +33,6 @@ struct StarParams {
     bp_rp: f32,
     mg: f32,
     log_teff: f32,
-    #[allow(dead_code)]
-    log_rad: f32,
-    #[allow(dead_code)]
-    log_mass: f32,
-    #[allow(dead_code)]
-    log_lum: f32,
 }
 
 impl SirenDataset {
@@ -266,9 +260,6 @@ fn extract_star_params(df: &DataFrame) -> Result<Vec<StarParams>> {
         .collect();
 
     let log_teff: Vec<f32> = teff.par_iter().map(|&v| v.max(1e-10).log10()).collect();
-    let log_rad: Vec<f32> = rad.par_iter().map(|&v| v.max(1e-10).log10()).collect();
-    let log_mass: Vec<f32> = mass.par_iter().map(|&v| v.max(1e-10).log10()).collect();
-    let log_lum: Vec<f32> = lum.par_iter().map(|&v| v.max(1e-10).log10()).collect();
 
     let result: Vec<StarParams> = (0..bp_rp.len())
         .filter_map(|i| {
@@ -283,9 +274,6 @@ fn extract_star_params(df: &DataFrame) -> Result<Vec<StarParams>> {
                     bp_rp: bp_rp[i],
                     mg: mg[i],
                     log_teff: log_teff[i],
-                    log_rad: log_rad[i],
-                    log_mass: log_mass[i],
-                    log_lum: log_lum[i],
                 })
             } else {
                 None
@@ -481,7 +469,7 @@ fn generate_pixel(u: f32, v: f32, base: &BaseColor, params: &SpotParams, seed: u
     let g = base.g * (1.0 + params.granulation_amplitude * gran * 0.8) * (1.0 - spot * 1.1);
     let b = base.b * (1.0 + params.granulation_amplitude * gran * 0.5) * (1.0 - spot * 0.7);
 
-    let edge_glow = if r_sq >= 0.8 && r_sq < 1.2 {
+    let edge_glow = if (0.8..1.2).contains(&r_sq) {
         let t = 1.0 - (r_sq - 0.8) / 0.4;
         t * t * params.corona_intensity
     } else {

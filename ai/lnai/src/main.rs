@@ -205,12 +205,7 @@ fn main() -> Result<()> {
                 predictions,
                 batch_targets,
                 args.physics_weight,
-                norm.log_teff_mean,
-                norm.log_teff_std,
-                norm.log_rad_mean,
-                norm.log_rad_std,
-                norm.log_lum_mean,
-                norm.log_lum_std,
+                &norm,
             );
 
             let loss_scalar = loss.clone().into_scalar().elem::<f32>();
@@ -407,12 +402,7 @@ fn evaluate_physics_infer(
         let preds = model.forward(batch_inputs);
         let loss = compute_physics_loss(
             preds,
-            norm.log_teff_mean,
-            norm.log_teff_std,
-            norm.log_rad_mean,
-            norm.log_rad_std,
-            norm.log_lum_mean,
-            norm.log_lum_std,
+            norm,
         );
         let value: f32 = loss.into_scalar().elem();
         total_loss += value as f64;

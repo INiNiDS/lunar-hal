@@ -82,8 +82,8 @@ pub fn compute_adjacency_matrix(coords: &[[f32; 3]]) -> Vec<Vec<f32>> {
             degree_sum += adj[i][j];
         }
 
-        for j in 0..n {
-            adj[i][j] /= degree_sum;
+        for j in adj[i].iter_mut().take(n) {
+            *j /= degree_sum;
         }
     }
     adj
@@ -141,8 +141,8 @@ pub fn compute_knn_adjacency(coords: &[[f32; 3]], k: usize) -> Vec<Vec<f32>> {
             degree_sum += w;
         }
 
-        for j in 0..n {
-            adj[i][j] /= degree_sum;
+        for j in adj[i].iter_mut().take(n) {
+            *j /= degree_sum;
         }
     }
     adj
