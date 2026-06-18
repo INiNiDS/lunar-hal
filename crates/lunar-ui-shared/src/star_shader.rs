@@ -185,16 +185,15 @@ struct StarProps {
     teff: f32, bp_rp: f32, scale: f32, speed: f32, contrast: f32,
 }
 
-#[allow(dead_code)]
 #[cfg(all(feature = "web", target_family = "wasm"))]
 struct GlState {
     _slot: Rc<RefCell<Option<Closure<dyn FnMut(f64)>>>>,
-    ctx: Gl2,
-    u_teff: web_sys::WebGlUniformLocation,
-    u_bp_rp: web_sys::WebGlUniformLocation,
-    u_scale: web_sys::WebGlUniformLocation,
-    u_speed: web_sys::WebGlUniformLocation,
-    u_contrast: web_sys::WebGlUniformLocation,
+    _ctx: Gl2,
+    _u_teff: web_sys::WebGlUniformLocation,
+    _u_bp_rp: web_sys::WebGlUniformLocation,
+    _u_scale: web_sys::WebGlUniformLocation,
+    _u_speed: web_sys::WebGlUniformLocation,
+    _u_contrast: web_sys::WebGlUniformLocation,
 }
 
 #[cfg(all(feature = "web", target_family = "wasm"))]
@@ -368,9 +367,12 @@ pub fn StarShaderCanvas(
             GL_STATE.with(|s| {
                 *s.borrow_mut() = Some(GlState {
                     _slot: slot,
-                    ctx,
-                    u_teff, u_bp_rp,
-                    u_scale, u_speed, u_contrast,
+                    _ctx: ctx,
+                    _u_teff: u_teff,
+                    _u_bp_rp: u_bp_rp,
+                    _u_scale: u_scale,
+                    _u_speed: u_speed,
+                    _u_contrast: u_contrast,
                 });
             });
         });
