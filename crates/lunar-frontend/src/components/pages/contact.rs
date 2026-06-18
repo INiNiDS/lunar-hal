@@ -3,7 +3,7 @@ use crate::components::Header;
 use dioxus::prelude::*;
 
 #[component]
-pub fn ContactPage() -> Element {
+pub fn Contact() -> Element {
     rsx! {
         div { class: "min-h-screen w-full relative overflow-hidden bg-[#0f1116]",
 

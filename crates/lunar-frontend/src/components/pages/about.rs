@@ -25,7 +25,7 @@ const CARD_3_DESC: &str = "Explore uncharted planets and try to stay alive. No f
      physically accurate simulation running completely on your own GPU.";
 
 #[component]
-pub fn AboutPage() -> Element {
+pub fn About() -> Element {
     rsx! {
         div { class: "min-h-screen w-full relative overflow-hidden bg-[#0f1116]",
 

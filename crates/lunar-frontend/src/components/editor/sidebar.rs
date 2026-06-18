@@ -110,15 +110,6 @@ pub fn StarSidebar(
                                 "{lore.system_lore}"
                             }
                         }
-
-                        div { class: "flex flex-col gap-2 p-4 rounded-xl bg-white/[0.03] border border-white/[0.06]",
-                            div { class: "text-[10px] uppercase tracking-[0.15em] text-white/40 font-medium",
-                                "Metadata"
-                            }
-                            {meta_row("Engine", &lore.metadata.simulation_engine)}
-                            {meta_row("Source", &lore.metadata.data_source)}
-                            {meta_row("Complexity", &lore.metadata.complexity_level)}
-                        }
                     }
                 }
             }
@@ -154,19 +145,6 @@ fn param_row(label: &str, value: &str, color: &str) -> Element {
             span {
                 class: "text-[13px] font-semibold tabular-nums",
                 style: "color: {color}",
-                "{value}"
-            }
-        }
-    }
-}
-
-fn meta_row(label: &str, value: &str) -> Element {
-    rsx! {
-        div { class: "flex items-center justify-between",
-            span { class: "text-[10px] text-white/25 uppercase tracking-wider",
-                "{label}"
-            }
-            span { class: "text-[11px] text-white/55",
                 "{value}"
             }
         }

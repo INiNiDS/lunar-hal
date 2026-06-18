@@ -10,14 +10,15 @@ path = "src/main.rs"
 
 [dependencies]
 dioxus = { version = "0.7.1", features = ["router"] }
-reqwest = { version = "0.13.4", features = ["json"] }
 lunar-structures = { path = "../lunar-structures" }
+lunar-game-backend = { path = "../lunar-game-backend" }
 lunar-ui-shared = { path = "../lunar-ui-shared" }
 image = "0.25.10"
 base64 = "0.22.1"
 serde_json = "1"
-nah = "0.1.2"
 lunar-utils = { path = "../lunar-utils" }
+tracing = "0.1"
+nah = "0.1.2"
 
 [target.'cfg(all(target_family= "wasm", not(target_os = "wasi")))'.dependencies]
 wasm-bindgen = "0.2"
@@ -31,8 +32,9 @@ web-sys = { version = "0.3", features = [
     "DomRect",
     "Storage",
     "console",
+    "Performance",
 ] }
-gloo-timers = "0.3.0"
+gloo-timers = {version = "0.4.0", features = ["futures"]}
 
 [target.'cfg(not(all(target_family = "wasm", not(target_os = "wasi"))))'.dependencies]
 tokio = { version = "1", features = ["time"] }
@@ -42,3 +44,7 @@ default = ["desktop"]
 web = ["dioxus/web", "dioxus/document", "lunar-ui-shared/web"]
 desktop = ["dioxus/desktop", "lunar-ui-shared/desktop"]
 mobile = ["dioxus/mobile"]
+
+
+[profile.release]
+debug = false

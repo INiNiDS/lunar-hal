@@ -1,0 +1,50 @@
+//! `localStorage` helpers for the web build, no-op stubs elsewhere.
+//!
+//! The game backend owns the in-memory world camera cache; the
+//! frontend is responsible for hydrating it from / persisting it to
+//! the platform's local storage. This module is the only place that
+//! knows about `web_sys` directly.
+
+use lunar_game_backend::WorldCamera;
+
+#[cfg(feature = "web")]
+const CAMERA_KEY_PREFIX: &str = "lunar.world.camera.";
+
+#[cfg(feature = "web")]
+pub fn save_world_camera(world_id: &str, wc: WorldCamera) {
+    if let Some(window) = web_sys::window() {
+        if let Ok(Some(storage)) = window.local_storage() {
+            let key = format!("{CAMERA_KEY_PREFIX}{world_id}");
+            let value = format!(
+                r#"{{"offset":[{},{}],"zoom":{}}}"#,
+                wc.offset.0, wc.offset.1, wc.zoom
+            );
+            let _ = storage.set_item(&key, &value);
+        }
+    }
+}
+
+#[cfg(feature = "web")]
+pub fn load_world_camera(world_id: &str) -> Option<WorldCamera> {
+    let window = web_sys::window()?;
+    let storage = window.local_storage().ok()??;
+    let key = format!("{CAMERA_KEY_PREFIX}{world_id}");
+    let raw = storage.get_item(&key).ok()??;
+    let parsed: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    let arr = parsed.as_array()?;
+    if arr.len() != 3 {
+        return None;
+    }
+    let ox = arr[0].as_f64()? as f32;
+    let oy = arr[1].as_f64()? as f32;
+    let z = arr[2].as_f64()? as f32;
+    Some(WorldCamera::new((ox, oy), z))
+}
+
+#[cfg(not(feature = "web"))]
+pub fn save_world_camera(_world_id: &str, _wc: WorldCamera) {}
+
+#[cfg(not(feature = "web"))]
+pub fn load_world_camera(_world_id: &str) -> Option<WorldCamera> {
+    None
+}

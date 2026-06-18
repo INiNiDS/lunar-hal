@@ -2,9 +2,11 @@ use dioxus::prelude::*;
 
 mod assets;
 mod components;
-pub mod api;
+mod game_state;
+mod local_storage;
 
-use components::{AboutPage, ContactPage, EditorPage, HeroSection};
+use components::{About, Contact, Editor, HeroSection};
+use game_state::provide_game;
 
 const MAIN_CSS: Asset = asset!("/assets/main.css");
 const TAILWIND_CSS: Asset = asset!("/assets/tailwind.css");
@@ -12,13 +14,13 @@ const TAILWIND_CSS: Asset = asset!("/assets/tailwind.css");
 #[derive(Routable, Clone, PartialEq)]
 enum Route {
     #[route("/")]
-    HomePage {},
+    Home {},
     #[route("/about")]
-    AboutPage {},
+    About {},
     #[route("/contact")]
-    ContactPage {},
+    Contact {},
     #[route("/editor")]
-    EditorPage {},
+    Editor {},
 }
 
 fn main() {
@@ -26,7 +28,7 @@ fn main() {
 }
 
 #[component]
-fn HomePage() -> Element {
+fn Home() -> Element {
     rsx! {
         HeroSection {}
     }
@@ -34,6 +36,7 @@ fn HomePage() -> Element {
 
 #[component]
 fn App() -> Element {
+    let _game = provide_game();
     rsx! {
         document::Link { rel: "stylesheet", href: MAIN_CSS }
         document::Link { rel: "stylesheet", href: TAILWIND_CSS }
