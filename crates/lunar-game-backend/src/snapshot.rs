@@ -1,7 +1,7 @@
 //! Read-only view of the game state.
 //!
-//! Frontends obtain a [`GameSnapshot`] from [`crate::Game::snapshot`]
-//! and render based on it. Snapshots are cheap to clone (no Arc) and
+//! Frontends get a [`GameSnapshot`] from [`crate::Game::snapshot`]
+//! and render based on it. Snapshots are lightweight to clone (no Arc) and
 //! immutable, so they can be passed freely between components.
 
 use std::collections::{HashMap, HashSet};
@@ -10,6 +10,7 @@ use lunar_structures::{
     GnnResponse, PipelineResponse, ResponseStar, World, WorldSummary,
 };
 
+use crate::attention::AttentionEntry;
 use crate::camera::Camera;
 use crate::sector::SectorKey;
 
@@ -43,6 +44,9 @@ pub struct GameSnapshot {
     pub pipeline: Option<PipelineResponse>,
     /// Per-world camera persistence entries.
     pub world_cameras: HashMap<String, crate::camera::WorldCamera>,
+    /// Карта внимания игрока: для каждой звезды — время невнимания
+    /// и расстояние до курсора мыши.
+    pub attention_map: HashMap<u32, AttentionEntry>,
 }
 
 impl GameSnapshot {

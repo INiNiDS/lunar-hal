@@ -81,6 +81,14 @@ impl Camera {
             dragging: false,
         }
     }
+
+    /// Pixel displacement since `prev`.
+    pub fn delta(&self, prev: &Self) -> (f32, f32) {
+        (
+            self.offset.0 - prev.offset.0,
+            self.offset.1 - prev.offset.1,
+        )
+    }
 }
 
 pub const MIN_ZOOM: f32 = 0.05;

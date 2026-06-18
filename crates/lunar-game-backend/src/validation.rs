@@ -3,7 +3,7 @@
 //! Every value that crosses the trust boundary (network responses,
 //! user-driven UI state, internal helpers) flows through one of the
 //! `validate_*` functions below. The rules are deliberately
-//! conservative: an obviously-broken input is rejected with a
+//! conservative: an obviously broken input is rejected with a
 //! [`ValidationError`], never silently clamped. Callers can decide
 //! how to react (log, ignore, surface to the user).
 //!
@@ -14,7 +14,7 @@ use thiserror::Error;
 
 use lunar_structures::{PipelineResponse, ResponseStar, World, WorldSummary};
 
-/// Bounds used across the validation module. Centralised so the UI
+/// Bounds used across the validation module. Centralized so the UI
 /// and the game layer can't drift apart.
 pub mod limits {
     /// Inclusive max length for a world name (characters, not bytes).
@@ -128,6 +128,18 @@ impl ValidationError {
     }
 }
 
+macro_rules! validate_length {
+    ($val:expr, $max:expr, $field:expr) => {
+        let len = $val.chars().count();
+        if len > $max {
+            return Err(ValidationError::TooLong {
+                field: $field,
+                max: $max,
+                actual: len,
+            });
+        }
+    };
+}
 /// Returns true for finite, non-NaN numbers. Almost every numeric
 /// validator below delegates to this.
 #[inline]
@@ -184,13 +196,7 @@ pub fn validate_world_name(name: &str) -> ValidationResult<&str> {
     let field = "world.name";
     let trimmed = name.trim();
     check_non_empty(trimmed, field)?;
-    if trimmed.chars().count() > limits::WORLD_NAME_MAX {
-        return Err(ValidationError::TooLong {
-            field,
-            max: limits::WORLD_NAME_MAX,
-            actual: trimmed.chars().count(),
-        });
-    }
+    validate_length!(trimmed, limits::WORLD_NAME_MAX, field);
     for c in trimmed.chars() {
         if c.is_control() {
             return Err(ValidationError::InvalidCharacters {
@@ -207,13 +213,7 @@ pub fn validate_world_name(name: &str) -> ValidationResult<&str> {
 pub fn validate_world_id(id: &str) -> ValidationResult<&str> {
     let field = "world.id";
     check_non_empty(id, field)?;
-    if id.chars().count() > limits::WORLD_ID_MAX {
-        return Err(ValidationError::TooLong {
-            field,
-            max: limits::WORLD_ID_MAX,
-            actual: id.chars().count(),
-        });
-    }
+    validate_length!(id, limits::WORLD_ID_MAX, field);
     for c in id.chars() {
         let ok = c.is_ascii_alphanumeric() || c == '-' || c == '_';
         if !ok {
@@ -279,7 +279,7 @@ pub fn validate_sector_key(key: (i32, i32)) -> ValidationResult<(i32, i32)> {
     Ok(key)
 }
 
-/// Validate a [`lunar_structures::ResponseStar`] coming back from the
+/// Validate a [`ResponseStar`] coming back from the
 /// AI backend. Catches NaN/Inf coordinates and obviously broken
 /// physical parameters.
 pub fn validate_response_star(star: &ResponseStar) -> ValidationResult<&ResponseStar> {
@@ -325,7 +325,7 @@ pub fn validate_response_stars(stars: &[ResponseStar]) -> ValidationResult<()> {
     Ok(())
 }
 
-/// Validate a [`lunar_structures::World`] coming from the AI backend.
+/// Validate a [`World`] coming from the AI backend.
 pub fn validate_world(world: &World) -> ValidationResult<&World> {
     let _ = validate_world_id(&world.id)?;
     let _ = validate_world_name(&world.name)?;
@@ -339,7 +339,7 @@ pub fn validate_world(world: &World) -> ValidationResult<&World> {
     Ok(world)
 }
 
-/// Validate a [`lunar_structures::WorldSummary`].
+/// Validate a [`WorldSummary`].
 pub fn validate_world_summary(world: &WorldSummary) -> ValidationResult<&WorldSummary> {
     let _ = validate_world_id(&world.id)?;
     let _ = validate_world_name(&world.name)?;
@@ -349,7 +349,7 @@ pub fn validate_world_summary(world: &WorldSummary) -> ValidationResult<&WorldSu
     Ok(world)
 }
 
-/// Validate the texture inside a [`lunar_structures::PipelineResponse`].
+/// Validate the texture inside a [`PipelineResponse`].
 pub fn validate_pipeline(pipeline: &PipelineResponse) -> ValidationResult<&PipelineResponse> {
     if pipeline.siren.width == 0 || pipeline.siren.height == 0 {
         return Err(ValidationError::OutOfRangeInt {
@@ -385,6 +385,8 @@ pub fn validate_pipeline(pipeline: &PipelineResponse) -> ValidationResult<&Pipel
     }
     Ok(pipeline)
 }
+
+
 
 #[cfg(test)]
 mod tests {

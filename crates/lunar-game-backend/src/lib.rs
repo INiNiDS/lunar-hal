@@ -15,20 +15,28 @@
 
 #![forbid(unsafe_code)]
 
+pub mod actions;
 pub mod api_client;
+pub mod attention;
 pub mod camera;
 pub mod error;
 pub mod game;
 pub mod sector;
 pub mod snapshot;
 pub mod validation;
+pub mod enemy;
 
+pub use actions::{
+    ActionBuffer, ActionRecord, CameraMovement, PlayerAction, UpdatePayload,
+};
+pub use attention::{AttentionEntry, AttentionMap};
 pub use camera::{Camera, WorldCamera, WorldCameraStore, MAX_ZOOM, MIN_ZOOM};
 pub use error::GameError;
 pub use game::{Game, GameConfig};
 pub use sector::{
-    chunk_center, SectorFetchRequest, SectorKey, CHUNK_SIZE_PC, INNER_EXCLUSION_PC, MAX_CACHED_CHUNKS,
-    MAX_CONCURRENT_FETCHES, MIN_FETCH_COOLDOWN_MS, PX_PER_PC,
+    chunk_at_world_point, chunk_center, SectorFetchRequest, SectorKey, CHUNK_SIZE_PC,
+    INNER_EXCLUSION_PC, MAX_CACHED_CHUNKS, MAX_CONCURRENT_FETCHES, MIN_FETCH_COOLDOWN_MS,
+    PX_PER_PC,
 };
 pub use snapshot::GameSnapshot;
 pub use validation::{

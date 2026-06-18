@@ -1,8 +1,8 @@
-//! The [`Game`] struct: single source of truth for all gameplay state.
+//! The [`Game`] struct: a single source of truth for all gameplay states.
 //!
 //! Every UI (Dioxus, a hypothetical TUI, a future test harness, ...)
 //! talks to the same [`Game`] and renders the resulting
-//! [`GameSnapshot`](crate::GameSnapshot). The frontend never reaches
+//! [`GameSnapshot`](GameSnapshot). The frontend never reaches
 //! into [`lunar_backend`](https://docs.rs/lunar-backend) directly; the
 //! game layer is the only client of the AI HTTP API.
 
@@ -17,17 +17,18 @@ use lunar_structures::{
     ResponseStar, World, WorldListResponse, WorldSummary,
 };
 
+use crate::actions::{ActionBuffer, PlayerAction, UpdatePayload};
 use crate::api_client::ApiClient;
+use crate::attention::AttentionMap;
 use crate::camera::{Camera, WorldCamera};
 use crate::error::GameError;
 use crate::sector::{SectorFetchRequest, SectorKey};
 use crate::snapshot::GameSnapshot;
 use crate::validation::{
-    validate_bp_rp, validate_center_x, validate_center_y, validate_center_z, validate_entropy,
-    validate_g_mag, validate_pipeline, validate_response_star, validate_response_stars,
-    validate_search_radius, validate_sector_key, validate_temperature, validate_world,
-    validate_world_id, validate_world_name, validate_world_summary, validate_zoom,
-    ValidationError, ValidationResult,
+    ValidationError, ValidationResult, validate_bp_rp, validate_center_x, validate_center_y,
+    validate_center_z, validate_entropy, validate_g_mag, validate_pipeline, validate_response_star,
+    validate_response_stars, validate_search_radius, validate_sector_key, validate_temperature,
+    validate_world, validate_world_id, validate_world_name, validate_world_summary, validate_zoom,
 };
 
 /// How the game reaches the AI backend.
@@ -73,6 +74,11 @@ struct GameState {
     /// Monotonic counter. Frontends can use this to detect changes
     /// (via a `Signal<u64>` they bump on every `notify()`).
     version: u64,
+    /// Rolling buffer of recent player actions and camera snapshots.
+    action_buffer: ActionBuffer,
+    /// Внимание игрока: для каждой звезды — время невнимания и
+    /// расстояние до курсора мыши.
+    attention_map: AttentionMap,
 }
 
 impl GameState {
@@ -92,9 +98,9 @@ type ChangeHandler = Box<dyn Fn(u64) + Send + Sync + 'static>;
 
 /// The shared, framework-agnostic game object.
 ///
-/// `Game` is `Clone` (cheap, internal `Arc`-sharing) and is safe to
+/// `Game` is `Clone` (lightweight, internal `Arc`-sharing) and is safe to
 /// pass into UI components. It is also `Send + Sync`, so it can be
-/// driven from background tasks (e.g. fetch workers).
+/// driven from background tasks (e.g., fet,ch workers).
 pub struct Game {
     state: Arc<RwLock<GameState>>,
     api: Arc<ApiClient>,
@@ -204,10 +210,9 @@ impl Game {
             sector_center: s.sector_center,
             pipeline: s.pipeline.clone(),
             world_cameras: s.world_cameras.clone(),
+            attention_map: s.attention_map.snapshot(),
         }
     }
-
-    // ============== Worlds ==============
 
     pub async fn refresh_worlds(&self) -> Result<usize, GameError> {
         let resp: WorldListResponse = self.api.list_worlds().await?;
@@ -215,10 +220,6 @@ impl Game {
             validate_world_summary(w)?;
         }
         let len = resp.worlds.len();
-        // Only bump the version (and notify) if the list actually
-        // changed. Bumping unconditionally creates an infinite loop
-        // with `use_future` that subscribes to `version` and calls
-        // this method on every bump.
         let changed = {
             let mut s = self.state.write();
             if s.worlds != resp.worlds {
@@ -244,13 +245,13 @@ impl Game {
         let world = self.api.get_world(id).await?;
         validate_world(&world)?;
         self.adopt_world(Some(world.clone()));
+        self.push_action(PlayerAction::LoadWorld {
+            world_id: world.id.clone(),
+        });
         Ok(world)
     }
 
-    pub async fn create_world(
-        &self,
-        req: CreateWorldRequest,
-    ) -> Result<World, GameError> {
+    pub async fn create_world(&self, req: CreateWorldRequest) -> Result<World, GameError> {
         // Validate every field of the user-facing request before any
         // network traffic.
         let name = validate_world_name(&req.name)?.to_string();
@@ -263,8 +264,6 @@ impl Game {
         let world = self.api.create_world(req).await?;
         validate_world(&world)?;
         self.adopt_world(Some(world.clone()));
-        // Best-effort refresh of the archive list. Errors here are
-        // not fatal: the new world is already adopted.
         if let Ok(resp) = self.api.list_worlds().await {
             if let Ok(()) = (|| -> Result<(), ValidationError> {
                 for w in &resp.worlds {
@@ -302,7 +301,7 @@ impl Game {
         self.state.read().active_world.clone()
     }
 
-    /// Set the active world directly (e.g. when the user picks a
+    /// Set the active world directly (e.g., when the user picks a
     /// world from the archive) and reset the sector cache to match
     /// the new world. Validates the world before adopting it.
     pub fn adopt_world(&self, world: Option<World>) {
@@ -338,8 +337,6 @@ impl Game {
         self.adopt_world(None);
     }
 
-    // ============== Camera ==============
-
     pub fn camera(&self) -> Camera {
         self.state.read().camera
     }
@@ -357,6 +354,7 @@ impl Game {
         {
             let mut s = self.state.write();
             s.camera = s.camera.pan(delta);
+            s.action_buffer.push(PlayerAction::Pan { delta });
             s.version += 1;
         }
         self.notify();
@@ -366,20 +364,17 @@ impl Game {
         {
             let mut s = self.state.write();
             s.camera = s.camera.zoom_around_center(viewport, factor);
+            s.action_buffer.push(PlayerAction::Zoom { factor });
             s.version += 1;
         }
         self.notify();
     }
 
-    pub fn zoom_camera_at(
-        &self,
-        viewport: (f32, f32),
-        anchor: (f32, f32),
-        factor: f32,
-    ) {
+    pub fn zoom_camera_at(&self, viewport: (f32, f32), anchor: (f32, f32), factor: f32) {
         {
             let mut s = self.state.write();
             s.camera = s.camera.zoom_around(viewport, anchor, factor);
+            s.action_buffer.push(PlayerAction::Zoom { factor });
             s.version += 1;
         }
         self.notify();
@@ -398,22 +393,17 @@ impl Game {
         {
             let mut s = self.state.write();
             s.camera = s.camera.reset();
+            s.action_buffer.push(PlayerAction::RecenterCamera);
             s.version += 1;
         }
         self.notify();
     }
 
-    // ============== World camera persistence ==============
-
     pub fn world_camera(&self, world_id: &str) -> Option<WorldCamera> {
         self.state.read().world_cameras.get(world_id).copied()
     }
 
-    pub fn set_world_camera(
-        &self,
-        world_id: &str,
-        cam: WorldCamera,
-    ) -> ValidationResult<()> {
+    pub fn set_world_camera(&self, world_id: &str, cam: WorldCamera) -> ValidationResult<()> {
         let world_id = validate_world_id(world_id)?.to_string();
         let zoom = validate_zoom(cam.zoom)?;
         let off_x = validate_center_x(cam.offset.0)?;
@@ -461,16 +451,10 @@ impl Game {
             validate_center_y(s.camera.offset.1)?
         };
         let cam = WorldCamera::new((off_x, off_y), zoom);
-        // Write silently: this is just a cache of the current camera
-        // for persistence. Bumping the version here would create an
-        // infinite render loop with `use_persist_world_camera` (which
-        // subscribes to version and calls this method on every bump).
         let mut s = self.state.write();
         s.world_cameras.insert(world_id, cam);
         Ok(())
     }
-
-    // ============== Selection ==============
 
     pub fn selected_star(&self) -> Option<ResponseStar> {
         self.state.read().selected_star.clone()
@@ -478,15 +462,15 @@ impl Game {
 
     pub fn select_star(&self, star: Option<ResponseStar>) {
         {
+            let star_id = star.as_ref().map(|s| s.id);
             let mut s = self.state.write();
             s.selected_star = star.clone();
             s.pipeline = None;
+            s.action_buffer.push(PlayerAction::SelectStar { star_id });
             s.version += 1;
         }
         self.notify();
     }
-
-    // ============== Entropy / parameters ==============
 
     pub fn temperature(&self) -> f32 {
         self.state.read().temperature
@@ -497,6 +481,8 @@ impl Game {
         {
             let mut s = self.state.write();
             s.temperature = t;
+            s.action_buffer
+                .push(PlayerAction::SetTemperature { value: t });
             s.version += 1;
         }
         self.notify();
@@ -512,6 +498,7 @@ impl Game {
         {
             let mut s = self.state.write();
             s.bp_rp = v;
+            s.action_buffer.push(PlayerAction::SetBpRp { value: v });
             s.version += 1;
         }
         self.notify();
@@ -527,6 +514,7 @@ impl Game {
         {
             let mut s = self.state.write();
             s.g_mag = v;
+            s.action_buffer.push(PlayerAction::SetGMag { value: v });
             s.version += 1;
         }
         self.notify();
@@ -562,8 +550,6 @@ impl Game {
     pub fn set_last_temp(&self, t: f32) {
         self.state.write().last_temp = t;
     }
-
-    // ============== Pregen (no-world state) ==============
 
     pub fn pregen(&self) -> Option<GnnResponse> {
         self.state.read().pregen.clone()
@@ -612,7 +598,9 @@ impl Game {
                     entropy_temperature: t,
                 })
                 .await?;
-            GnnResponse { stars: vec![r.star] }
+            GnnResponse {
+                stars: vec![r.star],
+            }
         };
 
         validate_response_stars(&resp.stars)?;
@@ -620,14 +608,9 @@ impl Game {
         Ok(resp)
     }
 
-    // ============== Sector streaming ==============
-
     /// Which sectors should the renderer request from the AI backend
     /// right now, given the current viewport and camera?
-    pub fn sectors_to_fetch(
-        &self,
-        viewport: (f32, f32),
-    ) -> Vec<(SectorKey, (f32, f32, f32))> {
+    pub fn sectors_to_fetch(&self, viewport: (f32, f32)) -> Vec<(SectorKey, (f32, f32, f32))> {
         let s = self.state.read();
         let center = s
             .active_world
@@ -686,8 +669,6 @@ impl Game {
     pub fn fail_sector(&self, chunk: SectorKey) {
         {
             let mut s = self.state.write();
-            // Only bump version if the chunk was actually in-flight.
-            // If it wasn't, there's nothing to notify about.
             if s.sector_loading.remove(&chunk) {
                 s.version += 1;
                 drop(s);
@@ -697,7 +678,7 @@ impl Game {
     }
 
     /// Fetch a single sector by chunk coordinate and apply it.
-    /// Every parameter is validated up-front and the response is
+    /// Every parameter is validated up-front, and the response is
     /// validated before it lands in the cache.
     pub async fn fetch_sector(
         &self,
@@ -746,12 +727,7 @@ impl Game {
     pub fn evict_excess_sectors(&self) {
         let changed = {
             let mut s = self.state.write();
-            let center = s
-                .active_world
-                .as_ref()
-                .map(|w| (w.center_x, w.center_y))
-                .or_else(|| s.sector_center.map(|c| (c.0, c.1)))
-                .unwrap_or((0.0, 0.0));
+            let center = get_world_center(&s);
             let cam_pos = crate::sector::eviction_cam_pos(s.camera.offset, s.camera.zoom, center);
             let before = s.sector_cache.len();
             crate::sector::evict_excess_cache(&mut s.sector_cache, cam_pos);
@@ -800,10 +776,7 @@ impl Game {
     /// Both the input star and the response are validated; the
     /// texture is sanity-checked for the expected `width*height*3`
     /// pixel count.
-    pub async fn fetch_pipeline(
-        &self,
-        star: ResponseStar,
-    ) -> Result<PipelineResponse, GameError> {
+    pub async fn fetch_pipeline(&self, star: ResponseStar) -> Result<PipelineResponse, GameError> {
         validate_response_star(&star)?;
         let req = PipelineRequest {
             x_pc: star.x,
@@ -823,4 +796,77 @@ impl Game {
         self.notify();
         Ok(resp)
     }
+
+    /// Append a player action to the rolling buffer. Called
+    /// automatically by every mutation method (pan, zoom, select,
+    /// etc.) but also available for custom frontend events.
+    pub fn push_action(&self, action: PlayerAction) {
+        self.state.write().action_buffer.push(action);
+    }
+
+    /// Build and return an [`UpdatePayload`] containing:
+    ///
+    /// * **Camera movement** — total offset delta accumulated over
+    ///   the rolling window (default: 60 s), not just the last frame.
+    ///   Zero when the session is shorter than the window.
+    /// * **Recent actions** — every buffered action inside the window
+    ///   (`when = None` if session < window).
+    /// * **Current sector** — the chunk under the viewport centre.
+    /// * **Sector stars** — stars in that chunk (empty if not cached).
+    ///
+    /// After building, the buffer is pruned to keep memory bounded.
+    pub fn update(&self) -> UpdatePayload {
+        let camera = self.camera();
+        let mut s = self.state.write();
+
+        // Feed the current camera snapshot so the buffer can compute
+        // the total displacement over the window.
+        s.action_buffer.push_camera(camera);
+
+        let mut payload = s.action_buffer.build_update();
+
+        // Resolve the sector under the camera center.
+        let world_center = get_world_center(&s);
+        let cam_world =
+            crate::sector::world_point_under_center(camera.offset, camera.zoom, world_center);
+        payload.current_sector = crate::sector::chunk_at_world_point(cam_world);
+        payload.sector_stars = payload
+            .current_sector
+            .and_then(|key| s.sector_cache.get(&key))
+            .cloned()
+            .unwrap_or_default();
+        payload.attention_map = s.attention_map.snapshot();
+
+        s.action_buffer.prune();
+        s.version += 1;
+        drop(s);
+        self.notify();
+        payload
+    }
+
+    /// Продвигает таймеры карты внимания на `dt` секунд и
+    /// пересчитывает Dmouse для всех звёзд, переданных в `stars`.
+    ///
+    /// `mouse_world` — положение мыши в мировых координатах (парсеки).
+    pub fn tick_attention(&self, dt: f32, mouse_world: Option<(f32, f32)>, stars: &[ResponseStar]) {
+        self.state.write().attention_map.tick(dt, mouse_world, stars);
+    }
+
+    /// Сбросить Tneglect для звезды — игрок навёл на неё курсор.
+    pub fn look_at_star(&self, star_id: u32) {
+        self.state.write().attention_map.on_player_look(star_id);
+    }
+
+    /// Получить снапшот карты внимания.
+    pub fn attention_snapshot(&self) -> HashMap<u32, crate::attention::AttentionEntry> {
+        self.state.read().attention_map.snapshot()
+    }
+}
+
+fn get_world_center(s: &GameState) -> (f32, f32) {
+    s.active_world
+        .as_ref()
+        .map(|w| (w.center_x, w.center_y))
+        .or_else(|| s.sector_center.map(|c| (c.0, c.1)))
+        .unwrap_or((0.0, 0.0))
 }
