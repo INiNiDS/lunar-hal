@@ -88,8 +88,8 @@ pub const MAX_ZOOM: f32 = 15.0;
 
 /// Per-world camera state remembered between sessions. Frontends
 /// implement the actual persistence (e.g. `localStorage`); the game
-/// stores and retrieves it via [`crate::Game::world_camera`] /
-/// [`crate::Game::set_world_camera`].
+/// stores and retrieves it via [`crate::Game::world_camera`]
+/// Sets with [`crate::Game::set_world_camera`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct WorldCamera {
     pub offset: (f32, f32),

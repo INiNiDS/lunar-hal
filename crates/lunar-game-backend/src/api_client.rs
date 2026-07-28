@@ -12,6 +12,7 @@ use lunar_utils::env::get_url;
 use parking_lot::RwLock;
 use serde::Serialize;
 use serde_json::Value;
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::Duration;
 use thiserror::Error;
 
@@ -59,12 +60,10 @@ impl std::fmt::Debug for ApiClient {
 impl ApiClient {
     /// Create a new client with an explicit base URL.
     pub fn new(base_url: impl Into<String>) -> Self {
-        let mut builder = reqwest::Client::builder();
+        let builder = reqwest::Client::builder();
 
         #[cfg(not(target_arch = "wasm32"))]
-        {
-            builder = builder.timeout(Duration::from_mins(1));
-        }
+        let builder = builder.timeout(Duration::from_mins(1));
 
         let http = builder.build().expect("reqwest client should build");
 

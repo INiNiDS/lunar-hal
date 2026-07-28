@@ -6,10 +6,10 @@
 //! into [`lunar_backend`](https://docs.rs/lunar-backend) directly; the
 //! game layer is the only client of the AI HTTP API.
 
+use parking_lot::RwLock;
+use rand::RngExt;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-
-use parking_lot::RwLock;
 use tokio::sync::watch;
 
 use lunar_structures::{
@@ -21,6 +21,7 @@ use crate::actions::{ActionBuffer, PlayerAction, UpdatePayload};
 use crate::api_client::ApiClient;
 use crate::attention::AttentionMap;
 use crate::camera::{Camera, WorldCamera};
+use crate::enemy::EnemyInstance;
 use crate::error::GameError;
 use crate::sector::{SectorFetchRequest, SectorKey};
 use crate::snapshot::GameSnapshot;
@@ -76,9 +77,11 @@ struct GameState {
     version: u64,
     /// Rolling buffer of recent player actions and camera snapshots.
     action_buffer: ActionBuffer,
-    /// Внимание игрока: для каждой звезды — время невнимания и
-    /// расстояние до курсора мыши.
+    /// Player attention: for each star — time since last attention and
+    /// distance to the mouse cursor.
     attention_map: AttentionMap,
+    enemy_instance: EnemyInstance,
+    mouse_world: Option<(f32, f32)>,
 }
 
 impl GameState {
@@ -89,8 +92,35 @@ impl GameState {
             g_mag: 10.0,
             last_temp: 0.7,
             camera: Camera::new(),
+            enemy_instance: EnemyInstance::new(),
             ..Self::default()
         }
+    }
+
+    fn apply_star_damage(&mut self, star_id: u32, amount: f32) -> (bool, bool) {
+        let mut found = false;
+        let mut changed = false;
+        for stars in self.sector_cache.values_mut() {
+            if let Some(star) = stars.iter_mut().find(|s| s.id == star_id) {
+                found = true;
+                let new_hp = (star.hp - amount).max(0.0);
+                if new_hp != star.hp {
+                    star.hp = new_hp;
+                    changed = true;
+                }
+            }
+        }
+        if let Some(ref mut world) = self.active_world {
+            if let Some(star) = world.stars.iter_mut().find(|s| s.id == star_id) {
+                found = true;
+                let new_hp = (star.hp - amount).max(0.0);
+                if new_hp != star.hp {
+                    star.hp = new_hp;
+                    changed = true;
+                }
+            }
+        }
+        (found, changed)
     }
 }
 
@@ -100,7 +130,7 @@ type ChangeHandler = Box<dyn Fn(u64) + Send + Sync + 'static>;
 ///
 /// `Game` is `Clone` (lightweight, internal `Arc`-sharing) and is safe to
 /// pass into UI components. It is also `Send + Sync`, so it can be
-/// driven from background tasks (e.g., fet,ch workers).
+/// driven from background tasks (e.g., fetch workers).
 pub struct Game {
     state: Arc<RwLock<GameState>>,
     api: Arc<ApiClient>,
@@ -211,6 +241,8 @@ impl Game {
             pipeline: s.pipeline.clone(),
             world_cameras: s.world_cameras.clone(),
             attention_map: s.attention_map.snapshot(),
+            enemies: s.enemy_instance.enemies().to_vec(),
+            projectiles: s.enemy_instance.projectiles.clone(),
         }
     }
 
@@ -811,58 +843,235 @@ impl Game {
     ///   Zero when the session is shorter than the window.
     /// * **Recent actions** — every buffered action inside the window
     ///   (`when = None` if session < window).
-    /// * **Current sector** — the chunk under the viewport centre.
+    /// * **Current sector** — the chunk under the viewport center.
     /// * **Sector stars** — stars in that chunk (empty if not cached).
     ///
     /// After building, the buffer is pruned to keep memory bounded.
-    pub fn update(&self) -> UpdatePayload {
+    pub fn update(&self, _dt: f32) -> UpdatePayload {
         let camera = self.camera();
         let mut s = self.state.write();
 
-        // Feed the current camera snapshot so the buffer can compute
-        // the total displacement over the window.
         s.action_buffer.push_camera(camera);
 
         let mut payload = s.action_buffer.build_update();
-
-        // Resolve the sector under the camera center.
         let world_center = get_world_center(&s);
         let cam_world =
             crate::sector::world_point_under_center(camera.offset, camera.zoom, world_center);
         payload.current_sector = crate::sector::chunk_at_world_point(cam_world);
-        payload.sector_stars = payload
-            .current_sector
-            .and_then(|key| s.sector_cache.get(&key))
-            .cloned()
-            .unwrap_or_default();
+
+        let mut all_stars: Vec<ResponseStar> = s.sector_cache.values().flatten().cloned().collect();
+
+        if let Some(ref world) = s.active_world {
+            all_stars.extend(world.stars.clone());
+        }
+
+        payload.sector_stars = all_stars;
         payload.attention_map = s.attention_map.snapshot();
 
-        s.action_buffer.prune();
-        s.version += 1;
-        drop(s);
-        self.notify();
+        if !payload.sector_stars.is_empty() && s.enemy_instance.enemies().len() < 4 {
+            let mut rng = rand::rng();
+            if rng.random_bool(0.01) {
+                let alive_stars: Vec<&ResponseStar> = payload
+                    .sector_stars
+                    .iter()
+                    .filter(|st| st.hp > 0.0)
+                    .collect();
+
+                if !alive_stars.is_empty() {
+                    let target_star = alive_stars[rng.random_range(0..alive_stars.len())];
+                    let et = crate::enemy::EnemyType::from(rng.random_range(0..6));
+
+                    let angle = rng.random_range(0.0..std::f32::consts::TAU);
+                    let dist = rng.random_range(120.0..200.0);
+                    let spawn_pos = (
+                        target_star.x + angle.cos() * dist,
+                        target_star.y + angle.sin() * dist,
+                    );
+
+                    let next_id = s.enemy_instance.next_id();
+
+                    s.enemy_instance.spawn(next_id, et, spawn_pos);
+                    s.version += 1;
+                }
+            }
+        }
+
         payload
     }
 
-    /// Продвигает таймеры карты внимания на `dt` секунд и
-    /// пересчитывает Dmouse для всех звёзд, переданных в `stars`.
-    ///
-    /// `mouse_world` — положение мыши в мировых координатах (парсеки).
     pub fn tick_attention(&self, dt: f32, mouse_world: Option<(f32, f32)>, stars: &[ResponseStar]) {
-        self.state
-            .write()
-            .attention_map
-            .tick(dt, mouse_world, stars);
+        let mut s = self.state.write();
+        s.mouse_world = mouse_world;
+        s.attention_map.tick(dt, mouse_world, stars);
     }
 
-    /// Сбросить Tneglect для звезды — игрок навёл на неё курсор.
     pub fn look_at_star(&self, star_id: u32) {
         self.state.write().attention_map.on_player_look(star_id);
     }
 
-    /// Получить снапшот карты внимания.
     pub fn attention_snapshot(&self) -> HashMap<u32, crate::attention::AttentionEntry> {
         self.state.read().attention_map.snapshot()
+    }
+
+    // ============== Sandbox ==============
+
+    /// Spawn an enemy at the given world-space position. Used by the
+    /// testbench sandbox to insert a controllable enemy into the live
+    /// [`EnemyInstance`]. The enemy id is allocated automatically.
+    pub fn spawn_enemy(&self, et: crate::enemy::EnemyType, position: (f32, f32)) -> usize {
+        let id = {
+            let s = self.state.read();
+            s.enemy_instance.next_id()
+        };
+        {
+            let mut s = self.state.write();
+            s.enemy_instance.spawn(id, et, position);
+            s.version += 1;
+        }
+        self.notify();
+        id
+    }
+
+    /// Apply damage to the enemy with the given id. Returns `true`
+    /// when the damage killed the enemy. Used by the testbench
+    /// sandbox to let the player attack enemies by clicking.
+    pub fn damage_enemy(&self, id: usize, amount: f32) -> bool {
+        let killed = {
+            let mut s = self.state.write();
+            s.enemy_instance.damage_enemy(id, amount)
+        };
+        if killed {
+            let mut s = self.state.write();
+            s.enemy_instance.remove_dead();
+            s.version += 1;
+            drop(s);
+            self.notify();
+        }
+        killed
+    }
+
+    /// Remove every enemy whose HP has dropped to zero or below.
+    /// Returns how many were evicted. Safe to call every frame; it
+    /// only notifies when something actually changes.
+    pub fn remove_dead_enemies(&self) -> usize {
+        let removed = {
+            let mut s = self.state.write();
+            let n = s.enemy_instance.remove_dead();
+            if n > 0 {
+                s.version += 1;
+            }
+            n
+        };
+        if removed > 0 {
+            self.notify();
+        }
+        removed
+    }
+
+    /// Spawn a star into the sector cache at the chunk that contains
+    /// its world-space position. Unlike [`Game::apply_sector`], this
+    /// appends to the chunk rather than overwriting it and never
+    /// drops stars that were already there.
+    pub fn spawn_star(&self, star: ResponseStar) -> bool {
+        if validate_response_star(&star).is_err() {
+            return false;
+        }
+        let chunk = match crate::sector::chunk_at_world_point((star.x, star.y)) {
+            Some(c) => c,
+            None => return false,
+        };
+        if validate_sector_key(chunk).is_err() {
+            return false;
+        }
+        {
+            let mut s = self.state.write();
+            let entry = s.sector_cache.entry(chunk).or_default();
+            entry.retain(|st| st.id != star.id);
+            entry.push(star);
+            s.sector_loading.remove(&chunk);
+            s.version += 1;
+        }
+        self.notify();
+        true
+    }
+
+    /// Apply damage to the star with the given id, scanning every
+    /// cached sector. Returns `true` when the star was found (and
+    /// either damaged or already at 0 HP).
+    pub fn damage_star(&self, star_id: u32, amount: f32) -> bool {
+        let mut s = self.state.write();
+        let (found, changed) = s.apply_star_damage(star_id, amount);
+        if changed {
+            s.version += 1;
+            drop(s);
+            self.notify();
+        }
+        found
+    }
+
+    /// Regenerate HP on every cached star by `amount` (capped at
+    /// [`crate::enemy::STAR_MAX_HP`]). Cheap when nothing changes.
+    pub fn regen_star_hp(&self, amount: f32) {
+        let max = crate::enemy::STAR_MAX_HP;
+        let mut changed = false;
+        {
+            let mut s = self.state.write();
+            for stars in s.sector_cache.values_mut() {
+                for star in stars.iter_mut() {
+                    if star.hp > 0.0 && star.hp < max {
+                        star.hp = (star.hp + amount).min(max);
+                        changed = true;
+                    }
+                }
+            }
+            if let Some(ref mut world) = s.active_world {
+                for star in world.stars.iter_mut() {
+                    if star.hp > 0.0 && star.hp < max {
+                        star.hp = (star.hp + amount).min(max);
+                        changed = true;
+                    }
+                }
+            }
+            if changed {
+                s.version += 1;
+            }
+        }
+        if changed {
+            self.notify();
+        }
+    }
+
+    /// Wipe everything the sandbox owns: every cached sector and
+    /// every enemy in the live [`EnemyInstance`]. Camera, world
+    /// list, and other long-lived states are left alone.
+    pub fn clear_sandbox(&self) {
+        {
+            let mut s = self.state.write();
+            s.sector_cache.clear();
+            s.sector_loading.clear();
+            s.enemy_instance.clear();
+            s.selected_star = None;
+            s.version += 1;
+        }
+        self.notify();
+    }
+
+    /// Total number of enemies currently alive in the sandbox.
+    pub fn enemy_count(&self) -> usize {
+        self.state.read().enemy_instance.enemies().len()
+    }
+
+    pub fn click_projectile(&self, id: usize) -> bool {
+        let mut s = self.state.write();
+        let before = s.enemy_instance.projectiles.len();
+        s.enemy_instance.projectiles.retain(|p| p.id != id);
+        let changed = before != s.enemy_instance.projectiles.len();
+        if changed {
+            s.version += 1;
+            drop(s);
+            self.notify();
+        }
+        changed
     }
 }
 

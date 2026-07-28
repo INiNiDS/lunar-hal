@@ -10,6 +10,7 @@ use lunar_structures::{GnnResponse, PipelineResponse, ResponseStar, World, World
 
 use crate::attention::AttentionEntry;
 use crate::camera::Camera;
+use crate::enemy::{Enemy, Projectile};
 use crate::sector::SectorKey;
 
 /// Immutable view of the world as the game currently sees it.
@@ -42,9 +43,11 @@ pub struct GameSnapshot {
     pub pipeline: Option<PipelineResponse>,
     /// Per-world camera persistence entries.
     pub world_cameras: HashMap<String, crate::camera::WorldCamera>,
-    /// Карта внимания игрока: для каждой звезды — время невнимания
-    /// и расстояние до курсора мыши.
+    /// Player attention map: for each star — time since last attention
+    /// and distance to the mouse cursor.
     pub attention_map: HashMap<u32, AttentionEntry>,
+    pub enemies: Vec<Enemy>,
+    pub projectiles: Vec<Projectile>,
 }
 
 impl GameSnapshot {

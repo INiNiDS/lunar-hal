@@ -300,6 +300,7 @@ pub fn validate_response_star(star: &ResponseStar) -> ValidationResult<&Response
         ("star.radius", star.radius),
         ("star.mass", star.mass),
         ("star.luminosity", star.luminosity),
+        ("star.hp", star.hp),
     ] {
         if !is_finite(v) {
             return Err(ValidationError::NotFinite { field });
@@ -409,6 +410,7 @@ mod tests {
             radius: 1.0,
             mass: 1.0,
             luminosity: 1.0,
+            hp: 100.0,
             description: String::new(),
             name: String::new(),
             type_hint: String::new(),

@@ -6,7 +6,9 @@
 //! delta over the rolling window, drains recent actions, and prunes
 //! the buffer.
 
-use std::time::{Duration, Instant};
+use std::collections::HashMap;
+use std::time::Duration;
+use instant::Instant;
 
 use crate::attention::AttentionEntry;
 use crate::camera::Camera;
@@ -78,8 +80,8 @@ pub struct UpdatePayload {
     /// Empty when `current_sector` is `None` or the chunk hasn't
     /// been fetched yet.
     pub sector_stars: Vec<ResponseStar>,
-    /// Карта внимания игрока для текущего сектора. Ключ — star.id.
-    pub attention_map: std::collections::HashMap<u32, AttentionEntry>,
+    pub attention_map: HashMap<u32, AttentionEntry>,
+    pub session_duration: Duration,
 }
 
 /// Accumulates [`PlayerAction`]s and camera snapshots and exposes
@@ -139,14 +141,17 @@ impl ActionBuffer {
             recent_actions: self.filter_recent_actions(now, elapsed),
             current_sector: None,
             sector_stars: Vec::new(),
-            attention_map: std::collections::HashMap::new(),
+            attention_map: HashMap::new(),
+            session_duration: elapsed,
         }
     }
 
     /// Remove records and camera snapshots older than the rolling
     /// window.
     pub fn prune(&mut self) {
-        let cutoff = Instant::now() - self.window;
+        let Some(cutoff) = Instant::now().checked_sub(self.window) else {
+            return;
+        };
         self.records
             .retain(|r| r.when.map_or(true, |t| t >= cutoff));
         let first_in_window = self.camera_snapshots.iter().position(|(_, t)| *t >= cutoff);

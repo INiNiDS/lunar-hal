@@ -16,6 +16,7 @@ fn star_at(x: f32, y: f32, z: f32) -> ResponseStar {
         radius: 1.0,
         mass: 1.0,
         luminosity: 1.0,
+        hp: 100.0,
         description: String::new(),
         name: String::new(),
         type_hint: String::new(),

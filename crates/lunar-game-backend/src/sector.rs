@@ -38,6 +38,12 @@ pub const FETCH_COOLDOWN_MS: u32 = 120;
 /// re-export consistency.
 pub const MIN_FETCH_COOLDOWN_MS: u32 = FETCH_COOLDOWN_MS;
 
+/// Minimum number of objects for downstreams.
+pub const MIN_FETCH_OBJECTS: usize = 10;
+
+/// Minimum number of records for downstreams.
+pub const MIN_FETCH_RECORDS: usize = 10;
+
 pub const FIELD_HALF: i32 = 18000;
 
 /// Integer coordinate of a chunk in chunk-space.

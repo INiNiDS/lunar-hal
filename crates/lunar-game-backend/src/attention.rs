@@ -14,16 +14,6 @@ pub struct AttentionEntry {
     pub d_mouse: f32,
 }
 
-/// Карта внимания игрока — динамическая карта того, на какие
-/// планеты/звёзды игрок смотрит, а какие игнорирует.
-///
-/// Для каждой звезды хранится:
-/// - `t_neglect` — время, в течение которого игрок не смотрел на
-///   звезду / не наводил курсор.
-/// - `d_mouse` — расстояние от текущего положения мыши до звезды в
-///   мировых координатах.
-///
-/// Используется врагом (Enemy) для выбора оптимального момента атаки.
 #[derive(Clone, Debug, Default)]
 pub struct AttentionMap {
     entries: HashMap<u32, AttentionEntry>,
@@ -36,13 +26,6 @@ impl AttentionMap {
         }
     }
 
-    /// Продвигает таймеры невнимания и пересчитывает расстояния до
-    /// мыши для переданного набора звёзд.
-    ///
-    /// - `dt` — дельта времени в секундах с прошлого тика.
-    /// - `mouse_world` — положение мыши в мировых координатах
-    ///   (парсеки), либо `None` если позиция неизвестна.
-    /// - `stars` — звёзды, для которых обновляется внимание.
     pub fn tick(&mut self, dt: f32, mouse_world: Option<(f32, f32)>, stars: &[ResponseStar]) {
         for star in stars {
             let entry = self
@@ -59,16 +42,12 @@ impl AttentionMap {
         }
     }
 
-    /// Сбрасывает `t_neglect` для конкретной звезды — игрок посмотрел
-    /// на неё или навёл курсор.
     pub fn on_player_look(&mut self, star_id: u32) {
         if let Some(entry) = self.entries.get_mut(&star_id) {
             entry.t_neglect = 0.0;
         }
     }
 
-    /// Сбрасывает `t_neglect` для всех звёзд в радиусе `radius` от
-    /// позиции мыши.
     pub fn reset_nearby(&mut self, mouse_world: (f32, f32), radius: f32, stars: &[ResponseStar]) {
         let r2 = radius * radius;
         for star in stars {
@@ -84,7 +63,6 @@ impl AttentionMap {
         self.entries.get(&star_id)
     }
 
-    /// Полный снапшот для передачи во врага или в UI.
     pub fn snapshot(&self) -> HashMap<u32, AttentionEntry> {
         self.entries.clone()
     }

@@ -19,7 +19,13 @@ reqwest = { version = "0.13.4", default-features = false, features = ["json", "r
 tokio = { version = "1.52.3", features = ["sync", "rt", "macros"] }
 rand = "0.10.1"
 nah = "0.1.2"
+getrandom = {version = "0.4.3", features = ["wasm_js"]}
 
+[target.'cfg(target_family = "wasm")'.dependencies]
+instant = { version = "0.1", features = ["wasm-bindgen"] }
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+instant = "0.1"
 
 [lints]
 workspace = true

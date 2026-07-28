@@ -1,18 +1,3 @@
-//! Framework-agnostic gameplay layer.
-//!
-//! This crate owns *all* gameplay state and rules: which world is loaded,
-//! which sectors are visible, where the camera is, which star is selected,
-//! and which sectors must be fetched from the AI backend to satisfy the
-//! current viewport. Frontends (Dioxus, anything else) only render what
-//! [`Game`] exposes and forward user input back through its methods.
-//!
-//! The split is intentional:
-//!
-//! * [`lunar_backend`] (the AI server) provides physics/AI inference over HTTP.
-//! * [`lunar_game_backend`] (this crate) decides *what to ask for* and *where
-//!   things are*, persisting and exposing the resulting state.
-//! * Frontends stay swappable — swap the UI, keep the gameplay.
-
 #![forbid(unsafe_code)]
 
 pub mod actions;
@@ -29,12 +14,12 @@ pub mod validation;
 pub use actions::{ActionBuffer, ActionRecord, CameraMovement, PlayerAction, UpdatePayload};
 pub use attention::{AttentionEntry, AttentionMap};
 pub use camera::{Camera, MAX_ZOOM, MIN_ZOOM, WorldCamera, WorldCameraStore};
+pub use enemy::{Enemy, EnemyAction, EnemyDamage, EnemyType, STAR_MAX_HP, Projectile};
 pub use error::GameError;
 pub use game::{Game, GameConfig};
 pub use sector::{
     CHUNK_SIZE_PC, INNER_EXCLUSION_PC, MAX_CACHED_CHUNKS, MAX_CONCURRENT_FETCHES,
-    MIN_FETCH_COOLDOWN_MS, PX_PER_PC, SectorFetchRequest, SectorKey, chunk_at_world_point,
-    chunk_center,
+    MIN_FETCH_OBJECTS, MIN_FETCH_RECORDS, CHUNK_SIZE_PC as CHUNK_SIZE, PX_PER_PC, SectorKey, chunk_center,
 };
 pub use snapshot::GameSnapshot;
 pub use validation::{
