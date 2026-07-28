@@ -151,6 +151,7 @@ pub async fn compile_response_stars(stars: &[StarFeatures], temperature: f32) ->
                 radius: r,
                 mass: m,
                 luminosity: l,
+                hp: 100.0,
                 description: metadata.description,
                 name: metadata.designated_name,
                 type_hint: metadata.spectral_class,

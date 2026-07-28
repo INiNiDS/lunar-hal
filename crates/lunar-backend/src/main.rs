@@ -16,7 +16,7 @@ use lunar_structures::{
     PinnResponse, PipelineRequest, PipelineResponse, RandomStarRequest, RandomStarResponse,
     ResponseStar, SirenTextureRequest, SirenTextureResponse, StarDescriptionPayload, StarLore,
 };
-use lunar_utils::env::{get_url, get_worlds_dir};
+use lunar_utils::env::{get_host, get_port, get_worlds_dir};
 
 #[cfg(feature = "siren")]
 use crate::ai::{get_siren, siren_generate_texture};
@@ -229,6 +229,7 @@ async fn random_star(Json(payload): Json<RandomStarRequest>) -> Json<RandomStarR
         radius: rad,
         mass,
         luminosity: lum,
+        hp: 100.0,
         description: metadata.description,
         name: metadata.designated_name,
         type_hint: metadata.spectral_class,
@@ -286,7 +287,7 @@ async fn main() -> Result<(), anyhow::Error> {
         .layer(cors)
         .with_state(world_store);
 
-    let listener = tokio::net::TcpListener::bind(get_url()).await?;
+    let listener = tokio::net::TcpListener::bind(format!("{}:{}", get_host(), get_port())).await?;
     axum::serve(listener, app.into_make_service()).await?;
     Ok(())
 }

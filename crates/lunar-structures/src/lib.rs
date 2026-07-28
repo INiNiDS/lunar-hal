@@ -29,6 +29,10 @@ pub struct GnnRequest {
     pub temperature: f32,
 }
 
+fn default_star_hp() -> f32 {
+    100.0
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct ResponseStar {
     pub id: u32,
@@ -39,6 +43,8 @@ pub struct ResponseStar {
     pub radius: f32,
     pub mass: f32,
     pub luminosity: f32,
+    #[serde(default = "default_star_hp")]
+    pub hp: f32,
     pub description: String,
     pub name: String,
     pub type_hint: String,

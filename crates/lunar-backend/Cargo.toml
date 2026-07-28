@@ -24,4 +24,3 @@ lnai-models = { path = "../../ai/lnai-models", features = ["pinn", "gnn", "image
 lunar-structures = { path = "../lunar-structures" }
 tower-http = { version = "0.7.0", features = ["cors"] }
 lunar-utils = { path = "../lunar-utils" }
-nah = "0.1.2"
