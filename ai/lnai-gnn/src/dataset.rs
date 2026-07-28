@@ -57,7 +57,7 @@ impl StarGroup {
 }
 
 pub struct GnnDataset {
-    pub groups: Arc<Vec<StarGroup>>, // Обернуто в Arc для быстрого клонирования ссылок
+    pub groups: Arc<Vec<StarGroup>>, // Wrapped in Arc for fast reference cloning
     pub norm: GnnNormParams,
     indices: Vec<usize>,
 }

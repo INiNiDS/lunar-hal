@@ -2,7 +2,7 @@
 members = [
     "ai/lnai", "ai/lnai-models", "ai/lnai-gnn", "ai/lunar-ai-cli", "ai/lnai-siren",
     "crates/lunar-backend", "crates/lunar-frontend", "crates/lunar-site",
-    "crates/lunar-start", "crates/lunar-structures", "crates/lunar-ui-shared",
+    "crates/lunar-start", "crates/lunar-start-backend", "crates/lunar-structures", "crates/lunar-ui-shared",
     "testbench/lunar-structures-testbench",
     "testbench/lunar-testbench", "testbench/lunar-testbench-backend", "crates/lunar-utils", "crates/lunar-game-backend",
 ]
@@ -26,3 +26,15 @@ cargo = "warn"
 
 cognitive_complexity = "warn"
 type_complexity = "warn"
+
+[profile]
+
+[profile.wasm-dev]
+inherits = "dev"
+opt-level = 1
+
+[profile.server-dev]
+inherits = "dev"
+
+[profile.android-dev]
+inherits = "dev"
