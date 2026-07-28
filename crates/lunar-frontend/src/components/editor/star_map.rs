@@ -1,7 +1,8 @@
 use crate::components::editor::enemy::Enemy;
 use crate::game_state::use_game_version;
 use dioxus::prelude::*;
-use lunar_game_backend::{CHUNK_SIZE_PC, Game, PX_PER_PC, SectorKey, chunk_center};
+use lunar_game_backend::{CHUNK_SIZE_PC, Game, PX_PER_PC, SectorKey, chunk_center, Projectile};
+use lunar_game_backend::enemy::Enemy as EnemyData;
 use lunar_structures::ResponseStar;
 use std::collections::HashSet;
 
@@ -35,6 +36,15 @@ fn teff_to_rgb8(teff: f32) -> (u8, u8, u8) {
     ((r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8)
 }
 
+fn hp_color(ratio: f32) -> &'static str {
+    if ratio > 0.6 {
+        "#22c55e"
+    } else if ratio > 0.25 {
+        "#eab308"
+    } else {
+        "#ef4444"
+    }
+}
 fn render_star(
     key_prefix: &str,
     star: &ResponseStar,
@@ -49,15 +59,12 @@ fn render_star(
     let size = (star.radius * 3.0).clamp(3.0, 44.0);
     let (r, g, b) = teff_to_rgb8(star.temperature_k);
     let inner = format!("rgba({},{},{},1.0)", r, g, b);
-    let mid = format!("rgba({},{},{},0.45)", r, g, b);
-    let mid_size = size * 4.0;
+    let mid = format!("rgba({},{},{},0.4)", r, g, b);
 
     let border_style = if is_selected {
-        format!(
-            "border: 1.5px solid {inner}; box-shadow: 0 0 {size}px {inner}, 0 0 {mid_size}px {mid};"
-        )
+        format!("border: 1.5px solid {inner};")
     } else {
-        format!("box-shadow: 0 0 {size}px {inner}, 0 0 {mid_size}px {mid};")
+        String::new()
     };
 
     let delay = (star.id as f32 * 1.7).fract() * 5.0;
@@ -65,27 +72,61 @@ fn render_star(
     let on_hover = on_hover.clone();
     let star_id = star.id;
 
+    let hp_ratio = (star.hp / 100.0).clamp(0.0, 1.0);
+    let hp_c = hp_color(hp_ratio);
+
     rsx! {
         div {
-            key: "{key_prefix}-{star.id}",
-            class: "absolute rounded-full pointer-events-auto cursor-pointer",
+            key: "{key_prefix}-{star.id}-container",
+            class: "absolute pointer-events-none",
             style: "
                 left: {px}px;
                 top: {py}px;
                 width: {size}px;
                 height: {size}px;
-                background: radial-gradient(circle, {inner} 0%, rgba({r},{g},{b},0.6) 50%, transparent 100%);
                 transform: translate(-50%, -50%);
-                animation: star-twinkle 4s ease-in-out {delay}s infinite;
-                {border_style}
             ",
-            onclick: move |e| {
-                e.stop_propagation();
-                on_select.call(star_cloned.clone());
-            },
-            onmouseenter: move |_| {
-                if let Some(ref h) = on_hover {
-                    h.call(star_id);
+
+            div {
+                class: "absolute inset-0 rounded-full pointer-events-auto cursor-pointer",
+                style: "
+                    background: radial-gradient(circle, {inner} 0%, {mid} 40%, transparent 80%);
+                    animation: star-twinkle 4s ease-in-out {delay}s infinite;
+                    {border_style}
+                ",
+                onclick: move |e| {
+                    e.stop_propagation();
+                    on_select.call(star_cloned.clone());
+                },
+                onmouseenter: move |_| {
+                    if let Some(ref h) = on_hover {
+                        h.call(star_id);
+                    }
+                }
+            }
+
+            if star.hp < 100.0 {
+                div {
+                    class: "absolute pointer-events-none",
+                    style: "
+                        left: 50%;
+                        top: {size + 4.0}px;
+                        width: {size}px;
+                        height: 3px;
+                        transform: translateX(-50%);
+                        background: rgba(255,255,255,0.06);
+                        border-radius: 2px;
+                        overflow: hidden;
+                    ",
+                    div {
+                        style: "
+                            height: 100%;
+                            width: {hp_ratio * 100.0}%;
+                            background: {hp_c};
+                            border-radius: 2px;
+                            transition: width 0.3s ease;
+                        ",
+                    }
                 }
             }
         }
@@ -223,10 +264,11 @@ fn use_sync_sector_eviction(
     });
 }
 
+// Reduced background star count to lower GPU load
 fn use_starfield_backgrounds() -> (Memo<String>, Memo<String>, Memo<String>) {
-    let starfield_small = use_memo(move || starfield(0, 3000, FIELD_HALF));
-    let starfield_medium = use_memo(move || starfield(10000, 1200, FIELD_HALF));
-    let starfield_distant = use_memo(move || starfield(20000, 2000, FIELD_HALF));
+    let starfield_small = use_memo(move || starfield(0, 150, FIELD_HALF));
+    let starfield_medium = use_memo(move || starfield(10000, 75, FIELD_HALF));
+    let starfield_distant = use_memo(move || starfield(20000, 100, FIELD_HALF));
     (starfield_small, starfield_medium, starfield_distant)
 }
 
@@ -234,30 +276,15 @@ fn use_starfield_backgrounds() -> (Memo<String>, Memo<String>, Memo<String>) {
 struct InteractionState {
     last_mouse: Signal<(f32, f32)>,
     mouse_world: Signal<(f32, f32)>,
-    enemy_pos: Signal<(f32, f32)>,
-    enemy_dragging: Signal<bool>,
-    enemy_drag_mouse_start: Signal<(f32, f32)>,
-    enemy_drag_world_start: Signal<(f32, f32)>,
-    enemy_drag_moved: Signal<bool>,
 }
 
 fn use_star_map_interactions() -> InteractionState {
     let last_mouse = use_signal(|| (0.0_f32, 0.0_f32));
     let mouse_world = use_signal(|| (0.0_f32, 0.0_f32));
-    let enemy_pos = use_signal(|| (0.0_f32, 0.0_f32));
-    let enemy_dragging = use_signal(|| false);
-    let enemy_drag_mouse_start = use_signal(|| (0.0_f32, 0.0_f32));
-    let enemy_drag_world_start = use_signal(|| (0.0_f32, 0.0_f32));
-    let enemy_drag_moved = use_signal(|| false);
 
     InteractionState {
         last_mouse,
         mouse_world,
-        enemy_pos,
-        enemy_dragging,
-        enemy_drag_mouse_start,
-        enemy_drag_world_start,
-        enemy_drag_moved,
     }
 }
 
@@ -280,15 +307,19 @@ pub fn StarMap(
 
     let g_attn = game;
     let int_attn = interact.clone();
+
     use_future(move || async move {
         loop {
             delay_tick().await;
-            let g = g_attn.read();
+            let g = g_attn.read().clone();
             let snap = g.snapshot();
             let (mx, my) = (int_attn.mouse_world)();
             if !snap.sector_stars.is_empty() {
                 g.tick_attention(0.08, Some((mx, my)), &snap.sector_stars);
             }
+
+            let _payload = g.update(0.08);
+            g.remove_dead_enemies();
         }
     });
 
@@ -299,6 +330,8 @@ pub fn StarMap(
 
     let sector_stars: Vec<ResponseStar> = snap.sector_stars.clone();
     let loading: HashSet<SectorKey> = snap.sector_loading.clone();
+    let enemies: Vec<EnemyData> = snap.enemies.clone();
+    let projectiles: Vec<Projectile> = snap.projectiles.clone();
 
     let (starfield_small, starfield_medium, starfield_distant) = use_starfield_backgrounds();
 
@@ -314,6 +347,10 @@ pub fn StarMap(
     });
 
     rsx! {
+        style {
+            "@keyframes bullet-pulse {{ 0% {{ transform: scale(0.85); }} 100% {{ transform: scale(1.3); }} }}"
+        }
+
         div {
             class: "starmap-root absolute inset-0 cursor-grab active:cursor-grabbing",
             onmousedown: move |e| {
@@ -325,36 +362,33 @@ pub fn StarMap(
                 let nx = e.client_coordinates().x as f32;
                 let ny = e.client_coordinates().y as f32;
                 let vp = *viewport.read();
-                let mw = mouse_to_world(nx, ny, vp, offset, zoom, center_x, center_y);
-                interact.mouse_world.set(mw);
-                if (interact.enemy_dragging)() {
-                    let (sx, sy) = (interact.enemy_drag_mouse_start)();
-                    let dx = nx - sx;
-                    let dy = ny - sy;
-                    if dx * dx + dy * dy > 9.0 {
-                        interact.enemy_drag_moved.set(true);
-                    }
-                    let (wx0, wy0) = (interact.enemy_drag_world_start)();
-                    interact.enemy_pos.set((
-                        wx0 + dx / (zoom * PX_PER_PC),
-                        wy0 + dy / (zoom * PX_PER_PC),
-                    ));
-                } else if dragging {
+
+                if dragging {
                     let (lx, ly) = (interact.last_mouse)();
                     let g = game.read().clone();
                     g.pan_camera((nx - lx, ny - ly));
+                    interact.last_mouse.set((nx, ny));
+                }
+
+                let mw = mouse_to_world(nx, ny, vp, offset, zoom, center_x, center_y);
+                let old_mw = (interact.mouse_world)();
+
+                let dist_sq = (mw.0 - old_mw.0).powi(2) + (mw.1 - old_mw.1).powi(2);
+                if dist_sq > 4.0 {
+                    interact.mouse_world.set(mw);
+                }
+
+                if !dragging {
                     interact.last_mouse.set((nx, ny));
                 }
             },
             onmouseup: move |_| {
                 let g = game.read().clone();
                 g.set_dragging(false);
-                interact.enemy_dragging.set(false);
             },
             onmouseleave: move |_| {
                 let g = game.read().clone();
                 g.set_dragging(false);
-                interact.enemy_dragging.set(false);
             },
             onwheel: move |e| {
                 let dy = e.delta().strip_units().y;
@@ -367,30 +401,38 @@ pub fn StarMap(
             },
 
             div {
-                class: "absolute inset-0 pointer-events-none flex items-center justify-center transition-transform duration-75",
-                style: "transform: translate({offset.0}px, {offset.1}px) scale({zoom});",
+                class: "absolute inset-0 pointer-events-none flex items-center justify-center overflow-hidden",
 
                 div {
-                    class: "absolute opacity-15",
-                    style: "width: {36000}px; height: {36000}px; left: {-18000}px; top: {-18000}px; background-image: linear-gradient(rgba(255,255,255,0.1) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.1) 1px, transparent 1px); background-size: 200px 200px; background-position: center;"
-                }
-
-                div {
-                    class: "absolute bg-transparent",
-                    style: "width: 1px; height: 1px; box-shadow: {starfield_small()};"
-                }
-                div {
-                    class: "absolute bg-transparent rounded-full",
-                    style: "width: 2px; height: 2px; box-shadow: {starfield_medium()};"
-                }
-                div {
-                    class: "absolute bg-transparent",
-                    style: "width: 1px; height: 1px; box-shadow: {starfield_distant()};"
+                    class: "absolute inset-0 opacity-15",
+                    style: "
+                        background-image: linear-gradient(rgba(255,255,255,0.1) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.1) 1px, transparent 1px);
+                        background-size: {200.0 * zoom}px {200.0 * zoom}px;
+                        background-position: {offset.0}px {offset.1}px;
+                    "
                 }
 
                 div {
-                    class: "absolute w-8 h-8 border border-white/20 rounded-full flex items-center justify-center",
-                    div { class: "w-1 h-1 bg-white/40 rounded-full" }
+                    class: "absolute pointer-events-none transition-transform duration-75",
+                    style: "transform: translate({offset.0}px, {offset.1}px) scale({zoom});",
+
+                    div {
+                        class: "absolute bg-transparent",
+                        style: "width: 1px; height: 1px; box-shadow: {starfield_small()};"
+                    }
+                    div {
+                        class: "absolute bg-transparent rounded-full",
+                        style: "width: 2px; height: 2px; box-shadow: {starfield_medium()};"
+                    }
+                    div {
+                        class: "absolute bg-transparent",
+                        style: "width: 1px; height: 1px; box-shadow: {starfield_distant()};"
+                    }
+
+                    div {
+                        class: "absolute w-8 h-8 border border-white/20 rounded-full flex items-center justify-center",
+                        div { class: "w-1 h-1 bg-white/40 rounded-full" }
+                    }
                 }
             }
 
@@ -418,45 +460,59 @@ pub fn StarMap(
                     }
                 }
 
-                {
-                    let pos = (interact.enemy_pos)();
-                    let ex = (pos.0 - center_x) * PX_PER_PC;
-                    let ey = (pos.1 - center_y) * PX_PER_PC;
-                    rsx! {
-                        Enemy {
-                            x: ex as f64,
-                            y: ey as f64,
-                            on_mouse_down: move |e: MouseEvent| {
-                                e.stop_propagation();
-                                let g = game.read().clone();
-                                g.set_dragging(false);
-                                interact.enemy_dragging.set(true);
-                                interact.enemy_drag_mouse_start.set((
-                                    e.client_coordinates().x as f32,
-                                    e.client_coordinates().y as f32,
-                                ));
-                                interact.enemy_drag_world_start.set(pos);
-                                interact.enemy_drag_moved.set(false);
-                            },
-                            on_click: move |e: MouseEvent| {
-                                e.stop_propagation();
-                                if !(interact.enemy_drag_moved)() {
-                                    let (wx, wy) = (interact.enemy_pos)();
-                                    let msg = format!(
-                                        "[enemy] clicked at world ({:.2}, {:.2})",
-                                        wx, wy
-                                    );
-                                    #[cfg(feature = "web")]
-                                    {
-                                        let js = wasm_bindgen::JsValue::from(msg);
-                                        web_sys::console::log_1(&js);
-                                    }
-                                    #[cfg(not(feature = "web"))]
-                                    {
-                                        println!("{}", msg);
-                                    }
+                for enemy in enemies {
+                    {
+                        let e = enemy;
+                        let game_c = game;
+                        rsx! {
+                            Enemy {
+                                enemy: e.clone(),
+                                center_x,
+                                center_y,
+                                px_per_pc: PX_PER_PC,
+                                on_click: EventHandler::new(move |_| {
+                                    game_c.read().damage_enemy(e.id, 1.0);
+                                }),
+                            }
+                        }
+                    }
+                }
+
+                for proj in projectiles {
+                    {
+                        let p = proj;
+                        let px = (p.coordinates.0 - center_x) * PX_PER_PC;
+                        let py = (p.coordinates.1 - center_y) * PX_PER_PC;
+                        let size = (p.radius * 2.0).max(12.0);
+                        let pid = p.id;
+                        let game_c = game;
+                        rsx! {
+                            div {
+                                key: "projectile-{pid}",
+                                class: "absolute pointer-events-auto cursor-pointer flex items-center justify-center",
+                                style: "
+                                    left: {px}px;
+                                    top: {py}px;
+                                    width: {size}px;
+                                    height: {size}px;
+                                    transform: translate(-50%, -50%);
+                                    z-index: 50;
+                                ",
+                                onclick: move |e| {
+                                    e.stop_propagation();
+                                    game_c.read().click_projectile(pid);
+                                },
+                                div {
+                                    style: "
+                                        width: 100%;
+                                        height: 100%;
+                                        background-color: #f97316;
+                                        border-radius: 50%;
+                                        box-shadow: 0 0 10px #f97316, 0 0 20px #ef4444;
+                                        animation: bullet-pulse 0.3s ease-in-out infinite alternate;
+                                    ",
                                 }
-                            },
+                            }
                         }
                     }
                 }

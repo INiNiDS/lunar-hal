@@ -9,11 +9,17 @@ const ACCENT: &str = "#a78bfa";
 pub fn StarSidebar(
     selected: bool,
     selected_teff: f32,
+    star_hp: f32,
     pinn_data: Option<PinnResponse>,
     lore_data: Option<StarLore>,
     siren_texture_b64: Option<String>,
+    on_close: EventHandler<()>,
 ) -> Element {
     let _ = siren_texture_b64;
+
+    let display_hp = star_hp.min(100.0);
+    let hp_ratio = (display_hp / 100.0).clamp(0.0, 1.0);
+    let hp_color = if display_hp > 60.0 { "#22c55e" } else if display_hp > 25.0 { "#eab308" } else { "#ef4444" };
 
     rsx! {
         div {
@@ -21,13 +27,28 @@ pub fn StarSidebar(
             style: "font-family: {FONT_SANS}",
 
             div { class: "px-6 pt-6 pb-3",
-                div { class: "flex items-center gap-2",
-                    div {
-                        class: "w-1.5 h-1.5 rounded-full",
-                        style: "background: {ACCENT}; box-shadow: 0 0 6px {ACCENT}",
+                div { class: "flex items-center justify-between",
+                    div { class: "flex items-center gap-2",
+                        div {
+                            class: "w-1.5 h-1.5 rounded-full",
+                            style: "background: {ACCENT}; box-shadow: 0 0 6px {ACCENT}",
+                        }
+                        h2 { class: "text-[10px] uppercase tracking-[0.2em] text-white/40 font-medium",
+                            "Stellar Profile"
+                        }
                     }
-                    h2 { class: "text-[10px] uppercase tracking-[0.2em] text-white/40 font-medium",
-                        "Stellar Profile"
+                    button {
+                        class: "w-6 h-6 flex items-center justify-center rounded-lg text-white/30 hover:text-white/70 hover:bg-white/10 transition-colors",
+                        onclick: move |_| on_close.call(()),
+                        svg {
+                            class: "w-3.5 h-3.5",
+                            view_box: "0 0 24 24",
+                            fill: "none",
+                            stroke: "currentColor",
+                            stroke_width: "2",
+                            stroke_linecap: "round",
+                            path { d: "M18 6L6 18M6 6l12 12" }
+                        }
                     }
                 }
             }
@@ -44,6 +65,31 @@ pub fn StarSidebar(
                             class: "text-[10px] font-semibold uppercase tracking-widest px-2.5 py-1 rounded-full w-fit",
                             style: "background: {ACCENT}18; color: {ACCENT}; border: 1px solid {ACCENT}30",
                             "{lore.category}"
+                        }
+                    }
+                }
+
+                if selected {
+                    div { class: "flex flex-col gap-1.5 p-4 rounded-xl bg-white/[0.03] border border-white/[0.06]",
+                        div { class: "flex items-center justify-between mb-0.5",
+                            span { class: "text-[10px] uppercase tracking-[0.15em] text-white/40 font-medium",
+                                "Structural Integrity"
+                            }
+                            span {
+                                class: "text-[13px] font-bold tabular-nums",
+                                style: "color: {hp_color}",
+                                "{display_hp:.0} / 100"
+                            }
+                        }
+                        div { class: "w-full h-2 rounded-full overflow-hidden bg-white/5 border border-white/[0.06]",
+                            div {
+                                class: "h-full rounded-full transition-all duration-500",
+                                style: "
+                                    width: {hp_ratio * 100.0}%;
+                                    background: linear-gradient(90deg, {hp_color}cc, {hp_color});
+                                    box-shadow: 0 0 8px {hp_color}40;
+                                ",
+                            }
                         }
                     }
                 }

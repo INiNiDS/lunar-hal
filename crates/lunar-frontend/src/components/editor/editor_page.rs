@@ -15,6 +15,49 @@ use lunar_structures::{
 use std::io::Cursor;
 use tracing::warn;
 
+#[cfg(debug_assertions)]
+fn render_admin(snap: &GameSnapshot, mut admin_open: Signal<bool>) -> Element {
+    use crate::components::editor::admin_panel::AdminPanel;
+    if admin_open() {
+        rsx! {
+            AdminPanel {
+                enemies: snap.enemies.clone(),
+                projectiles: snap.projectiles.clone(),
+                sector_stars: snap.sector_stars.clone(),
+                on_close: move |_| admin_open.set(false),
+            }
+        }
+    } else {
+        rsx! {}
+    }
+}
+
+#[cfg(not(debug_assertions))]
+fn render_admin(_snap: &GameSnapshot, _admin_open: Signal<bool>) -> Element {
+    rsx! {}
+}
+
+#[cfg(all(debug_assertions, target_family = "wasm"))]
+fn use_admin_key_listener(mut admin_open: Signal<bool>) {
+    use wasm_bindgen::JsCast;
+    use wasm_bindgen::closure::Closure;
+    use_effect(move || {
+        let document = web_sys::window()
+            .and_then(|w| w.document())
+            .expect("no document");
+        let cb = Closure::new(move |e: web_sys::KeyboardEvent| {
+            if e.ctrl_key() && e.code() == "Backquote" {
+                admin_open.set(!admin_open());
+            }
+        });
+        let _ = document.add_event_listener_with_callback("keydown", cb.as_ref().unchecked_ref());
+        cb.forget();
+    });
+}
+
+#[cfg(not(all(debug_assertions, target_family = "wasm")))]
+fn use_admin_key_listener(_admin_open: Signal<bool>) {}
+
 fn build_star_lore(metadata: &StellarMetadata) -> StarLore {
     StarLore {
         designated_name: metadata.designated_name.clone(),
@@ -120,18 +163,32 @@ fn use_sync_pregen_stars(game: Signal<Game>, version: Signal<u64>) {
 }
 
 fn use_sync_star_pipeline(game: Signal<Game>, version: Signal<u64>) {
-    use_resource(move || async move {
+    let mut last_fetched_id = use_signal(|| None::<u32>);
+
+    use_effect(move || {
         let _ = version();
         let g = game.read().clone();
-        if let Some(star) = g.selected_star() {
-            if g.pipeline().is_none() {
-                if let Err(e) = g.fetch_pipeline(star).await {
-                    warn!(error = %e, "fetch_pipeline failed");
-                }
+        let selected_star = g.selected_star();
+        let selected_id = selected_star.as_ref().map(|s| s.id);
+
+        if selected_id != last_fetched_id() {
+            if selected_id.is_none() {
+                last_fetched_id.set(None);
+                return;
+            }
+
+            if let Some(star) = selected_star {
+                last_fetched_id.set(selected_id);
+                spawn(async move {
+                    if let Err(e) = g.fetch_pipeline(star).await {
+                        warn!(error = %e, "fetch_pipeline failed");
+                    }
+                });
             }
         }
     });
 }
+
 
 fn use_editor_synchronization(game: Signal<Game>, version: Signal<u64>, refresh_tick: Signal<u32>) {
     use_provide_world_camera_persistence();
@@ -152,10 +209,11 @@ async fn delete_world_action(g: Game, id: String, mut refresh_tick: Signal<u32>)
     refresh_tick.set(refresh_tick() + 1);
 }
 
-async fn load_world_action(g: Game, id: String) {
+async fn load_world_action(g: Game, id: String, mut show_picker: Signal<bool>) {
     if let Err(e) = g.load_world(&id).await {
         warn!(error = %e, "load_world failed");
     }
+    show_picker.set(false);
 }
 
 fn handle_world_creation(
@@ -214,6 +272,7 @@ fn SidebarOrScanner(
     open: Signal<bool>,
     selected: bool,
     selected_teff: f32,
+    star_hp: f32,
     pinn_data: Option<PinnResponse>,
     lore_data: Option<StarLore>,
     siren_texture_b64: Option<String>,
@@ -223,9 +282,11 @@ fn SidebarOrScanner(
             StarSidebar {
                 selected,
                 selected_teff,
+                star_hp,
                 pinn_data,
                 lore_data,
                 siren_texture_b64,
+                on_close: move |_| open.set(false),
             }
         }
     } else if game.read().active_world().is_some() {
@@ -290,11 +351,15 @@ pub fn Editor() -> Element {
     let version = use_context::<Signal<u64>>();
 
     let mut sidebar_open = use_signal(|| false);
+    #[allow(unused_mut)]
+    let mut admin_open = use_signal(|| false);
     let show_picker = use_signal(|| true);
     let mut show_creator = use_signal(|| false);
     let refresh_tick = use_signal(|| 0u32);
 
     use_editor_synchronization(game, version, refresh_tick);
+
+    use_admin_key_listener(admin_open);
 
     let snap = use_game_snapshot();
     let worlds_list = snap.worlds.clone();
@@ -313,6 +378,11 @@ pub fn Editor() -> Element {
         .as_ref()
         .map(|s| s.temperature_k)
         .unwrap_or(5778.0);
+    let star_hp = snap
+        .selected_star
+        .as_ref()
+        .map(|s| s.hp)
+        .unwrap_or(100.0);
 
     let on_select_star = move |star: ResponseStar| {
         game.read().clone().select_star(Some(star));
@@ -342,7 +412,7 @@ pub fn Editor() -> Element {
     };
 
     let on_select_world = move |id| {
-        spawn(load_world_action(game.read().clone(), id));
+        spawn(load_world_action(game.read().clone(), id, show_picker));
     };
 
     rsx! {
@@ -366,6 +436,7 @@ pub fn Editor() -> Element {
                 open: sidebar_open,
                 selected: snap.selected_star.is_some(),
                 selected_teff,
+                star_hp,
                 pinn_data,
                 lore_data,
                 siren_texture_b64,
@@ -382,6 +453,8 @@ pub fn Editor() -> Element {
                 on_cancel_create,
                 on_created_world,
             }
+
+            {render_admin(&snap, admin_open)}
         }
     }
 }

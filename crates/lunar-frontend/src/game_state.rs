@@ -47,6 +47,7 @@ pub fn use_provide_game() -> Signal<Game> {
 /// Provide a pre-configured [`Game`] instance. Useful when a host
 /// application already constructed a game and wants to inject it
 /// into the Dioxus context.
+#[allow(dead_code)]
 pub fn use_provide_game_with(initial: Game) -> Signal<Game> {
     let version = use_signal(|| 0u64);
     let game = use_signal(|| initial);
@@ -158,6 +159,7 @@ pub fn use_pipeline_snapshot() -> Option<lunar_structures::PipelineResponse> {
 /// Fetch the pipeline for the currently selected star, if any. The
 /// actual work is done inside the game layer; this is a thin helper
 /// for components that want to fire-and-forget.
+#[allow(dead_code)]
 pub fn fetch_pipeline_for_selected(game: &Game) {
     if let Some(star) = game.selected_star() {
         let game = game.clone();

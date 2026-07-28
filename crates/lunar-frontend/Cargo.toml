@@ -42,7 +42,3 @@ default = ["desktop"]
 web = ["dioxus/web", "dioxus/document", "lunar-ui-shared/web"]
 desktop = ["dioxus/desktop", "lunar-ui-shared/desktop"]
 mobile = ["dioxus/mobile"]
-
-
-[profile.release]
-debug = false
