@@ -3,6 +3,7 @@ pub mod dashboard;
 pub mod datasets;
 pub mod models;
 pub mod pipeline;
+pub mod sandbox;
 pub mod siren_gallery;
 pub mod training;
 pub mod validation;

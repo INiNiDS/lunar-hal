@@ -1,0 +1,25 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * This file is compiled to assets/tailwind.css via `npm run build:css`
+ * (or `npm run watch:css` during development). See package.json.
+ *
+ * assets/main.css remains for things Tailwind's utility model doesn't cover
+ * well: complex light-cone gradients, custom scrollbars, and legacy
+ * classic-admin-UI styles used by pages not yet migrated to the WebOS shell.
+ */
+
+@media (prefers-reduced-motion: reduce) {
+  .lamp-beam,
+  .animate-lamp-ignite,
+  .animate-rack-reveal,
+  .animate-led-pulse,
+  .animate-dock-app-reveal,
+  .animate-window-open,
+  .animate-pulse {
+    animation: none !important;
+    transition: none !important;
+  }
+}

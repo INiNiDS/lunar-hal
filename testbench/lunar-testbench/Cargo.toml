@@ -16,14 +16,16 @@ web = ["dioxus/web"]
 desktop = ["dioxus/desktop"]
 
 [dependencies]
-dioxus = { version = "0.7.1", features = ["web", "router"] }
+dioxus = { version = "0.7.1", features = ["web"] }
 lunar-structures = { path = "../../crates/lunar-structures" }
 lunar-structures-testbench = { path = "../lunar-structures-testbench" }
+lunar-game-backend = { path = "../../crates/lunar-game-backend" }
 lunar-ui-shared = { path = "../../crates/lunar-ui-shared" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-gloo-net = { version = "0.7.0", features = ["http"] }
+gloo-net = { version = "0.7.0", features = ["http", "eventsource"] }
 gloo-timers = { version = "0.4.0", features = ["futures"] }
+futures-util = "0.3"
 chrono = { version = "0.4", features = ["serde"] }
 lunar-utils = { path = "../../crates/lunar-utils" }
 wasm-bindgen = "0.2"

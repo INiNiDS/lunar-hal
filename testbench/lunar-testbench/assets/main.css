@@ -595,6 +595,170 @@ table.tbl {
 
 @keyframes spin { to { transform: rotate(360deg); } }
 
+@keyframes star-twinkle {
+    0%, 100% { filter: brightness(0.8); transform: translate(-50%, -50%) scale(0.95); }
+    50% { filter: brightness(1.4); transform: translate(-50%, -50%) scale(1.1); }
+}
+
+@keyframes chunk-pulse {
+    0%, 100% { opacity: 0.15; border-color: rgba(120, 180, 255, 0.25); }
+    50% { opacity: 0.55; border-color: rgba(180, 220, 255, 0.6); }
+}
+
+@keyframes sandbox-star-pulse {
+    0%, 100% { opacity: 0.55; transform: translate(-50%, -50%) scale(0.9); }
+    50% { opacity: 1; transform: translate(-50%, -50%) scale(1.15); }
+}
+
+.sandbox-root {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    min-height: 100vh;
+    overflow: hidden;
+    background: #050510;
+    cursor: grab;
+    user-select: none;
+}
+.sandbox-root:active { cursor: grabbing; }
+
+.sandbox-star {
+    position: absolute;
+    border-radius: 50%;
+    pointer-events: auto;
+    cursor: pointer;
+    animation: star-twinkle 4s ease-in-out infinite;
+}
+
+.sandbox-enemy-wrap {
+    position: absolute;
+    pointer-events: auto;
+    cursor: crosshair;
+    transition: opacity 0.3s;
+}
+
+.sandbox-grid {
+    position: absolute;
+    opacity: 0.15;
+    pointer-events: none;
+    background-image:
+        linear-gradient(rgba(255,255,255,0.10) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,0.10) 1px, transparent 1px);
+    background-size: 200px 200px;
+    background-position: center;
+}
+
+.sandbox-center-cross {
+    position: absolute;
+    width: 32px;
+    height: 32px;
+    border: 1px solid rgba(255,255,255,0.2);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+}
+.sandbox-center-cross::after {
+    content: "";
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.4);
+}
+
+.sandbox-panel {
+    background: rgba(8, 10, 20, 0.92);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 12px;
+    color: #fff;
+    font-family: var(--mono);
+    font-size: 11px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+
+.sandbox-section-title {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.10em;
+    color: rgba(255, 255, 255, 0.4);
+    margin-bottom: 6px;
+}
+
+.sandbox-divider {
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+    margin: 10px 0;
+}
+
+.sandbox-chip {
+    padding: 4px 10px;
+    border-radius: 6px;
+    border: 1px solid;
+    cursor: pointer;
+    font-size: 10px;
+    font-family: var(--mono);
+    transition: background 0.15s, border-color 0.15s, transform 0.1s;
+}
+.sandbox-chip:hover { transform: translateY(-1px); }
+.sandbox-chip:active { transform: translateY(0); }
+
+.sandbox-stat-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 3px;
+}
+.sandbox-stat-key {
+    color: rgba(255, 255, 255, 0.4);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
+.sandbox-stat-val { color: rgba(255, 255, 255, 0.85); }
+
+.sandbox-hp-bar {
+    height: 4px;
+    border-radius: 2px;
+    background: rgba(255, 255, 255, 0.06);
+    overflow: hidden;
+    flex: 1;
+}
+.sandbox-hp-fill {
+    height: 100%;
+    border-radius: 2px;
+    transition: width 0.25s ease;
+}
+
+.sandbox-input {
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 5px;
+    padding: 5px 8px;
+    color: #fff;
+    font-family: var(--mono);
+    font-size: 11px;
+    outline: none;
+    width: 100%;
+    transition: border-color 0.15s, background 0.15s;
+}
+.sandbox-input:focus {
+    border-color: var(--accent);
+    background: rgba(110, 168, 255, 0.08);
+}
+.sandbox-input::placeholder { color: rgba(255, 255, 255, 0.25); }
+
+.sandbox-field-label {
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: rgba(255, 255, 255, 0.4);
+    font-weight: 600;
+    margin-bottom: 3px;
+    display: block;
+}
+
 .status-banner {
     display: flex;
     align-items: center;

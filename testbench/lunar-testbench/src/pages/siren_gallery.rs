@@ -56,7 +56,7 @@ pub fn SirenGallery() -> Element {
 
     rsx! {
         div { class: "page",
-            // PageHeader перенесён внутрь контейнера ".page" для ровного центрирования с сеткой
+            // PageHeader moved inside the ".page" container for even centering with the grid
             PageHeader {
                 title: "SIREN Gallery".to_string(),
                 subtitle: "Render stellar surface textures via the SIREN network. Tweak Bp-Rp, M_G, and effective temperature to explore the latent space.".to_string(),
