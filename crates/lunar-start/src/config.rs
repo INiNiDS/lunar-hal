@@ -255,8 +255,9 @@ pub mod presets {
                 .with_service(ServiceConfig::testbench())
         }
 
-        /// Full WebOS preset: every backend service the `lunar-testbench` WebOS shell
-        /// can drive apps against, plus the shell itself and the public frontend.
+        /// Full WebOS preset: services the already-running `lunar-testbench`
+        /// WebOS shell can control. The shell itself is intentionally excluded
+        /// so it cannot start, stop, or restart its own hosting process.
         ///
         /// NOTE: `lunar-game-backend` (`crates/lunar-game-backend`) is a library-only
         /// crate with no standalone binary target today — it's consumed in-process by
@@ -266,7 +267,6 @@ pub mod presets {
             Self::new(workspace_root())
                 .with_service(ServiceConfig::backend())
                 .with_service(ServiceConfig::testbench_backend())
-                .with_service(ServiceConfig::testbench())
                 .with_service(ServiceConfig::frontend())
         }
 

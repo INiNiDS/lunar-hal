@@ -24,9 +24,9 @@ pub fn Window(win: WindowState) -> Element {
     let app_id = win.app_id.clone();
     let icon_id = win.app_id.clone();
     let radius = if win.maximized {
-        "absolute glass-strong flex flex-col overflow-hidden animate-window-open"
+        "absolute pointer-events-auto glass-strong flex flex-col overflow-hidden animate-window-open"
     } else {
-        "absolute glass-strong rounded-xl flex flex-col overflow-hidden animate-window-open"
+        "absolute pointer-events-auto glass-strong rounded-xl flex flex-col overflow-hidden animate-window-open"
     };
 
     rsx! {

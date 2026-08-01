@@ -42,16 +42,6 @@ pub fn all() -> Vec<ServiceMeta> {
             depends_on: &[],
         },
         ServiceMeta {
-            name: "testbench",
-            title: "Testbench (WebOS shell)",
-            icon: "\u{1f5a5}\u{fe0f}",
-            description: "The Dioxus web shell hosting all testbench apps (this app itself).",
-            kind: "dx-serve",
-            url: None,
-            provides: &["sandbox"],
-            depends_on: &[],
-        },
-        ServiceMeta {
             name: "frontend",
             title: "Frontend",
             icon: "\u{1f30c}",

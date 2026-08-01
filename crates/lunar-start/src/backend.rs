@@ -157,13 +157,22 @@ impl LogBackend {
 
     /// Spawns and starts all configured services.
     pub async fn start_all(&mut self) {
+        eprintln!(
+            "[lns] Starting {} service(s) from {}",
+            self.services.len(),
+            self.workspace.display()
+        );
+
         for i in 0..self.services.len() {
+            let name = self.services[i].config.name.clone();
+            let kind = self.services[i].config.kind.clone();
+            eprintln!("[lns] [{name}] starting {}", service_command(&kind));
+
             self.services[i].status = ServiceStatus::Starting;
-            let result = self.spawn_service_by_index(i).await;
-            if let Err(e) = result {
-                self.services[i].status = ServiceStatus::Failed {
-                    reason: format!("Failed to spawn: {e}"),
-                };
+            if let Err(e) = self.spawn_service_by_index(i).await {
+                let reason = format!("Failed to spawn: {e:#}");
+                eprintln!("[lns] [{name}] ERROR: {reason}");
+                self.services[i].status = ServiceStatus::Failed { reason };
             }
         }
     }
@@ -193,8 +202,10 @@ impl LogBackend {
     /// Stops a active service by name.
     pub async fn stop(&mut self, name: &str) {
         if let Some(mut child) = self.children.remove(name) {
+            eprintln!("[lns] [{name}] stopping");
             let _ = child.kill().await;
             let _ = child.wait().await;
+            eprintln!("[lns] [{name}] stopped");
         }
         if let Some(s) = self.services.iter_mut().find(|s| s.config.name == name) {
             s.status = ServiceStatus::Stopped {
@@ -241,6 +252,7 @@ impl LogBackend {
             }
         }
         for (name, status) in exited {
+            eprintln!("[lns] [{name}] {status:?}");
             self.children.remove(&name);
             if let Some(s) = self.services.iter_mut().find(|s| s.config.name == name) {
                 s.status = status;
@@ -310,6 +322,10 @@ impl LogBackend {
         let pid = child.id();
         self.services[idx].status = ServiceStatus::Running;
         self.services[idx].pid = pid;
+        match pid {
+            Some(pid) => eprintln!("[lns] [{name}] started (pid {pid})"),
+            None => eprintln!("[lns] [{name}] started"),
+        }
 
         // Spawn background tasks to stream stdout and stderr concurrently
         if let Some(stdout) = child.stdout.take() {
@@ -337,6 +353,25 @@ impl LogBackend {
 }
 
 // ── Spawn functions ──────────────────────────────────────────────────────────
+
+/// Human-readable command summary used in launcher diagnostics.
+fn service_command(kind: &ServiceKind) -> String {
+    match kind {
+        ServiceKind::Binary { bin_name } => format!("target/release/{bin_name}"),
+        ServiceKind::DxServe {
+            crate_name,
+            default_port,
+            ..
+        } => format!("dx serve ({crate_name}, port {default_port})"),
+        ServiceKind::CargoRun {
+            bin_name,
+            cargo_args,
+        } => {
+            let args = cargo_args.join(" ");
+            format!("cargo run --bin {bin_name} {args}").trim().to_string()
+        }
+    }
+}
 
 /// Spawns a precompiled release binary located at `target/release/<name>`.
 fn spawn_binary(ws: &Path, name: &str, extra_args: &[String]) -> Result<Child> {

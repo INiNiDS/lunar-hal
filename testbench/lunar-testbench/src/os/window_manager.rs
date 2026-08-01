@@ -12,7 +12,7 @@ pub fn WindowManager() -> Element {
     let dragging = os.drag.read().is_some();
 
     rsx! {
-        div { class: "absolute inset-0 z-30",
+        div { class: "absolute inset-0 z-30 pointer-events-none",
             for win in windows.into_iter() {
                 Window { key: "{win.id}", win }
             }
