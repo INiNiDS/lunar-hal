@@ -21,10 +21,7 @@ use tokio::sync::mpsc;
 use crate::ansi::clean_line;
 use crate::config::{LauncherConfig, ServiceConfig, ServiceKind};
 
-// ── LogLevel ─────────────────────────────────────────────────────────────────
-
-/// Coarse severity classification for a [`LogEvent`], derived from its text
-/// content (and, as a fallback, whether it arrived on stderr).
+/// Coarse severity classification for a [`LogEvent`], derived from its text content.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum LogLevel {
@@ -33,18 +30,24 @@ pub enum LogLevel {
     Error,
 }
 
+/// Case-insensitive substring check without heap allocation.
+fn contains_ignore_case(haystack: &str, needle: &str) -> bool {
+    haystack.as_bytes().windows(needle.len()).any(|window| {
+        window
+            .iter()
+            .zip(needle.bytes())
+            .all(|(&a, b)| a.eq_ignore_ascii_case(&b))
+    })
+}
+
 /// Classifies a single cleaned log line into a [`LogLevel`].
-///
-/// Looks for common `ERROR`/`WARN`/panic markers (case-insensitive). Lines
-/// from stderr that don't otherwise match are treated as `Warn` rather than
-/// `Info`, since stderr output is usually noteworthy.
 fn classify_level(text: &str, is_stderr: bool) -> LogLevel {
-    let lower = text.to_ascii_lowercase();
-    if lower.contains("error") || lower.contains("panicked at") || lower.contains("fatal") {
+    if contains_ignore_case(text, "error")
+        || contains_ignore_case(text, "panicked at")
+        || contains_ignore_case(text, "fatal")
+    {
         LogLevel::Error
-    } else if lower.contains("warn") {
-        LogLevel::Warn
-    } else if is_stderr {
+    } else if contains_ignore_case(text, "warn") || is_stderr {
         LogLevel::Warn
     } else {
         LogLevel::Info
@@ -56,7 +59,7 @@ fn classify_level(text: &str, is_stderr: bool) -> LogLevel {
 /// A single log entry produced by a service and emitted by the backend.
 #[derive(Clone, Debug, Serialize)]
 pub struct LogEvent {
-    /// Formatted elapsed time since backend launch (MM:SS).
+    /// Formatted elapsed time since backend launch (MM:SS or HH:MM:SS).
     pub timestamp: String,
     /// Identifier name of the originating service.
     pub service: String,
@@ -71,9 +74,6 @@ pub struct LogEvent {
 // ── ServiceStatus ────────────────────────────────────────────────────────────
 
 /// Represents the runtime execution state of a service.
-///
-/// Serializes as a tagged object, e.g. `{ "kind": "stopped", "reason": "Pending" }`,
-/// rather than relying on `format!("{:?}", status)` (which is fragile for consumers).
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum ServiceStatus {
@@ -83,8 +83,6 @@ pub enum ServiceStatus {
     Failed { reason: String },
 }
 
-// ── ServiceRuntime ───────────────────────────────────────────────────────────
-
 /// Active runtime state of a service, tracking configuration, execution status, and process ID.
 #[derive(Clone, Debug)]
 pub struct ServiceRuntime {
@@ -93,18 +91,14 @@ pub struct ServiceRuntime {
     pub pid: Option<u32>,
 }
 
-// ── LogBackend ───────────────────────────────────────────────────────────────
 
 /// Log processing and execution management engine.
-///
-/// Constructed using a [`LauncherConfig`] and a channel for emitting [`LogEvent`] instances.
-/// The backend manages process lifecycle, stream interception, status polling,
-/// and log translation.
 pub struct LogBackend {
     workspace: PathBuf,
     watch: bool,
     build_release: bool,
     global_args: Vec<String>,
+    global_env: HashMap<String, String>,
     services: Vec<ServiceRuntime>,
     children: HashMap<String, Child>,
     log_tx: mpsc::Sender<LogEvent>,
@@ -118,6 +112,7 @@ impl LogBackend {
             watch: config.watch,
             build_release: config.build_release,
             global_args: config.global_args.clone(),
+            global_env: config.env.clone(),
             services: config
                 .services
                 .iter()
@@ -141,6 +136,27 @@ impl LogBackend {
 
     pub fn services(&self) -> &[ServiceRuntime] {
         &self.services
+    }
+
+    pub fn service(&self, name: &str) -> Option<&ServiceRuntime> {
+        self.services.iter().find(|service| service.config.name == name)
+    }
+
+    /// Replaces the configuration of a service that has no active process.
+    pub fn replace_service_config(&mut self, config: ServiceConfig) -> Result<()> {
+        if self.is_running(&config.name) {
+            anyhow::bail!("service '{}' is running", config.name);
+        }
+        let runtime = self
+            .services
+            .iter_mut()
+            .find(|service| service.config.name == config.name)
+            .with_context(|| format!("unknown service '{}'", config.name))?;
+        if matches!(runtime.status, ServiceStatus::Starting | ServiceStatus::Running) {
+            anyhow::bail!("service '{}' is not stopped", config.name);
+        }
+        runtime.config = config;
+        Ok(())
     }
 
     pub fn is_running(&self, name: &str) -> bool {
@@ -193,13 +209,13 @@ impl LogBackend {
             self.services[idx].pid = None;
             if let Err(e) = self.spawn_service_by_index(idx).await {
                 self.services[idx].status = ServiceStatus::Failed {
-                    reason: format!("Failed to restart: {e}"),
+                    reason: format!("Failed to restart: {e:#}"),
                 };
             }
         }
     }
 
-    /// Stops a active service by name.
+    /// Stops an active service by name.
     pub async fn stop(&mut self, name: &str) {
         if let Some(mut child) = self.children.remove(name) {
             eprintln!("[lns] [{name}] stopping");
@@ -221,7 +237,7 @@ impl LogBackend {
             self.services[idx].status = ServiceStatus::Starting;
             if let Err(e) = self.spawn_service_by_index(idx).await {
                 self.services[idx].status = ServiceStatus::Failed {
-                    reason: format!("Failed to spawn: {e}"),
+                    reason: format!("Failed to spawn: {e:#}"),
                 };
             }
         }
@@ -236,7 +252,7 @@ impl LogBackend {
                     exited.push((
                         name.clone(),
                         ServiceStatus::Stopped {
-                            reason: format!("Exited with code: {status}"),
+                            reason: format!("Exited: {status}"),
                         },
                     ));
                 }
@@ -252,7 +268,7 @@ impl LogBackend {
             }
         }
         for (name, status) in exited {
-            eprintln!("[lns] [{name}] {status:?}");
+            eprintln!("[lns] [{name}] status update: {status:?}");
             self.children.remove(&name);
             if let Some(s) = self.services.iter_mut().find(|s| s.config.name == name) {
                 s.status = status;
@@ -261,13 +277,18 @@ impl LogBackend {
         }
     }
 
-    // ── Spawn logic ──────────────────────────────────────────────────────────
-
     async fn spawn_service_by_index(&mut self, idx: usize) -> Result<()> {
         let name = self.services[idx].config.name.clone();
+
+        // Clean up pre-existing child process if still registered
+        if self.children.contains_key(&name) {
+            self.stop(&name).await;
+        }
+
         let kind = self.services[idx].config.kind.clone();
         let extra_args = self.services[idx].config.extra_args.clone();
         let build_args = self.services[idx].config.build_args.clone();
+        let env = self.services[idx].config.effective_env(&self.global_env);
 
         let mut combined_args = extra_args;
         combined_args.extend(self.global_args.iter().cloned());
@@ -283,6 +304,7 @@ impl LogBackend {
                 crate_subdir,
                 default_port,
                 &combined_args,
+                &env,
             )?,
 
             ServiceKind::Binary { bin_name } => {
@@ -294,9 +316,10 @@ impl LogBackend {
                         &[],
                         &build_args,
                         &combined_args,
+                        &env,
                     )?
                 } else {
-                    spawn_binary(&self.workspace, bin_name, &combined_args)?
+                    spawn_binary(&self.workspace, bin_name, &combined_args, &env)?
                 }
             }
 
@@ -312,9 +335,17 @@ impl LogBackend {
                         cargo_args,
                         &build_args,
                         &combined_args,
+                        &env,
                     )?
                 } else {
-                    spawn_binary(&self.workspace, bin_name, &combined_args)?
+                    spawn_cargo_run(
+                        &self.workspace,
+                        bin_name,
+                        cargo_args,
+                        &build_args,
+                        &combined_args,
+                        &env,
+                    )?
                 }
             }
         };
@@ -352,8 +383,6 @@ impl LogBackend {
     }
 }
 
-// ── Spawn functions ──────────────────────────────────────────────────────────
-
 /// Human-readable command summary used in launcher diagnostics.
 fn service_command(kind: &ServiceKind) -> String {
     match kind {
@@ -373,29 +402,88 @@ fn service_command(kind: &ServiceKind) -> String {
     }
 }
 
-/// Spawns a precompiled release binary located at `target/release/<name>`.
-fn spawn_binary(ws: &Path, name: &str, extra_args: &[String]) -> Result<Child> {
+/// Builds command for executing a precompiled release binary located at `target/release/<name>`.
+pub fn build_binary_cmd(
+    ws: &Path,
+    name: &str,
+    extra_args: &[String],
+    env: &HashMap<String, String>,
+) -> tokio::process::Command {
     let bin = ws.join("target").join("release").join(name);
     let mut cmd = tokio::process::Command::new(&bin);
     cmd.args(extra_args)
+        .envs(env)
         .current_dir(ws)
         .kill_on_drop(true)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-
-    cmd.spawn()
-        .with_context(|| format!("failed to spawn {name}"))
+    cmd
 }
 
-/// Spawns `cargo watch -- cargo run --bin <name>`.
-fn spawn_cargo_watch(
+/// Spawns a precompiled release binary.
+fn spawn_binary(
+    ws: &Path,
+    name: &str,
+    extra_args: &[String],
+    env: &HashMap<String, String>,
+) -> Result<Child> {
+    build_binary_cmd(ws, name, extra_args, env)
+        .spawn()
+        .with_context(|| format!("failed to spawn binary at target/release/{name}"))
+}
+
+/// Builds command for `cargo run --bin <name> <cargo_args> -- <extra_args>`.
+pub fn build_cargo_run_cmd(
+    ws: &Path,
+    bin_name: &str,
+    cargo_args: &[String],
+    build_args: &[String],
+    extra_args: &[String],
+    env: &HashMap<String, String>,
+) -> tokio::process::Command {
+    let mut args = vec!["run".to_string(), "--bin".to_string(), bin_name.to_string()];
+    args.extend(build_args.iter().cloned());
+    args.extend(cargo_args.iter().cloned());
+
+    if !extra_args.is_empty() {
+        args.push("--".to_string());
+        args.extend(extra_args.iter().cloned());
+    }
+
+    let mut cmd = tokio::process::Command::new("cargo");
+    cmd.args(&args)
+        .envs(env)
+        .current_dir(ws)
+        .kill_on_drop(true)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    cmd
+}
+
+/// Spawns `cargo run`.
+fn spawn_cargo_run(
+    ws: &Path,
+    bin_name: &str,
+    cargo_args: &[String],
+    build_args: &[String],
+    extra_args: &[String],
+    env: &HashMap<String, String>,
+) -> Result<Child> {
+    build_cargo_run_cmd(ws, bin_name, cargo_args, build_args, extra_args, env)
+        .spawn()
+        .with_context(|| format!("failed to spawn `cargo run --bin {bin_name}`"))
+}
+
+/// Builds command for `cargo watch -- cargo run --bin <name>`.
+pub fn build_cargo_watch_cmd(
     ws: &Path,
     bin_name: &str,
     use_release: bool,
     cargo_run_args: &[String],
     build_args: &[String],
     extra_args: &[String],
-) -> Result<Child> {
+    env: &HashMap<String, String>,
+) -> tokio::process::Command {
     let mut args = vec![
         "watch".to_string(),
         "--".to_string(),
@@ -418,27 +506,55 @@ fn spawn_cargo_watch(
 
     let mut cmd = tokio::process::Command::new("cargo");
     cmd.args(&args)
+        .envs(env)
         .current_dir(ws)
         .kill_on_drop(true)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-
-    cmd.spawn().context("failed to spawn `cargo watch`")
+    cmd
 }
 
-/// Spawns `dx serve` inside the targeted crate directory.
-fn spawn_dx_serve(
+/// Spawns `cargo watch`.
+fn spawn_cargo_watch(
+    ws: &Path,
+    bin_name: &str,
+    use_release: bool,
+    cargo_run_args: &[String],
+    build_args: &[String],
+    extra_args: &[String],
+    env: &HashMap<String, String>,
+) -> Result<Child> {
+    build_cargo_watch_cmd(
+        ws,
+        bin_name,
+        use_release,
+        cargo_run_args,
+        build_args,
+        extra_args,
+        env,
+    )
+    .spawn()
+    .context("failed to spawn `cargo watch`")
+}
+
+/// Builds command for `dx serve` inside targeted crate directory.
+pub fn build_dx_serve_cmd(
     ws: &Path,
     crate_name: &str,
     crate_subdir: &str,
     default_port: &str,
     extra_args: &[String],
-) -> Result<Child> {
+    env: &HashMap<String, String>,
+) -> tokio::process::Command {
     let user_port = extra_args.iter().any(|a| a == "--port" || a == "-p");
-    let dx_bin = std::env::var("LUNAR_DX_BIN").unwrap_or_else(|_| "dx".to_string());
+    let dx_bin = env
+        .get("LUNAR_DX_BIN")
+        .map(String::as_str)
+        .unwrap_or("dx");
 
-    let mut cmd = tokio::process::Command::new(&dx_bin);
+    let mut cmd = tokio::process::Command::new(dx_bin);
     cmd.arg("serve")
+        .envs(env)
         .current_dir(ws.join(crate_subdir).join(crate_name))
         .kill_on_drop(true)
         .stdout(Stdio::piped())
@@ -448,13 +564,31 @@ fn spawn_dx_serve(
         cmd.args(["--port", default_port]);
     }
     cmd.args(extra_args);
+    cmd
+}
 
-    cmd.spawn().with_context(|| {
-        format!(
-            "failed to run `{dx_bin} serve`. \
-             Check if dioxus-cli is installed or set LUNAR_DX_BIN."
-        )
-    })
+/// Spawns `dx serve`.
+fn spawn_dx_serve(
+    ws: &Path,
+    crate_name: &str,
+    crate_subdir: &str,
+    default_port: &str,
+    extra_args: &[String],
+    env: &HashMap<String, String>,
+) -> Result<Child> {
+    let dx_bin = env
+        .get("LUNAR_DX_BIN")
+        .map(String::as_str)
+        .unwrap_or("dx")
+        .to_string();
+    build_dx_serve_cmd(ws, crate_name, crate_subdir, default_port, extra_args, env)
+        .spawn()
+        .with_context(|| {
+            format!(
+                "failed to run `{dx_bin} serve`. \
+                 Check if dioxus-cli is installed or set LUNAR_DX_BIN."
+            )
+        })
 }
 
 /// Asynchronously streams line-buffered output from a reader and dispatches formatted `LogEvent` items over `mpsc`.
@@ -478,18 +612,30 @@ fn read_output<R>(
                     if text.is_empty() {
                         continue;
                     }
-                    let elapsed = start_time.elapsed().as_secs();
-                    let timestamp = format!("{:02}:{:02}", elapsed / 60, elapsed % 60);
+
+                    let total_secs = start_time.elapsed().as_secs();
+                    let hours = total_secs / 3600;
+                    let minutes = (total_secs % 3600) / 60;
+                    let seconds = total_secs % 60;
+
+                    let timestamp = if hours > 0 {
+                        format!("{hours:02}:{minutes:02}:{seconds:02}")
+                    } else {
+                        format!("{minutes:02}:{seconds:02}")
+                    };
+
                     let level = classify_level(&text, is_stderr);
-                    let _ = tx
-                        .send(LogEvent {
-                            timestamp,
-                            service: service_name.clone(),
-                            text,
-                            is_stderr,
-                            level,
-                        })
-                        .await;
+                    let event = LogEvent {
+                        timestamp,
+                        service: service_name.clone(),
+                        text,
+                        is_stderr,
+                        level,
+                    };
+
+                    if tx.send(event).await.is_err() {
+                        break;
+                    }
                 }
                 Err(_) => break,
             }
@@ -497,20 +643,145 @@ fn read_output<R>(
     });
 }
 
-// ── Build ────────────────────────────────────────────────────────────────────
-
-/// Synchronously triggers a workspace-wide `cargo build --release` command.
-pub fn cargo_build(ws: &Path, build_args: &[String]) -> Result<()> {
-    let mut cmd = std::process::Command::new("cargo");
+/// Asynchronously triggers a workspace-wide `cargo build --release` command.
+pub async fn cargo_build(ws: &Path, build_args: &[String]) -> Result<()> {
+    let mut cmd = tokio::process::Command::new("cargo");
     cmd.args(["build", "--release"]);
     cmd.args(build_args);
     cmd.current_dir(ws)
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit());
 
-    let status = cmd.status().context("failed to run cargo build")?;
+    let status = cmd
+        .status()
+        .await
+        .context("failed to run cargo build")?;
+
     if !status.success() {
         anyhow::bail!("cargo build failed with status: {status}");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn extract_envs(cmd: &tokio::process::Command) -> HashMap<String, String> {
+        cmd.as_std()
+            .get_envs()
+            .filter_map(|(k, v)| {
+                let key = k.to_str()?.to_string();
+                let val = v?.to_str()?.to_string();
+                Some((key, val))
+            })
+            .collect()
+    }
+
+    fn extract_args(cmd: &tokio::process::Command) -> Vec<String> {
+        cmd.as_std()
+            .get_args()
+            .map(|a| a.to_str().unwrap().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn test_build_binary_cmd_applies_service_env_only() {
+        let ws = Path::new("/workspace");
+        let mut env = HashMap::new();
+        env.insert("PORT".to_string(), "8080".to_string());
+        env.insert("SERVICE_NAME".to_string(), "backend".to_string());
+
+        let extra_args = vec!["--port".to_string(), "8080".to_string()];
+        let cmd = build_binary_cmd(ws, "backend", &extra_args, &env);
+
+        let env_map = extract_envs(&cmd);
+        assert_eq!(env_map.get("PORT"), Some(&"8080".to_string()));
+        assert_eq!(env_map.get("SERVICE_NAME"), Some(&"backend".to_string()));
+        assert_eq!(env_map.get("FRONTEND_VAR"), None);
+
+        let args = extract_args(&cmd);
+        assert_eq!(args, vec!["--port", "8080"]);
+    }
+
+    #[test]
+    fn test_build_dx_serve_cmd_applies_service_env_and_ports() {
+        let ws = Path::new("/workspace");
+        let mut env = HashMap::new();
+        env.insert("LUNAR_API_URL".to_string(), "http://localhost:8080".to_string());
+        env.insert("LUNAR_DX_BIN".to_string(), "/opt/dioxus/dx".to_string());
+
+        let extra_args = vec!["--platform".to_string(), "web".to_string()];
+        let cmd = build_dx_serve_cmd(ws, "app", "frontend", "3000", &extra_args, &env);
+
+        assert_eq!(cmd.as_std().get_program(), "/opt/dioxus/dx");
+        let env_map = extract_envs(&cmd);
+        assert_eq!(
+            env_map.get("LUNAR_API_URL"),
+            Some(&"http://localhost:8080".to_string())
+        );
+        assert_eq!(env_map.get("PORT"), None);
+
+        let args = extract_args(&cmd);
+        assert_eq!(args, vec!["serve", "--port", "3000", "--platform", "web"]);
+    }
+
+    #[test]
+    fn test_build_cargo_watch_cmd_applies_env_and_extra_args() {
+        let ws = Path::new("/workspace");
+        let mut env = HashMap::new();
+        env.insert("RUST_LOG".to_string(), "debug".to_string());
+
+        let cargo_run_args = vec!["--features".to_string(), "mock".to_string()];
+        let build_args = vec!["--offline".to_string()];
+        let extra_args = vec!["--verbose".to_string()];
+
+        let cmd = build_cargo_watch_cmd(
+            ws,
+            "testbench",
+            true,
+            &cargo_run_args,
+            &build_args,
+            &extra_args,
+            &env,
+        );
+
+        let env_map = extract_envs(&cmd);
+        assert_eq!(env_map.get("RUST_LOG"), Some(&"debug".to_string()));
+
+        let args = extract_args(&cmd);
+        assert_eq!(
+            args,
+            vec![
+                "watch", "--", "cargo", "run", "--release", "--offline", "--features", "mock",
+                "--bin", "testbench", "--", "--verbose"
+            ]
+        );
+    }
+
+    #[test]
+    fn test_build_cargo_run_cmd_applies_env() {
+        let ws = Path::new("/workspace");
+        let mut env = HashMap::new();
+        env.insert("DATABASE_URL".to_string(), "postgres://localhost/db".to_string());
+
+        let cargo_args = vec!["--features".to_string(), "postgres".to_string()];
+        let build_args = vec![];
+        let extra_args = vec!["--migrate".to_string()];
+
+        let cmd = build_cargo_run_cmd(ws, "server", &cargo_args, &build_args, &extra_args, &env);
+
+        let env_map = extract_envs(&cmd);
+        assert_eq!(
+            env_map.get("DATABASE_URL"),
+            Some(&"postgres://localhost/db".to_string())
+        );
+
+        let args = extract_args(&cmd);
+        assert_eq!(
+            args,
+            vec!["run", "--bin", "server", "--features", "postgres", "--", "--migrate"]
+        );
+    }
 }

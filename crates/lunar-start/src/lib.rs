@@ -5,6 +5,7 @@ pub mod backend;
 pub mod config;
 pub mod launcher;
 pub mod service_settings;
+pub mod validation;
 
 pub use backend::{LogBackend, LogEvent, LogLevel, ServiceRuntime, ServiceStatus};
 pub use config::{LauncherConfig, ServiceConfig, ServiceKind};
@@ -13,6 +14,7 @@ pub use service_settings::{
     BackendSettings, ComputeBackend, FieldType, FrontendSettings, ServiceConfigField,
     ServiceConfigSchema, ServiceConfigValues, TestbenchBackendSettings,
 };
+pub use validation::{service_port, validate_service_config, ValidationResult};
 
 pub use config::presets;
 
@@ -21,6 +23,6 @@ pub mod prelude {
         Launcher, LauncherConfig, LogBackend, LogEvent, LogLevel, ServiceConfig, ServiceKind,
         ServiceRuntime, ServiceStatus, ServiceConfigField, ServiceConfigSchema,
         ServiceConfigValues, BackendSettings, ComputeBackend, FieldType, FrontendSettings,
-        TestbenchBackendSettings,
+        TestbenchBackendSettings, ValidationResult, service_port, validate_service_config,
     };
 }

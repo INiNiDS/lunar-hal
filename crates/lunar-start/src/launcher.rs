@@ -20,7 +20,6 @@ impl Launcher {
 
     /// Start all services and stream logs to stdout.
     pub async fn run(self) -> Result<()> {
-        self.config.apply_env();
         let service_names = self
             .config
             .services
@@ -38,7 +37,7 @@ impl Launcher {
 
         if self.config.build_release && !self.config.watch {
             eprintln!("[lns] Building release binaries...");
-            cargo_build(&self.config.workspace, &self.config.all_build_args())?;
+            cargo_build(&self.config.workspace, &self.config.all_build_args()).await?;
             eprintln!("[lns] Release build completed");
         }
 

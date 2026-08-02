@@ -111,15 +111,6 @@ pub struct LauncherConfig {
 }
 
 impl LauncherConfig {
-    pub fn apply_env(&self) {
-        for (k, v) in &self.env {
-            // SAFETY: Executed sequentially during startup initialization.
-            unsafe { std::env::set_var(k, v) };
-        }
-    }
-}
-
-impl LauncherConfig {
     pub fn new(workspace: PathBuf) -> Self {
         Self {
             workspace,

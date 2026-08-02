@@ -11,14 +11,14 @@ use axum::{
 };
 use lunar_start::prelude::*;
 use serde::{Deserialize, Serialize};
-use tokio::sync::{broadcast, Mutex};
+use tokio::sync::broadcast;
 use tokio_stream::StreamExt;
 use tower_http::cors::{Any, CorsLayer};
 
 mod service_manager;
 mod service_meta;
 
-use service_manager::{LogRingBuffers, ServiceManager};
+use service_manager::{ConfigError, LogRingBuffers, ServiceManager};
 
 #[derive(Clone, Serialize)]
 struct ServiceInfo {
@@ -29,7 +29,7 @@ struct ServiceInfo {
 
 #[derive(Clone)]
 struct AppState {
-    manager: Arc<Mutex<LogBackend>>,
+    manager: ServiceManager,
     log_tx: broadcast::Sender<LogEvent>,
     logs: LogRingBuffers,
     start_time: Instant,
@@ -38,9 +38,10 @@ struct AppState {
 type SharedState = State<Arc<AppState>>;
 
 async fn list_services(state: SharedState) -> Json<Vec<ServiceInfo>> {
-    let be = state.manager.lock().await;
-    let services: Vec<ServiceInfo> = be
+    let services: Vec<ServiceInfo> = state
+        .manager
         .services()
+        .await
         .iter()
         .map(|s| ServiceInfo {
             name: s.config.name.clone(),
@@ -118,12 +119,24 @@ async fn service_stats(state: SharedState, Path(name): Path<String>) -> Json<Ser
     })
 }
 
+fn manager_error_status(error: &ConfigError) -> StatusCode {
+    match error {
+        ConfigError::UnknownService(_) => StatusCode::NOT_FOUND,
+        ConfigError::StateConflict(_) => StatusCode::CONFLICT,
+        ConfigError::Validation(_) => StatusCode::BAD_REQUEST,
+        ConfigError::Runtime(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    }
+}
+
 async fn start_service(
     state: SharedState,
     Path(name): Path<String>,
 ) -> Result<Json<&'static str>, StatusCode> {
-    let mut be = state.manager.lock().await;
-    be.start(&name).await;
+    state
+        .manager
+        .start(&name)
+        .await
+        .map_err(|error| manager_error_status(&error))?;
     Ok(Json("ok"))
 }
 
@@ -131,8 +144,11 @@ async fn stop_service(
     state: SharedState,
     Path(name): Path<String>,
 ) -> Result<Json<&'static str>, StatusCode> {
-    let mut be = state.manager.lock().await;
-    be.stop(&name).await;
+    state
+        .manager
+        .stop(&name)
+        .await
+        .map_err(|error| manager_error_status(&error))?;
     Ok(Json("ok"))
 }
 
@@ -140,20 +156,25 @@ async fn restart_service(
     state: SharedState,
     Path(name): Path<String>,
 ) -> Result<Json<&'static str>, StatusCode> {
-    let mut be = state.manager.lock().await;
-    be.restart(&name).await;
+    state
+        .manager
+        .restart(&name, None)
+        .await
+        .map_err(|error| manager_error_status(&error))?;
     Ok(Json("ok"))
 }
 
 async fn start_all(state: SharedState) -> Result<Json<&'static str>, StatusCode> {
-    let mut be = state.manager.lock().await;
-    be.start_all().await;
+    state
+        .manager
+        .start_all()
+        .await
+        .map_err(|error| manager_error_status(&error))?;
     Ok(Json("ok"))
 }
 
 async fn stop_all(state: SharedState) -> Result<Json<&'static str>, StatusCode> {
-    let mut be = state.manager.lock().await;
-    be.stop_all().await;
+    state.manager.stop_all().await;
     Ok(Json("ok"))
 }
 
@@ -185,13 +206,12 @@ async fn main() -> anyhow::Result<()> {
     if let Ok(env_val) = std::env::var("LUNAR_ENV") {
         config.set_env("LUNAR_ENV", &env_val);
     }
-    config.apply_env();
-
-    let mgr = ServiceManager::new(&config)?;
-    let (log_tx, backend, logs) = mgr.into_parts();
+    let manager = ServiceManager::new(&config)?;
+    let log_tx = manager.log_sender();
+    let logs = manager.logs();
     let state = Arc::new(AppState {
         log_tx,
-        manager: backend,
+        manager,
         logs,
         start_time: Instant::now(),
     });
