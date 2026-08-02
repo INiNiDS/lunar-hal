@@ -1,9 +1,11 @@
+use std::sync::Arc;
+
 use anyhow::Result;
 use axum::{
     Router,
     routing::{get, post},
 };
-use std::sync::Arc;
+use lunar_utils::env::{resolve_port, DEFAULT_TESTBENCH_HOST, DEFAULT_TESTBENCH_PORT};
 use tower_http::cors::{Any, CorsLayer};
 
 pub mod jobs;
@@ -18,20 +20,15 @@ pub struct AppState {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let port: u16 = {
-        let args: Vec<String> = std::env::args().collect();
-        let from_args = args
-            .windows(2)
-            .find(|w| w[0] == "--port" || w[0] == "-p")
-            .and_then(|w| w[1].parse().ok());
-        from_args
-            .or_else(|| {
-                std::env::var("LUNAR_TESTBENCH_BACKEND_PORT")
-                    .ok()
-                    .and_then(|s| s.parse().ok())
-            })
-            .unwrap_or(25256)
-    };
+    let args: Vec<String> = std::env::args().collect();
+    let backend_port_env = std::env::var("LUNAR_TESTBENCH_BACKEND_PORT").ok();
+    let client_port_env = std::env::var("LUNAR_TESTBENCH_PORT").ok();
+    let port = resolve_port(
+        &args,
+        &[backend_port_env.as_deref(), client_port_env.as_deref()],
+        DEFAULT_TESTBENCH_PORT,
+    );
+    let host = DEFAULT_TESTBENCH_HOST;
 
     let registry = JobRegistry::new();
     let state = AppState { registry };
@@ -54,8 +51,8 @@ async fn main() -> Result<()> {
         .with_state(state)
         .layer(cors);
 
-    println!("lunar-testbench-backend listening on 127.0.0.1:{port}");
-    let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{port}")).await?;
+    println!("lunar-testbench-backend listening on {host}:{port}");
+    let listener = tokio::net::TcpListener::bind(format!("{host}:{port}")).await?;
     axum::serve(listener, app).await?;
     Ok(())
 }

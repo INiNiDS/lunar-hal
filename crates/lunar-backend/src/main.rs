@@ -248,17 +248,14 @@ async fn random_star(Json(payload): Json<RandomStarRequest>) -> Json<RandomStarR
 
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
-    let port: u16 = {
-        let args: Vec<String> = std::env::args().collect();
-        args.windows(2)
-            .find(|w| w[0] == "--port" || w[0] == "-p")
-            .and_then(|w| w[1].parse().ok())
-            .unwrap_or(25255)
-    };
+    // LUNAR_BACKEND_HOST/LUNAR_BACKEND_PORT are the canonical bind settings.
+    // The old --port parser was removed because the listener never used its value.
+    let host = get_host();
+    let port = get_port();
 
     println!("Warming up neural network models...");
     warmup_models().await;
-    println!("Models ready. Starting server on 127.0.0.1:{port}");
+    println!("Models ready. Starting server on {host}:{port}");
 
     let cors = CorsLayer::new()
         .allow_origin(Any)
@@ -287,7 +284,7 @@ async fn main() -> Result<(), anyhow::Error> {
         .layer(cors)
         .with_state(world_store);
 
-    let listener = tokio::net::TcpListener::bind(format!("{}:{}", get_host(), get_port())).await?;
+    let listener = tokio::net::TcpListener::bind(format!("{host}:{port}")).await?;
     axum::serve(listener, app.into_make_service()).await?;
     Ok(())
 }

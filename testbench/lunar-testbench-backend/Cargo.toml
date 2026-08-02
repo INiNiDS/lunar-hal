@@ -13,6 +13,7 @@ path = "src/main.rs"
 [dependencies]
 lunar-structures = { path = "../../crates/lunar-structures" }
 lunar-structures-testbench = { path = "../lunar-structures-testbench" }
+lunar-utils = { path = "../../crates/lunar-utils" }
 axum = "0.8.9"
 tokio = { version = "1.52.3", features = ["full"] }
 tokio-util = "0.7"
