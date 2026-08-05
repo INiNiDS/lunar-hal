@@ -1,8 +1,8 @@
 use crate::components::editor::enemy::Enemy;
 use crate::game_state::use_game_version;
 use dioxus::prelude::*;
-use lunar_game_backend::enemy::Enemy as EnemyData;
-use lunar_game_backend::{CHUNK_SIZE_PC, Game, PX_PER_PC, Projectile, SectorKey, chunk_center};
+use lunar_stellar_core::enemy::Enemy as EnemyData;
+use lunar_stellar_core::{CHUNK_SIZE_PC, Game, PX_PER_PC, Projectile, SectorKey, chunk_center};
 use lunar_structures::ResponseStar;
 use std::collections::HashSet;
 

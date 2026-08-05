@@ -1,8 +1,8 @@
-use lunar_game_backend::sector::{
+use lunar_stellar_core::sector::{
     CHUNK_SIZE_PC, INNER_EXCLUSION_PC, MAX_CACHED_CHUNKS, PX_PER_PC, chunk_center,
     chunk_distance_sq, evict_excess_cache, sectors_to_fetch, visible_chunks,
 };
-use lunar_game_backend::{Game, GameConfig};
+use lunar_stellar_core::{Game, GameConfig};
 use lunar_structures::ResponseStar;
 use std::collections::{HashMap, HashSet};
 
@@ -52,7 +52,7 @@ fn visible_chunks_excludes_chunks_inside_inner_radius() {
     let mut cache = HashMap::new();
     let loading = HashSet::new();
     cache.insert((10, 10), vec![star_at(0.0, 0.0, 0.0)]);
-    let request = lunar_game_backend::sector::SectorFetchRequest {
+    let request = lunar_stellar_core::sector::SectorFetchRequest {
         viewport: (10000.0, 10000.0),
         cam_offset: (0.0, 0.0),
         cam_zoom: 1.0,
@@ -89,7 +89,7 @@ fn sectors_to_fetch_skips_cached_and_loading() {
     let mut loading = HashSet::new();
     loading.insert((20, 20));
 
-    let request = lunar_game_backend::sector::SectorFetchRequest {
+    let request = lunar_stellar_core::sector::SectorFetchRequest {
         viewport: (5000.0, 5000.0),
         cam_offset: (0.0, 0.0),
         cam_zoom: 1.0,
@@ -136,7 +136,7 @@ fn game_can_be_constructed_with_explicit_config() {
 fn game_snapshot_reflects_camera_changes() {
     let game = Game::new();
     assert_eq!(game.snapshot().camera.zoom, 1.0);
-    game.set_camera(lunar_game_backend::Camera {
+    game.set_camera(lunar_stellar_core::Camera {
         offset: (10.0, 20.0),
         zoom: 2.0,
         dragging: false,
@@ -148,7 +148,7 @@ fn game_snapshot_reflects_camera_changes() {
 
 #[test]
 fn game_camera_zoom_around_center_preserves_world_point() {
-    let camera = lunar_game_backend::Camera {
+    let camera = lunar_stellar_core::Camera {
         offset: (0.0, 0.0),
         zoom: 1.0,
         dragging: false,
@@ -193,7 +193,7 @@ fn adopt_world_clears_sector_cache() {
 #[test]
 fn world_camera_persists_in_memory() {
     let game = Game::new();
-    game.set_world_camera("foo", lunar_game_backend::WorldCamera::new((1.0, 2.0), 1.5))
+    game.set_world_camera("foo", lunar_stellar_core::WorldCamera::new((1.0, 2.0), 1.5))
         .unwrap();
     let snap = game.snapshot();
     let wc = snap.world_cameras.get("foo").copied();
@@ -206,7 +206,7 @@ fn world_camera_persists_in_memory() {
 #[test]
 fn apply_world_camera_copies_saved_camera_to_current() {
     let game = Game::new();
-    game.set_world_camera("foo", lunar_game_backend::WorldCamera::new((3.0, 4.0), 2.5))
+    game.set_world_camera("foo", lunar_stellar_core::WorldCamera::new((3.0, 4.0), 2.5))
         .unwrap();
     assert!(game.apply_world_camera("foo").unwrap());
     let cam = game.camera();

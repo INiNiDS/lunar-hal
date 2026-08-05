@@ -19,7 +19,7 @@ desktop = ["dioxus/desktop"]
 dioxus = { version = "0.7.1", features = ["web"] }
 lunar-structures = { path = "../../crates/lunar-structures" }
 lunar-structures-testbench = { path = "../lunar-structures-testbench" }
-lunar-game-backend = { path = "../../crates/lunar-game-backend" }
+lunar-stellar-core = { path = "../../crates/lunar-stellar-core" }
 lunar-ui-shared = { path = "../../crates/lunar-ui-shared" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

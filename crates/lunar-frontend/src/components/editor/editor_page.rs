@@ -8,7 +8,7 @@ use crate::game_state::{
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use dioxus::prelude::*;
-use lunar_game_backend::{Game, GameSnapshot};
+use lunar_stellar_core::{Game, GameSnapshot};
 use lunar_structures::{
     PinnResponse, PipelineResponse, ResponseStar, StarLore, StellarMetadata, World, WorldSummary,
 };

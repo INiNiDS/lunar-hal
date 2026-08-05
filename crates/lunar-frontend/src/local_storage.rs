@@ -5,7 +5,7 @@
 //! the platform's local storage. This module is the only place that
 //! knows about `web_sys` directly.
 
-use lunar_game_backend::WorldCamera;
+use lunar_stellar_core::WorldCamera;
 
 #[cfg(feature = "web")]
 const CAMERA_KEY_PREFIX: &str = "lunar.world.camera.";

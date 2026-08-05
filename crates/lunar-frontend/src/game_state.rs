@@ -8,7 +8,7 @@
 //! [`GameSnapshot`]) and Dioxus tracks the dependency for us.
 
 use dioxus::prelude::*;
-use lunar_game_backend::{Game, GameSnapshot};
+use lunar_stellar_core::{Game, GameSnapshot};
 use tracing::warn;
 
 use crate::local_storage;

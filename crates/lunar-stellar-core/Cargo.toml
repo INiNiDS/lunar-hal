@@ -1,5 +1,5 @@
 [package]
-name = "lunar-game-backend"
+name = "lunar-stellar-core"
 version.workspace = true
 license.workspace = true
 readme.workspace = true

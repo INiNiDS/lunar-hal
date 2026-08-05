@@ -4,13 +4,13 @@
 //! boundary, one of these tests will fail and the build will
 //! refuse to ship.
 
-use lunar_game_backend::validation::{
+use lunar_stellar_core::validation::{
     ValidationError, limits, validate_bp_rp, validate_center_x, validate_center_y,
     validate_center_z, validate_entropy, validate_g_mag, validate_pipeline, validate_response_star,
     validate_response_stars, validate_search_radius, validate_sector_key, validate_temperature,
     validate_world, validate_world_id, validate_world_name, validate_world_summary, validate_zoom,
 };
-use lunar_game_backend::{Game, GameError};
+use lunar_stellar_core::{Game, GameError};
 use lunar_structures::{
     CreateWorldRequest, GnnResponse, PinnResponse, PipelineRequest, PipelineResponse, ResponseStar,
     SirenTextureResponse, StellarMetadata, World, WorldListResponse, WorldSummary,

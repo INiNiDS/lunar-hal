@@ -1,5 +1,5 @@
 use dioxus::prelude::*;
-use lunar_game_backend::enemy::Enemy as EnemyData;
+use lunar_stellar_core::enemy::Enemy as EnemyData;
 
 fn enemy_type_color(type_name: &str) -> (&str, &str) {
     match type_name {
@@ -98,7 +98,7 @@ pub fn Enemy(
                 }
 
                 match enemy.action {
-                    lunar_game_backend::enemy::EnemyAction::AttackingStar(_) => rsx! {
+                    lunar_stellar_core::enemy::EnemyAction::AttackingStar(_) => rsx! {
                         line {
                             x1: "{offset.0}",
                             y1: "{offset.1}",
@@ -110,7 +110,7 @@ pub fn Enemy(
                             stroke_dasharray: "3, 3",
                         }
                     },
-                    lunar_game_backend::enemy::EnemyAction::AttackingEnemy(_) => rsx! {
+                    lunar_stellar_core::enemy::EnemyAction::AttackingEnemy(_) => rsx! {
                         line {
                             x1: "{offset.0}",
                             y1: "{offset.1}",

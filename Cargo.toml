@@ -4,7 +4,7 @@ members = [
     "crates/lunar-backend", "crates/lunar-frontend", "crates/lunar-site",
     "crates/lunar-start", "crates/lunar-start-backend", "crates/lunar-structures", "crates/lunar-ui-shared",
     "testbench/lunar-structures-testbench",
-    "testbench/lunar-testbench", "testbench/lunar-testbench-backend", "crates/lunar-utils", "crates/lunar-game-backend",
+    "testbench/lunar-testbench", "testbench/lunar-testbench-backend", "crates/lunar-utils", "crates/lunar-stellar-core",
 ]
 resolver = "3"
 

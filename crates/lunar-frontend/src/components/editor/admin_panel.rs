@@ -1,6 +1,6 @@
 use crate::assets::FONT_SANS;
 use dioxus::prelude::*;
-use lunar_game_backend::enemy::{Enemy, EnemyAction, EnemyType, Projectile};
+use lunar_stellar_core::enemy::{Enemy, EnemyAction, EnemyType, Projectile};
 use lunar_structures::ResponseStar;
 
 fn action_label(action: &EnemyAction, stars: &[ResponseStar]) -> String {

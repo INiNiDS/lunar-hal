@@ -1,6 +1,6 @@
 use crate::api;
 use dioxus::prelude::*;
-use lunar_game_backend::{
+use lunar_stellar_core::{
     Game, PX_PER_PC, Projectile, STAR_MAX_HP,
     enemy::{Enemy, EnemyAction, EnemyType},
 };
@@ -523,7 +523,7 @@ fn SelectedEnemyPanel(
     game: Signal<Game>,
     mut selected_enemy_id: Signal<Option<usize>>,
     mut stats: Signal<SandboxStats>,
-    mut snap: Signal<lunar_game_backend::GameSnapshot>,
+    mut snap: Signal<lunar_stellar_core::GameSnapshot>,
 ) -> Element {
     let max_hp = enemy.enemy_type.hp();
     let hp_ratio = (enemy.hp / max_hp).clamp(0.0, 1.0);
@@ -694,7 +694,7 @@ async fn perform_ai_star_generation(
     game: Signal<Game>,
     mut star_counter: Signal<u32>,
     mut stats: Signal<SandboxStats>,
-    mut snap: Signal<lunar_game_backend::GameSnapshot>,
+    mut snap: Signal<lunar_stellar_core::GameSnapshot>,
 ) -> Result<(), String> {
     let payload = json!({ "entropy_temperature": entropy });
     let raw_res = api::random_star(&payload).await?;
@@ -726,7 +726,7 @@ async fn perform_ai_star_batch_generation(
     game: Signal<Game>,
     mut star_counter: Signal<u32>,
     mut stats: Signal<SandboxStats>,
-    mut snap: Signal<lunar_game_backend::GameSnapshot>,
+    mut snap: Signal<lunar_stellar_core::GameSnapshot>,
 ) -> Result<(), String> {
     let mut spawned = 0u32;
     for i in 0..5u32 {
@@ -764,7 +764,7 @@ fn AiStarGenerator(
     viewport: Signal<(f32, f32)>,
     star_counter: Signal<u32>,
     stats: Signal<SandboxStats>,
-    snap: Signal<lunar_game_backend::GameSnapshot>,
+    snap: Signal<lunar_stellar_core::GameSnapshot>,
     mut ai_busy: Signal<bool>,
     mut ai_entropy: Signal<f32>,
     mut ai_error: Signal<Option<String>>,
@@ -1030,7 +1030,7 @@ fn CustomStarForm(
     viewport: Signal<(f32, f32)>,
     mut star_counter: Signal<u32>,
     mut stats: Signal<SandboxStats>,
-    mut snap: Signal<lunar_game_backend::GameSnapshot>,
+    mut snap: Signal<lunar_stellar_core::GameSnapshot>,
     form: Signal<CustomStarFields>,
 ) -> Element {
     let hp_max_label = format!("{:.0}", STAR_MAX_HP);
@@ -1106,7 +1106,7 @@ fn EnemySpawner(
     mouse_world: Signal<(f32, f32)>,
     mut enemy_counter: Signal<u32>,
     mut stats: Signal<SandboxStats>,
-    mut snap: Signal<lunar_game_backend::GameSnapshot>,
+    mut snap: Signal<lunar_stellar_core::GameSnapshot>,
 ) -> Element {
     let make = move |et: EnemyType| {
         let mut enemy_counter = enemy_counter;
@@ -1270,7 +1270,7 @@ fn AdminSidebar(
     star_counter: Signal<u32>,
     enemy_counter: Signal<u32>,
     stats: Signal<SandboxStats>,
-    snap: Signal<lunar_game_backend::GameSnapshot>,
+    snap: Signal<lunar_stellar_core::GameSnapshot>,
     f_custom_star: Signal<CustomStarFields>,
     zoom: f32,
     selected_star: Signal<Option<ResponseStar>>,
@@ -1425,7 +1425,7 @@ struct SandboxState {
     star_counter: Signal<u32>,
     enemy_counter: Signal<u32>,
     tick: Signal<u64>,
-    snap: Signal<lunar_game_backend::GameSnapshot>,
+    snap: Signal<lunar_stellar_core::GameSnapshot>,
     paused: Signal<bool>,
     speed: Signal<u32>,
     stats: Signal<SandboxStats>,

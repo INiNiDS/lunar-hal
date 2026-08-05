@@ -1,7 +1,7 @@
 use crate::assets::FONT_SANS;
 use crate::game_state::use_game;
 use dioxus::prelude::*;
-use lunar_game_backend::Game;
+use lunar_stellar_core::Game;
 use lunar_structures::{CreateWorldRequest, World, WorldSummary};
 
 fn world_accent_color(id: &str) -> (String, String) {
