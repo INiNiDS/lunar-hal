@@ -6,9 +6,9 @@
 //! delta over the rolling window, drains recent actions, and prunes
 //! the buffer.
 
+use instant::Instant;
 use std::collections::HashMap;
 use std::time::Duration;
-use instant::Instant;
 
 use crate::attention::AttentionEntry;
 use crate::camera::Camera;

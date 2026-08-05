@@ -1,18 +1,19 @@
-//! The WebOS shell: a single-room desktop scene (lamp + service rack + dock +
+//! The WebOS shell: a single-room desktop scene (lamp + desktop launchers + dock +
 //! floating windows) that replaces the old sidebar/router navigation. See
 //! `state.rs` for the shared reactive state.
 //!
 //! There is deliberately no separate taskbar: the dock is the single place that
 //! lists apps, shows which ones are open, and restores minimized windows.
 
+pub mod category_lamp;
+pub mod desktop;
 pub mod dock;
 pub mod lamp;
 pub mod led;
 pub mod log_window;
 pub mod manifest;
-pub mod rack;
-pub mod rack_section;
 pub mod room;
+pub mod service_settings;
 pub mod state;
 pub mod window;
 pub mod window_manager;

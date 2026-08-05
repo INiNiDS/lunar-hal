@@ -5,7 +5,7 @@ use axum::{
     Router,
     routing::{get, post},
 };
-use lunar_utils::env::{resolve_port, DEFAULT_TESTBENCH_HOST, DEFAULT_TESTBENCH_PORT};
+use lunar_utils::env::{DEFAULT_TESTBENCH_HOST, DEFAULT_TESTBENCH_PORT, resolve_port};
 use tower_http::cors::{Any, CorsLayer};
 
 pub mod jobs;

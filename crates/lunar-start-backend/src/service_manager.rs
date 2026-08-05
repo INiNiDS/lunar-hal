@@ -5,11 +5,12 @@ use std::time::Duration;
 
 use anyhow::Result;
 use lunar_start::{
-    validate_service_config, LauncherConfig, LogBackend, LogEvent, ServiceConfig,
-    ServiceConfigValues, ServiceRuntime, ServiceStatus, ValidationResult,
+    BackendSettings, FrontendSettings, LauncherConfig, LogBackend, LogEvent, ServiceConfig,
+    ServiceConfigSchema, ServiceConfigValues, ServiceRuntime, ServiceStatus,
+    TestbenchBackendSettings, ValidationResult, validate_service_config,
 };
 use serde::{Deserialize, Serialize};
-use tokio::sync::{broadcast, mpsc, Mutex};
+use tokio::sync::{Mutex, broadcast, mpsc};
 
 /// Max number of buffered log lines retained per service for the `/services/{name}/logs`
 /// and `/services/{name}/stats` endpoints.
@@ -71,7 +72,10 @@ fn values_from_config(config: &ServiceConfig) -> ServiceConfigValues {
 }
 
 fn status_allows_edit(status: &ServiceStatus) -> bool {
-    matches!(status, ServiceStatus::Stopped { .. } | ServiceStatus::Failed { .. })
+    matches!(
+        status,
+        ServiceStatus::Stopped { .. } | ServiceStatus::Failed { .. }
+    )
 }
 
 #[derive(Clone)]
@@ -97,7 +101,9 @@ impl ServiceManager {
             while let Some(log) = mpsc_rx.recv().await {
                 {
                     let mut guard = logs_clone.lock().await;
-                    let buf = guard.entry(log.service.clone()).or_insert_with(VecDeque::new);
+                    let buf = guard
+                        .entry(log.service.clone())
+                        .or_insert_with(VecDeque::new);
                     buf.push_back(log.clone());
                     if buf.len() > MAX_LOGS_PER_SERVICE {
                         buf.pop_front();
@@ -172,6 +178,15 @@ impl ServiceManager {
         self.backend.lock().await.services().to_vec()
     }
 
+    pub fn config_schema(&self, name: &str) -> Result<ServiceConfigSchema, ConfigError> {
+        match name {
+            "backend" => Ok(BackendSettings::schema()),
+            "testbench-backend" => Ok(TestbenchBackendSettings::schema()),
+            "frontend" => Ok(FrontendSettings::schema()),
+            _ => Err(ConfigError::UnknownService(name.to_string())),
+        }
+    }
+
     pub async fn config_state(&self, name: &str) -> Result<ServiceConfigState, ConfigError> {
         self.configs
             .lock()
@@ -234,8 +249,6 @@ impl ServiceManager {
         Ok(())
     }
 
-    // Used by the configuration REST API introduced in the next implementation step.
-    #[allow(dead_code)]
     pub async fn save_config(
         &self,
         name: &str,
@@ -294,7 +307,9 @@ impl ServiceManager {
             self.set_effective(name, Some(effective_values)).await;
             Ok(())
         } else {
-            Err(ConfigError::Runtime(format!("service '{name}' failed to start")))
+            Err(ConfigError::Runtime(format!(
+                "service '{name}' failed to start"
+            )))
         }
     }
 
@@ -355,7 +370,9 @@ impl ServiceManager {
             Ok(())
         } else {
             self.set_effective(name, None).await;
-            Err(ConfigError::Runtime(format!("service '{name}' failed to restart")))
+            Err(ConfigError::Runtime(format!(
+                "service '{name}' failed to restart"
+            )))
         }
     }
 
@@ -387,7 +404,8 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let root = std::env::temp_dir().join(format!("lunar-config-store-{}-{stamp}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("lunar-config-store-{}-{stamp}", std::process::id()));
         fs::create_dir_all(root.join("crates")).unwrap();
         fs::create_dir_all(root.join("target/release")).unwrap();
         fs::write(root.join("Cargo.toml"), "[workspace]\n").unwrap();
@@ -423,7 +441,10 @@ mod tests {
         backend_values
             .env
             .insert("LUNAR_BACKEND_PORT".into(), "26000".into());
-        let saved = manager.save_config("backend", backend_values).await.unwrap();
+        let saved = manager
+            .save_config("backend", backend_values)
+            .await
+            .unwrap();
         assert_eq!(saved.saved.env["LUNAR_BACKEND_PORT"], "26000");
         assert_eq!(
             manager.config_state("testbench-backend").await.unwrap(),
@@ -445,8 +466,12 @@ mod tests {
 
     #[test]
     fn only_stopped_or_failed_services_are_editable() {
-        assert!(status_allows_edit(&ServiceStatus::Stopped { reason: "x".into() }));
-        assert!(status_allows_edit(&ServiceStatus::Failed { reason: "x".into() }));
+        assert!(status_allows_edit(&ServiceStatus::Stopped {
+            reason: "x".into()
+        }));
+        assert!(status_allows_edit(&ServiceStatus::Failed {
+            reason: "x".into()
+        }));
         assert!(!status_allows_edit(&ServiceStatus::Starting));
         assert!(!status_allows_edit(&ServiceStatus::Running));
     }

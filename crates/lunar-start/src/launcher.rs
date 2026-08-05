@@ -5,7 +5,7 @@ use std::time::Duration;
 use anyhow::Result;
 use tokio::sync::mpsc;
 
-use crate::backend::{cargo_build, LogBackend, LogEvent};
+use crate::backend::{LogBackend, LogEvent, cargo_build};
 use crate::config::LauncherConfig;
 
 /// Launcher: starts services and streams logs to stdout.

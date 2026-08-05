@@ -23,6 +23,7 @@ pub fn Window(win: WindowState) -> Element {
     let title = win.title.clone();
     let app_id = win.app_id.clone();
     let icon_id = win.app_id.clone();
+    let dependencies_available = os.are_app_dependencies_running(&app_id);
     let radius = if win.maximized {
         "absolute pointer-events-auto glass-strong flex flex-col overflow-hidden animate-window-open"
     } else {
@@ -102,7 +103,15 @@ pub fn Window(win: WindowState) -> Element {
             }
 
             div { class: "flex-1 min-h-0 overflow-auto scrollbar-thin bg-bg-1/70",
-                {app_content(&app_id)}
+                if app_id == "sandbox" && !dependencies_available {
+                    div { class: "grid h-full min-h-64 place-items-center p-8 text-center",
+                        div { class: "max-w-sm",
+                            div { class: "mx-auto mb-4 h-10 w-10 text-white/20", AppIcon { app_id: "sandbox".to_string() } }
+                            h3 { class: "font-display text-sm tracking-[0.12em] text-white/70", "SANDBOX PAUSED" }
+                            p { class: "mt-3 text-xs leading-relaxed text-white/35", "Backend, Testbench Backend and Frontend must all be Running. This window is preserved until every dependency returns." }
+                        }
+                    }
+                } else { {app_content(&app_id)} }
             }
 
             {resize_handle(os, id, "absolute right-0 top-1.5 bottom-1.5 w-1.5 cursor-ew-resize", DragKind::ResizeE)}

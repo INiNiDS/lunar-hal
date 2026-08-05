@@ -19,7 +19,13 @@ pub fn StarSidebar(
 
     let display_hp = star_hp.min(100.0);
     let hp_ratio = (display_hp / 100.0).clamp(0.0, 1.0);
-    let hp_color = if display_hp > 60.0 { "#22c55e" } else if display_hp > 25.0 { "#eab308" } else { "#ef4444" };
+    let hp_color = if display_hp > 60.0 {
+        "#22c55e"
+    } else if display_hp > 25.0 {
+        "#eab308"
+    } else {
+        "#ef4444"
+    };
 
     rsx! {
         div {

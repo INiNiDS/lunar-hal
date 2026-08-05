@@ -14,15 +14,15 @@ pub use service_settings::{
     BackendSettings, ComputeBackend, FieldType, FrontendSettings, ServiceConfigField,
     ServiceConfigSchema, ServiceConfigValues, TestbenchBackendSettings,
 };
-pub use validation::{service_port, validate_service_config, ValidationResult};
+pub use validation::{ValidationResult, service_port, validate_service_config};
 
 pub use config::presets;
 
 pub mod prelude {
     pub use crate::{
-        Launcher, LauncherConfig, LogBackend, LogEvent, LogLevel, ServiceConfig, ServiceKind,
-        ServiceRuntime, ServiceStatus, ServiceConfigField, ServiceConfigSchema,
-        ServiceConfigValues, BackendSettings, ComputeBackend, FieldType, FrontendSettings,
-        TestbenchBackendSettings, ValidationResult, service_port, validate_service_config,
+        BackendSettings, ComputeBackend, FieldType, FrontendSettings, Launcher, LauncherConfig,
+        LogBackend, LogEvent, LogLevel, ServiceConfig, ServiceConfigField, ServiceConfigSchema,
+        ServiceConfigValues, ServiceKind, ServiceRuntime, ServiceStatus, TestbenchBackendSettings,
+        ValidationResult, service_port, validate_service_config,
     };
 }

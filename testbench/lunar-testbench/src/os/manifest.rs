@@ -7,26 +7,120 @@ use crate::pages::{
     validation::Validation,
 };
 
-/// Static definition of one dock app / window kind.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum AppCategory {
+    Backend,
+    TestbenchBackend,
+    Frontend,
+}
+
+impl AppCategory {
+    pub const ALL: [Self; 3] = [Self::Backend, Self::TestbenchBackend, Self::Frontend];
+    pub fn service(self) -> &'static str {
+        match self {
+            Self::Backend => "backend",
+            Self::TestbenchBackend => "testbench-backend",
+            Self::Frontend => "frontend",
+        }
+    }
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::Backend => "Backend",
+            Self::TestbenchBackend => "Testbench Backend",
+            Self::Frontend => "Frontend",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AppDef {
     pub id: &'static str,
     pub title: &'static str,
+    pub category: AppCategory,
+    pub desktop_order: u8,
+    pub required_services: &'static [&'static str],
 }
 
+const BACKEND: &[&str] = &["backend"];
+const TESTBENCH_BACKEND: &[&str] = &["testbench-backend"];
+const SANDBOX_SERVICES: &[&str] = &["backend", "testbench-backend", "frontend"];
+
 pub const ALL_APPS: &[AppDef] = &[
-    AppDef { id: "dashboard", title: "Dashboard" },
-    AppDef { id: "models", title: "Models" },
-    AppDef { id: "pipeline", title: "Pipeline" },
-    AppDef { id: "siren_gallery", title: "SIREN Gallery" },
-    AppDef { id: "training", title: "Training" },
-    AppDef { id: "validation", title: "Validation" },
-    AppDef { id: "backend_api", title: "Backend API" },
-    AppDef { id: "datasets", title: "Datasets" },
-    AppDef { id: "sandbox", title: "Sandbox" },
+    AppDef {
+        id: "models",
+        title: "Models",
+        category: AppCategory::Backend,
+        desktop_order: 10,
+        required_services: BACKEND,
+    },
+    AppDef {
+        id: "pipeline",
+        title: "Pipeline",
+        category: AppCategory::Backend,
+        desktop_order: 20,
+        required_services: BACKEND,
+    },
+    AppDef {
+        id: "siren_gallery",
+        title: "SIREN Gallery",
+        category: AppCategory::Backend,
+        desktop_order: 30,
+        required_services: BACKEND,
+    },
+    AppDef {
+        id: "backend_api",
+        title: "Backend API",
+        category: AppCategory::Backend,
+        desktop_order: 40,
+        required_services: BACKEND,
+    },
+    AppDef {
+        id: "dashboard",
+        title: "Dashboard",
+        category: AppCategory::TestbenchBackend,
+        desktop_order: 10,
+        required_services: TESTBENCH_BACKEND,
+    },
+    AppDef {
+        id: "training",
+        title: "Training",
+        category: AppCategory::TestbenchBackend,
+        desktop_order: 20,
+        required_services: TESTBENCH_BACKEND,
+    },
+    AppDef {
+        id: "validation",
+        title: "Validation",
+        category: AppCategory::TestbenchBackend,
+        desktop_order: 30,
+        required_services: TESTBENCH_BACKEND,
+    },
+    AppDef {
+        id: "datasets",
+        title: "Datasets",
+        category: AppCategory::TestbenchBackend,
+        desktop_order: 40,
+        required_services: TESTBENCH_BACKEND,
+    },
+    AppDef {
+        id: "sandbox",
+        title: "Sandbox",
+        category: AppCategory::Frontend,
+        desktop_order: 10,
+        required_services: SANDBOX_SERVICES,
+    },
 ];
 
-pub fn all_apps() -> &'static [AppDef] {
-    ALL_APPS
+pub fn app_by_id(app_id: &str) -> Option<&'static AppDef> {
+    ALL_APPS.iter().find(|app| app.id == app_id)
+}
+pub fn apps_for_category(category: AppCategory) -> Vec<&'static AppDef> {
+    let mut apps = ALL_APPS
+        .iter()
+        .filter(|app| app.category == category)
+        .collect::<Vec<_>>();
+    apps.sort_by_key(|app| app.desktop_order);
+    apps
 }
 
 /// Line-art glyph for an app, drawn as inline SVG so icons stay crisp at any
@@ -117,5 +211,29 @@ pub fn app_content(app_id: &str) -> Element {
         "datasets" => rsx! { Datasets {} },
         "sandbox" => rsx! { Sandbox {} },
         other => rsx! { div { class: "p-4 text-white/50 text-sm", "Unknown app: {other}" } },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sandbox_requires_all_three_services() {
+        assert_eq!(
+            app_by_id("sandbox").unwrap().required_services,
+            &["backend", "testbench-backend", "frontend"]
+        );
+    }
+
+    #[test]
+    fn category_order_is_explicit() {
+        for category in AppCategory::ALL {
+            assert!(
+                apps_for_category(category)
+                    .windows(2)
+                    .all(|pair| pair[0].desktop_order <= pair[1].desktop_order)
+            );
+        }
     }
 }

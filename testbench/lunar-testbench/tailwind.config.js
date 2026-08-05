@@ -8,7 +8,7 @@ module.exports = {
       // Palette lifted from assets/main.css CSS custom properties, so both
       // stylesheets agree on the same "Rich Black + Liquid Glass" tokens.
       colors: {
-        "bg-0": "#06070a",
+        "bg-0": "#010204",
         "bg-1": "#0c0e14",
         "bg-2": "#11141c",
         "bg-3": "#181c28",
@@ -39,8 +39,8 @@ module.exports = {
           "34%": { opacity: 0.35 },
           "100%": { opacity: 1 },
         },
-        "rack-reveal": {
-          "0%": { opacity: 0, transform: "translateY(18px) scale(0.97)", filter: "brightness(0.2)" },
+        "desktop-reveal": {
+          "0%": { opacity: 0, transform: "translateY(18px) scale(0.98)", filter: "brightness(0.2)" },
           "100%": { opacity: 1, transform: "translateY(0) scale(1)", filter: "brightness(1)" },
         },
         "led-pulse": {
@@ -62,7 +62,7 @@ module.exports = {
       },
       animation: {
         "lamp-ignite": "lamp-ignite 1.2s ease-out forwards",
-        "rack-reveal": "rack-reveal 1.4s cubic-bezier(0.16, 1, 0.3, 1) forwards",
+        "desktop-reveal": "desktop-reveal 1.4s cubic-bezier(0.16, 1, 0.3, 1) forwards",
         "led-pulse": "led-pulse 1.4s ease-in-out infinite",
         "halo-breathe": "halo-breathe 4s ease-in-out infinite",
         "dock-app-reveal": "dock-app-reveal 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards",
@@ -100,14 +100,14 @@ module.exports = {
           inset: "0",
           pointerEvents: "none",
           background:
-            "radial-gradient(ellipse 70% 42% at 50% 84%, rgba(110,168,255,0.07), transparent 70%)",
+            "radial-gradient(ellipse 58% 32% at 50% 86%, rgba(110,168,255,0.022), transparent 72%)",
         },
         ".room-vignette": {
           position: "absolute",
           inset: "0",
           pointerEvents: "none",
           background:
-            "radial-gradient(ellipse at 50% 40%, transparent 35%, rgba(0,0,0,0.55) 78%, rgba(0,0,0,0.85) 100%)",
+            "radial-gradient(ellipse at 50% 38%, transparent 26%, rgba(0,0,0,0.68) 72%, rgba(0,0,0,0.96) 100%)",
         },
 
         // ── Lamp ───────────────────────────────────────────────────────────
@@ -115,15 +115,15 @@ module.exports = {
         // screen-blended so it adds light instead of painting a grey shape.
         ".lamp-cone": {
           position: "absolute",
-          top: "0",
+          top: "96px",
           left: "50%",
           transform: "translateX(-50%)",
-          width: "min(1180px, 98vw)",
-          height: "min(820px, 92vh)",
+          width: "min(720px, 78vw)",
+          height: "min(520px, 56vh)",
           clipPath: "polygon(47.6% 0%, 52.4% 0%, 100% 100%, 0% 100%)",
           background:
-            "linear-gradient(to bottom, rgba(205,226,255,0.34) 0%, rgba(168,201,255,0.14) 26%, rgba(124,163,232,0.055) 58%, rgba(90,130,200,0) 86%)",
-          filter: "blur(28px)",
+            "linear-gradient(to bottom, rgba(225,238,255,0.20) 0%, rgba(168,201,255,0.065) 25%, rgba(124,163,232,0.018) 52%, rgba(90,130,200,0) 76%)",
+          filter: "blur(22px)",
           mixBlendMode: "screen",
           pointerEvents: "none",
         },

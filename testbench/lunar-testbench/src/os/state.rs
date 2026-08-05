@@ -4,19 +4,58 @@ use dioxus::prelude::*;
 use futures_util::StreamExt;
 use gloo_net::eventsource::futures::EventSource;
 
-use crate::api::{self, HealthResponse, ServiceInfo, ServiceLogEvent, ServiceMeta, ServiceStatus};
+use crate::api::{
+    self, FieldType, HealthResponse, ServiceConfigSchema, ServiceConfigState, ServiceConfigValues,
+    ServiceInfo, ServiceLogEvent, ServiceMeta, ServiceStatus, StartServiceRequest,
+};
 use crate::components::ui::tokio_time_sleep;
+use crate::os::manifest::app_by_id;
 
 /// Coarse boot sequence for the "black room" intro: everything starts dark,
 /// then the overhead lamp ignites once `lunar-start-backend` answers
-/// `/health`, then the service rack reveals, then the desk/dock become
+/// `/health`, then the desktop reveals, then the desk/dock become
 /// interactive.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BootPhase {
     Dark,
     LampIgnite,
-    RackReveal,
+    DesktopReveal,
     Ready,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ServiceSettingsState {
+    pub service: String,
+    pub schema: Option<ServiceConfigSchema>,
+    pub config: Option<ServiceConfigState>,
+    pub form_values: HashMap<String, String>,
+    pub client_field_errors: HashMap<String, String>,
+    pub server_field_errors: HashMap<String, String>,
+    pub error: Option<String>,
+    pub loading: bool,
+    pub validating: bool,
+    pub saving: bool,
+    pub starting: bool,
+}
+impl ServiceSettingsState {
+    fn loading(service: &str) -> Self {
+        Self {
+            service: service.into(),
+            schema: None,
+            config: None,
+            form_values: HashMap::new(),
+            client_field_errors: HashMap::new(),
+            server_field_errors: HashMap::new(),
+            error: None,
+            loading: true,
+            validating: false,
+            saving: false,
+            starting: false,
+        }
+    }
+    pub fn busy(&self) -> bool {
+        self.loading || self.validating || self.saving || self.starting
+    }
 }
 
 /// Max log lines retained client-side per service (older lines are dropped;
@@ -96,6 +135,10 @@ pub struct OsState {
     pub windows: Signal<Vec<WindowState>>,
     pub next_z: Signal<i32>,
     pub drag: Signal<Option<DragOp>>,
+    pub service_settings: Signal<Option<ServiceSettingsState>>,
+    pub service_config_drafts: Signal<HashMap<String, ServiceConfigValues>>,
+    pub service_reveal_epochs: Signal<HashMap<String, u64>>,
+    pub service_action_errors: Signal<HashMap<String, String>>,
     next_window_id: Signal<u64>,
 }
 
@@ -111,31 +154,49 @@ impl OsState {
             windows: Signal::new(Vec::new()),
             next_z: Signal::new(1),
             drag: Signal::new(None),
+            service_settings: Signal::new(None),
+            service_config_drafts: Signal::new(HashMap::new()),
+            service_reveal_epochs: Signal::new(HashMap::new()),
+            service_action_errors: Signal::new(HashMap::new()),
             next_window_id: Signal::new(1),
         }
     }
 
-    /// Name of the service (if any) that `provides` a given dock app id.
-    /// Apps with no owning service (e.g. Sandbox) are always available.
-    pub fn service_for_app(&self, app_id: &str) -> Option<String> {
-        self.meta
-            .read()
-            .iter()
-            .find(|m| m.provides.iter().any(|p| p.as_str() == app_id))
-            .map(|m| m.name.clone())
+    pub fn are_app_dependencies_running(&self, app_id: &str) -> bool {
+        let Some(app) = app_by_id(app_id) else {
+            return app_id.starts_with("log:");
+        };
+        let services = self.services.read();
+        app.required_services.iter().all(|required| {
+            services
+                .iter()
+                .any(|service| service.name == *required && service.status.is_running())
+        })
+    }
+    pub fn is_app_available(&self, app_id: &str) -> bool {
+        self.are_app_dependencies_running(app_id)
+    }
+    pub fn service_reveal_epoch(&self, service: &str) -> u64 {
+        *self.service_reveal_epochs.read().get(service).unwrap_or(&0)
     }
 
-    /// Whether a dock app should currently be enabled/lit: true if it has no
-    /// owning service, or its owning service is running.
-    pub fn is_app_available(&self, app_id: &str) -> bool {
-        match self.service_for_app(app_id) {
-            None => true,
-            Some(service_name) => self
-                .services
-                .read()
+    pub fn set_services(&mut self, next: Vec<ServiceInfo>) {
+        let previous = self.services.read().clone();
+        for service in &next {
+            let was_running = previous
                 .iter()
-                .any(|s| s.name == service_name && s.status.is_running()),
+                .find(|item| item.name == service.name)
+                .is_some_and(|item| item.status.is_running());
+            if service.status.is_running() && !was_running {
+                *self
+                    .service_reveal_epochs
+                    .write()
+                    .entry(service.name.clone())
+                    .or_default() += 1;
+                self.service_action_errors.write().remove(&service.name);
+            }
         }
+        self.services.set(next);
     }
 
     pub fn service_status(&self, name: &str) -> Option<ServiceStatus> {
@@ -192,6 +253,233 @@ impl OsState {
                 maximized: false,
                 restore_rect: None,
             });
+        });
+    }
+
+    pub fn activate_app(&mut self, app_id: &str) {
+        let id = {
+            self.windows
+                .read()
+                .iter()
+                .find(|window| window.app_id == app_id)
+                .map(|window| window.id)
+        };
+        if let Some(id) = id {
+            self.windows.with_mut(|windows| {
+                if let Some(window) = windows.iter_mut().find(|window| window.id == id) {
+                    window.minimized = false;
+                }
+            });
+            self.focus_window(id);
+        }
+    }
+
+    fn upsert_service(&mut self, service: ServiceInfo) {
+        let mut next = self.services.read().clone();
+        if let Some(current) = next.iter_mut().find(|item| item.name == service.name) {
+            *current = service;
+        } else {
+            next.push(service);
+        }
+        self.set_services(next);
+    }
+
+    pub fn open_service_settings(&mut self, service: &str) {
+        self.service_settings
+            .set(Some(ServiceSettingsState::loading(service)));
+        let running = self
+            .service_status(service)
+            .as_ref()
+            .is_some_and(ServiceStatus::is_running);
+        let service = service.to_string();
+        let mut settings = self.service_settings;
+        let mut drafts = self.service_config_drafts;
+        spawn(async move {
+            match futures_util::future::join(
+                api::get_service_config_schema(&service),
+                api::get_service_config(&service),
+            )
+            .await
+            {
+                (Ok(schema), Ok(config)) => {
+                    let values = if running {
+                        config
+                            .effective
+                            .clone()
+                            .unwrap_or_else(|| config.saved.clone())
+                    } else {
+                        drafts
+                            .read()
+                            .get(&service)
+                            .cloned()
+                            .unwrap_or_else(|| config.saved.clone())
+                    };
+                    if !running {
+                        drafts
+                            .write()
+                            .entry(service.clone())
+                            .or_insert_with(|| values.clone());
+                    }
+                    settings.set(Some(ServiceSettingsState {
+                        service: service.clone(),
+                        form_values: form_values_from_config(&service, &schema, &values),
+                        schema: Some(schema),
+                        config: Some(config),
+                        client_field_errors: HashMap::new(),
+                        server_field_errors: HashMap::new(),
+                        error: None,
+                        loading: false,
+                        validating: false,
+                        saving: false,
+                        starting: false,
+                    }));
+                }
+                (Err(error), _) | (_, Err(error)) => {
+                    if let Some(state) = settings.write().as_mut() {
+                        state.loading = false;
+                        state.error = Some(error.to_string());
+                    }
+                }
+            }
+        });
+    }
+    pub fn close_service_settings(&mut self) {
+        self.service_settings.set(None);
+    }
+    pub fn update_service_setting(&mut self, key: &str, value: String) {
+        let mut draft = None;
+        if let Some(state) = self.service_settings.write().as_mut() {
+            state.form_values.insert(key.into(), value);
+            state.client_field_errors.remove(key);
+            state.server_field_errors.remove(key);
+            state.error = None;
+            if let (Some(schema), Some(config)) = (&state.schema, &state.config) {
+                draft = Some((
+                    state.service.clone(),
+                    config_from_form(&state.service, schema, &config.saved, &state.form_values),
+                ));
+            }
+        }
+        if let Some((service, values)) = draft {
+            self.service_config_drafts.write().insert(service, values);
+        }
+    }
+    pub fn reset_service_settings(&mut self) {
+        let mut draft = None;
+        if let Some(state) = self.service_settings.write().as_mut() {
+            if let (Some(schema), Some(config)) = (&state.schema, &state.config) {
+                state.form_values =
+                    form_values_from_config(&state.service, schema, &config.defaults);
+                state.client_field_errors.clear();
+                state.server_field_errors.clear();
+                state.error = None;
+                draft = Some((state.service.clone(), config.defaults.clone()));
+            }
+        }
+        if let Some((service, values)) = draft {
+            self.service_config_drafts.write().insert(service, values);
+        }
+    }
+    pub fn validate_and_start_service(&mut self) {
+        let Some(snapshot) = self.service_settings.read().clone() else {
+            return;
+        };
+        let (Some(schema), Some(config)) = (snapshot.schema, snapshot.config) else {
+            return;
+        };
+        let values = config_from_form(
+            &snapshot.service,
+            &schema,
+            &config.saved,
+            &snapshot.form_values,
+        );
+        let mut errors = validate_form(&schema, &snapshot.form_values);
+        let mut known = self.service_config_drafts.read().clone();
+        known.insert(snapshot.service.clone(), values.clone());
+        if let Some((field, message)) = known_port_conflict(&snapshot.service, &known) {
+            errors.insert(field, message);
+        }
+        if !errors.is_empty() {
+            if let Some(state) = self.service_settings.write().as_mut() {
+                state.client_field_errors = errors;
+                state.server_field_errors.clear();
+                state.error = Some("Check the highlighted settings.".into());
+            }
+            return;
+        }
+        if let Some(state) = self.service_settings.write().as_mut() {
+            state.validating = true;
+            state.error = None;
+            state.client_field_errors.clear();
+            state.server_field_errors.clear();
+        }
+        let service = snapshot.service;
+        let mut settings = self.service_settings;
+        let mut drafts = self.service_config_drafts;
+        let mut os = *self;
+        spawn(async move {
+            match api::validate_service_config(&service, &values).await {
+                Ok(result) if result.ok => {}
+                Ok(result) => {
+                    if let Some(state) = settings.write().as_mut() {
+                        state.validating = false;
+                        state.server_field_errors = result.field_errors;
+                        state.error = Some("Service configuration is invalid.".into());
+                    }
+                    return;
+                }
+                Err(error) => {
+                    apply_service_error(settings, error);
+                    return;
+                }
+            }
+            if let Some(state) = settings.write().as_mut() {
+                state.validating = false;
+                state.saving = true;
+            }
+            if let Err(error) = api::save_service_config(&service, &values).await {
+                apply_service_error(settings, error);
+                return;
+            }
+            if let Some(state) = settings.write().as_mut() {
+                state.saving = false;
+                state.starting = true;
+            }
+            match api::start_service_request(&service, &StartServiceRequest { config: None }).await
+            {
+                Ok(action) => {
+                    os.upsert_service(action.service);
+                    drafts.write().remove(&service);
+                    settings.set(None);
+                }
+                Err(error) => apply_service_error(settings, error),
+            }
+        });
+    }
+    pub fn restart_managed_service(&mut self, service: &str) {
+        self.run_service_action(service, true);
+    }
+    pub fn stop_managed_service(&mut self, service: &str) {
+        self.run_service_action(service, false);
+    }
+    fn run_service_action(&mut self, service: &str, restart: bool) {
+        let service = service.to_string();
+        let mut os = *self;
+        self.service_action_errors.write().remove(&service);
+        spawn(async move {
+            let result = if restart {
+                api::restart_service(&service).await
+            } else {
+                api::stop_service(&service).await
+            };
+            match result {
+                Ok(action) => os.upsert_service(action.service),
+                Err(error) => {
+                    os.service_action_errors
+                        .write()
+                        .insert(service, error.message);
+                }
+            }
         });
     }
 
@@ -358,6 +646,227 @@ impl OsState {
     }
 }
 
+fn apply_service_error(
+    mut settings: Signal<Option<ServiceSettingsState>>,
+    error: api::ServiceApiError,
+) {
+    if let Some(state) = settings.write().as_mut() {
+        state.loading = false;
+        state.validating = false;
+        state.saving = false;
+        state.starting = false;
+        state.server_field_errors = error.field_errors;
+        state.error = Some(error.message);
+    }
+}
+fn split_lines(value: &str) -> Vec<String> {
+    value
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+fn custom_build_args(values: &ServiceConfigValues) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < values.build_args.len() {
+        if values.build_args[i] == "--no-default-features" {
+            i += 1
+        } else if values.build_args[i] == "--features" {
+            i += 2
+        } else {
+            out.push(values.build_args[i].clone());
+            i += 1
+        }
+    }
+    out
+}
+fn compute_features(values: &ServiceConfigValues) -> (String, bool) {
+    if let Some(i) = values.build_args.iter().position(|a| a == "--features") {
+        if let Some(value) = values.build_args.get(i + 1) {
+            let f = value.split(',').collect::<Vec<_>>();
+            let backend = ["wgpu", "cuda", "cpu", "metal", "rocm"]
+                .into_iter()
+                .find(|x| f.contains(x))
+                .unwrap_or("wgpu");
+            return (backend.into(), f.contains(&"siren"));
+        }
+    }
+    ("wgpu".into(), true)
+}
+fn frontend_args(values: &ServiceConfigValues) -> (String, Vec<String>) {
+    let mut port = "8080".to_string();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < values.extra_args.len() {
+        if values.extra_args[i] == "--port" || values.extra_args[i] == "-p" {
+            if let Some(v) = values.extra_args.get(i + 1) {
+                port = v.clone()
+            }
+            i += 2
+        } else {
+            out.push(values.extra_args[i].clone());
+            i += 1
+        }
+    }
+    (port, out)
+}
+pub fn form_values_from_config(
+    service: &str,
+    schema: &ServiceConfigSchema,
+    values: &ServiceConfigValues,
+) -> HashMap<String, String> {
+    let (compute, siren) = compute_features(values);
+    let (port, front) = frontend_args(values);
+    schema
+        .fields
+        .iter()
+        .map(|field| {
+            let value = match field.key.as_str() {
+                "EXTRA_ARGS" if service == "frontend" => front.join("\n"),
+                "EXTRA_ARGS" => values.extra_args.join("\n"),
+                "BUILD_ARGS" => custom_build_args(values).join("\n"),
+                "COMPUTE_BACKEND" => compute.clone(),
+                "SIREN" => siren.to_string(),
+                "SERVE_PORT" => port.clone(),
+                "BIND_HOST" | "PLATFORM" | "CRATE" | "CRATE_SUBDIR" => field.default_value.clone(),
+                key => values
+                    .env
+                    .get(key)
+                    .cloned()
+                    .unwrap_or_else(|| field.default_value.clone()),
+            };
+            (field.key.clone(), value)
+        })
+        .collect()
+}
+pub fn config_from_form(
+    service: &str,
+    schema: &ServiceConfigSchema,
+    base: &ServiceConfigValues,
+    form: &HashMap<String, String>,
+) -> ServiceConfigValues {
+    let mut result = base.clone();
+    for field in &schema.fields {
+        let value = form
+            .get(&field.key)
+            .cloned()
+            .unwrap_or_else(|| field.default_value.clone());
+        if field.key.starts_with("LUNAR_") {
+            if value.trim().is_empty() {
+                result.env.remove(&field.key);
+            } else {
+                result.env.insert(field.key.clone(), value.trim().into());
+            }
+        }
+    }
+    if service == "testbench-backend" {
+        if let Some(port) = result.env.get("LUNAR_TESTBENCH_BACKEND_PORT").cloned() {
+            result.env.insert("LUNAR_TESTBENCH_PORT".into(), port);
+        }
+    }
+    result.extra_args = form
+        .get("EXTRA_ARGS")
+        .map(|v| split_lines(v))
+        .unwrap_or_default();
+    if service == "frontend" {
+        let port = form
+            .get("SERVE_PORT")
+            .cloned()
+            .unwrap_or_else(|| "8080".into());
+        result.extra_args.splice(0..0, ["--port".into(), port]);
+    }
+    result.build_args = form
+        .get("BUILD_ARGS")
+        .map(|v| split_lines(v))
+        .unwrap_or_default();
+    if service == "backend" {
+        let compute = form
+            .get("COMPUTE_BACKEND")
+            .map(String::as_str)
+            .unwrap_or("wgpu");
+        let siren = form.get("SIREN").is_none_or(|v| v == "true");
+        if compute != "wgpu" || !siren {
+            let features = if siren {
+                format!("{compute},siren")
+            } else {
+                compute.into()
+            };
+            result.build_args.splice(
+                0..0,
+                [
+                    "--no-default-features".into(),
+                    "--features".into(),
+                    features,
+                ],
+            );
+        }
+    }
+    result
+}
+fn configured_port(service: &str, values: &ServiceConfigValues) -> Option<u16> {
+    match service {
+        "backend" => values.env.get("LUNAR_BACKEND_PORT")?.parse().ok(),
+        "testbench-backend" => values.env.get("LUNAR_TESTBENCH_BACKEND_PORT")?.parse().ok(),
+        "frontend" => values
+            .extra_args
+            .windows(2)
+            .find(|p| p[0] == "--port" || p[0] == "-p")
+            .and_then(|p| p[1].parse().ok()),
+        _ => None,
+    }
+}
+fn port_field(service: &str) -> &'static str {
+    match service {
+        "backend" => "LUNAR_BACKEND_PORT",
+        "testbench-backend" => "LUNAR_TESTBENCH_BACKEND_PORT",
+        "frontend" => "SERVE_PORT",
+        _ => "port",
+    }
+}
+fn known_port_conflict(
+    service: &str,
+    configs: &HashMap<String, ServiceConfigValues>,
+) -> Option<(String, String)> {
+    let port = configured_port(service, configs.get(service)?)?;
+    configs.iter().find_map(|(other, values)| {
+        if other != service && configured_port(other, values) == Some(port) {
+            Some((
+                port_field(service).into(),
+                format!("Port {port} is already selected for {other}."),
+            ))
+        } else {
+            None
+        }
+    })
+}
+pub fn validate_form(
+    schema: &ServiceConfigSchema,
+    form: &HashMap<String, String>,
+) -> HashMap<String, String> {
+    let mut errors = HashMap::new();
+    for field in &schema.fields {
+        let value = form.get(&field.key).map(String::as_str).unwrap_or("");
+        if field.required && value.trim().is_empty() {
+            errors.insert(field.key.clone(), "This field is required.".into());
+            continue;
+        }
+        if matches!(field.field_type, FieldType::Port) && !value.trim().is_empty() {
+            if !matches!(value.parse::<u32>(), Ok(1..=65535)) {
+                errors.insert(field.key.clone(), "Enter a port from 1 to 65535.".into());
+                continue;
+            }
+        }
+        if let Some(allowed) = &field.allowed_values {
+            if !allowed.iter().any(|item| item == value) {
+                errors.insert(field.key.clone(), "Choose a supported value.".into());
+            }
+        }
+    }
+    errors
+}
+
 /// Installs [`OsState`] into context. Call exactly once, near the app root (in `Room`).
 pub fn provide_os_state() -> OsState {
     use_context_provider(OsState::new)
@@ -384,7 +893,7 @@ pub fn use_os_runtime() {
                         os.backend_online.set(true);
                         os.boot_phase.set(BootPhase::LampIgnite);
                         tokio_time_sleep(1200).await;
-                        os.boot_phase.set(BootPhase::RackReveal);
+                        os.boot_phase.set(BootPhase::DesktopReveal);
                         tokio_time_sleep(1400).await;
                         os.boot_phase.set(BootPhase::Ready);
                     }
@@ -405,7 +914,7 @@ pub fn use_os_runtime() {
         }
         loop {
             if let Ok(services) = api::list_start_services().await {
-                os.services.set(services);
+                os.set_services(services);
             }
             tokio_time_sleep(1500).await;
         }
@@ -436,4 +945,81 @@ pub fn use_os_runtime() {
             tokio_time_sleep(2000).await;
         }
     });
+}
+
+#[cfg(test)]
+mod settings_tests {
+    use super::*;
+    use crate::api::ServiceConfigField;
+    fn field(key: &str, kind: FieldType, default: &str) -> ServiceConfigField {
+        ServiceConfigField {
+            key: key.into(),
+            label: key.into(),
+            description: None,
+            field_type: kind,
+            default_value: default.into(),
+            is_build_param: false,
+            required: true,
+            min: None,
+            max: None,
+            allowed_values: None,
+            read_only: false,
+        }
+    }
+    #[test]
+    fn frontend_round_trip_keeps_port_out_of_custom_args() {
+        let schema = ServiceConfigSchema {
+            service: "frontend".into(),
+            fields: vec![
+                field("SERVE_PORT", FieldType::Port, "8080"),
+                field("EXTRA_ARGS", FieldType::StringList, ""),
+            ],
+        };
+        let values = ServiceConfigValues {
+            env: HashMap::new(),
+            extra_args: vec!["--port".into(), "9090".into(), "--hot-reload".into()],
+            build_args: vec![],
+        };
+        let form = form_values_from_config("frontend", &schema, &values);
+        assert_eq!(form["SERVE_PORT"], "9090");
+        assert_eq!(form["EXTRA_ARGS"], "--hot-reload");
+        assert_eq!(
+            config_from_form("frontend", &schema, &values, &form).extra_args,
+            ["--port", "9090", "--hot-reload"]
+        );
+    }
+    #[test]
+    fn invalid_and_conflicting_ports_are_blocked_client_side() {
+        let schema = ServiceConfigSchema {
+            service: "frontend".into(),
+            fields: vec![field("SERVE_PORT", FieldType::Port, "8080")],
+        };
+        assert!(
+            validate_form(
+                &schema,
+                &HashMap::from([("SERVE_PORT".into(), "70000".into())])
+            )
+            .contains_key("SERVE_PORT")
+        );
+        let configs = HashMap::from([
+            (
+                "backend".into(),
+                ServiceConfigValues {
+                    env: HashMap::from([("LUNAR_BACKEND_PORT".into(), "25255".into())]),
+                    ..Default::default()
+                },
+            ),
+            (
+                "frontend".into(),
+                ServiceConfigValues {
+                    extra_args: vec!["--port".into(), "25255".into()],
+                    ..Default::default()
+                },
+            ),
+        ]);
+        assert_eq!(
+            known_port_conflict("frontend", &configs).unwrap().0,
+            "SERVE_PORT"
+        );
+    }
 }

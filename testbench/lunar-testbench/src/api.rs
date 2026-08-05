@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use gloo_net::http::Request;
 use gloo_net::http::Response;
 use serde::Serialize;
@@ -53,6 +55,112 @@ async fn post_json_value<T: DeserializeOwned>(
         .await
         .map_err(err_to_string)?;
     decode_json(resp).await
+}
+
+#[derive(serde::Deserialize, serde::Serialize, Debug, Clone, PartialEq, Eq)]
+pub struct ServiceApiError {
+    pub status: u16,
+    pub code: String,
+    pub message: String,
+    pub field_errors: HashMap<String, String>,
+}
+
+impl std::fmt::Display for ServiceApiError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.status == 0 {
+            write!(f, "{}", self.message)
+        } else {
+            write!(f, "HTTP {}: {}", self.status, self.message)
+        }
+    }
+}
+
+impl std::error::Error for ServiceApiError {}
+
+#[derive(serde::Deserialize)]
+struct ServiceApiErrorBody {
+    error: String,
+    message: String,
+    #[serde(default)]
+    field_errors: HashMap<String, String>,
+}
+
+fn network_error(error: impl std::fmt::Display) -> ServiceApiError {
+    ServiceApiError {
+        status: 0,
+        code: "network_error".to_string(),
+        message: error.to_string(),
+        field_errors: HashMap::new(),
+    }
+}
+
+async fn decode_service_json<T: DeserializeOwned>(resp: Response) -> Result<T, ServiceApiError> {
+    let status = resp.status();
+    let text = resp.text().await.map_err(network_error)?;
+    if !(200..300).contains(&status) {
+        let body =
+            serde_json::from_str::<ServiceApiErrorBody>(&text).unwrap_or(ServiceApiErrorBody {
+                error: "http_error".to_string(),
+                message: if text.is_empty() {
+                    format!("Request failed with status {status}")
+                } else {
+                    text
+                },
+                field_errors: HashMap::new(),
+            });
+        return Err(ServiceApiError {
+            status,
+            code: body.error,
+            message: body.message,
+            field_errors: body.field_errors,
+        });
+    }
+    serde_json::from_str(&text).map_err(|error| ServiceApiError {
+        status,
+        code: "invalid_response".to_string(),
+        message: error.to_string(),
+        field_errors: HashMap::new(),
+    })
+}
+
+async fn service_get<T: DeserializeOwned>(path: &str) -> Result<T, ServiceApiError> {
+    let url = format!("{}{path}", get_start_backend_url());
+    let response = Request::get(&url).send().await.map_err(network_error)?;
+    decode_service_json(response).await
+}
+
+async fn service_put<B: Serialize, T: DeserializeOwned>(
+    path: &str,
+    body: &B,
+) -> Result<T, ServiceApiError> {
+    let url = format!("{}{path}", get_start_backend_url());
+    let response = Request::put(&url)
+        .json(body)
+        .map_err(network_error)?
+        .send()
+        .await
+        .map_err(network_error)?;
+    decode_service_json(response).await
+}
+
+async fn service_post<B: Serialize, T: DeserializeOwned>(
+    path: &str,
+    body: &B,
+) -> Result<T, ServiceApiError> {
+    let url = format!("{}{path}", get_start_backend_url());
+    let response = Request::post(&url)
+        .json(body)
+        .map_err(network_error)?
+        .send()
+        .await
+        .map_err(network_error)?;
+    decode_service_json(response).await
+}
+
+async fn service_post_empty<T: DeserializeOwned>(path: &str) -> Result<T, ServiceApiError> {
+    let url = format!("{}{path}", get_start_backend_url());
+    let response = Request::post(&url).send().await.map_err(network_error)?;
+    decode_service_json(response).await
 }
 
 async fn get_ok(base: &str, path: &str) -> Result<(), String> {
@@ -172,6 +280,90 @@ pub struct ServiceStats {
     pub log_count: usize,
 }
 
+#[derive(serde::Deserialize, serde::Serialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum FieldType {
+    String,
+    Port,
+    Path,
+    Boolean,
+    Select { options: Vec<String> },
+    StringList,
+}
+
+#[derive(serde::Deserialize, serde::Serialize, Debug, Clone, PartialEq)]
+pub struct ServiceConfigField {
+    pub key: String,
+    pub label: String,
+    pub description: Option<String>,
+    pub field_type: FieldType,
+    pub default_value: String,
+    pub is_build_param: bool,
+    pub required: bool,
+    pub min: Option<f64>,
+    pub max: Option<f64>,
+    pub allowed_values: Option<Vec<String>>,
+    pub read_only: bool,
+}
+
+#[derive(serde::Deserialize, serde::Serialize, Debug, Clone, PartialEq)]
+pub struct ServiceConfigSchema {
+    pub service: String,
+    pub fields: Vec<ServiceConfigField>,
+}
+
+#[derive(serde::Deserialize, serde::Serialize, Debug, Clone, PartialEq, Default)]
+pub struct ServiceConfigValues {
+    pub env: HashMap<String, String>,
+    pub extra_args: Vec<String>,
+    pub build_args: Vec<String>,
+}
+
+#[derive(serde::Deserialize, serde::Serialize, Debug, Clone, PartialEq)]
+pub struct ServiceConfigState {
+    pub defaults: ServiceConfigValues,
+    pub saved: ServiceConfigValues,
+    pub effective: Option<ServiceConfigValues>,
+}
+
+#[derive(serde::Deserialize, serde::Serialize, Debug, Clone, PartialEq, Eq)]
+pub struct FieldError {
+    pub field: String,
+    pub message: String,
+}
+
+#[derive(serde::Deserialize, serde::Serialize, Debug, Clone, PartialEq, Eq)]
+pub struct ServiceValidationResult {
+    pub ok: bool,
+    pub field_errors: HashMap<String, String>,
+}
+
+impl ServiceValidationResult {
+    pub fn errors(&self) -> Vec<FieldError> {
+        let mut errors = self
+            .field_errors
+            .iter()
+            .map(|(field, message)| FieldError {
+                field: field.clone(),
+                message: message.clone(),
+            })
+            .collect::<Vec<_>>();
+        errors.sort_by(|left, right| left.field.cmp(&right.field));
+        errors
+    }
+}
+
+#[derive(serde::Deserialize, serde::Serialize, Debug, Clone, PartialEq, Default)]
+pub struct StartServiceRequest {
+    pub config: Option<ServiceConfigValues>,
+}
+
+#[derive(serde::Deserialize, serde::Serialize, Debug, Clone, PartialEq)]
+pub struct ServiceActionResponse {
+    pub service: ServiceInfo,
+    pub config: ServiceConfigState,
+}
+
 pub async fn system_snapshot() -> Result<SystemSnapshot, String> {
     let tb_url = get_testbench_url();
     get_json(
@@ -248,16 +440,52 @@ pub async fn stop_all_services() -> Result<(), String> {
     get_ok(&get_start_backend_url(), "/stop").await
 }
 
-pub async fn start_service(name: &str) -> Result<(), String> {
-    get_ok(&get_start_backend_url(), &format!("/start/{name}")).await
+pub async fn get_service_config_schema(name: &str) -> Result<ServiceConfigSchema, ServiceApiError> {
+    service_get(&format!("/services/{name}/config/schema")).await
 }
 
-pub async fn stop_service(name: &str) -> Result<(), String> {
-    get_ok(&get_start_backend_url(), &format!("/stop/{name}")).await
+pub async fn get_service_config(name: &str) -> Result<ServiceConfigState, ServiceApiError> {
+    service_get(&format!("/services/{name}/config")).await
 }
 
-pub async fn restart_service(name: &str) -> Result<(), String> {
-    get_ok(&get_start_backend_url(), &format!("/restart/{name}")).await
+pub async fn validate_service_config(
+    name: &str,
+    values: &ServiceConfigValues,
+) -> Result<ServiceValidationResult, ServiceApiError> {
+    service_post(&format!("/services/{name}/validate"), values).await
+}
+
+pub async fn save_service_config(
+    name: &str,
+    values: &ServiceConfigValues,
+) -> Result<ServiceConfigState, ServiceApiError> {
+    service_put(&format!("/services/{name}/config"), values).await
+}
+
+pub async fn start_service_request(
+    name: &str,
+    request: &StartServiceRequest,
+) -> Result<ServiceActionResponse, ServiceApiError> {
+    service_post(&format!("/services/{name}/start"), request).await
+}
+
+pub async fn start_service(name: &str) -> Result<ServiceActionResponse, ServiceApiError> {
+    start_service_request(name, &StartServiceRequest::default()).await
+}
+
+pub async fn stop_service(name: &str) -> Result<ServiceActionResponse, ServiceApiError> {
+    service_post_empty(&format!("/services/{name}/stop")).await
+}
+
+pub async fn restart_service_request(
+    name: &str,
+    request: &StartServiceRequest,
+) -> Result<ServiceActionResponse, ServiceApiError> {
+    service_post(&format!("/services/{name}/restart"), request).await
+}
+
+pub async fn restart_service(name: &str) -> Result<ServiceActionResponse, ServiceApiError> {
+    restart_service_request(name, &StartServiceRequest::default()).await
 }
 
 /// SSE endpoint that streams `ServiceLogEvent`s for all services managed by `lunar-start-backend`.
@@ -424,4 +652,65 @@ pub fn urlencoding(s: &str) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod config_api_tests {
+    use super::*;
+
+    #[test]
+    fn config_api_models_match_server_json() {
+        let schema: ServiceConfigSchema = serde_json::from_value(serde_json::json!({
+            "service": "backend",
+            "fields": [{
+                "key": "COMPUTE_BACKEND",
+                "label": "Compute backend",
+                "description": null,
+                "field_type": {"select": {"options": ["wgpu", "cuda"]}},
+                "default_value": "wgpu",
+                "is_build_param": true,
+                "required": true,
+                "min": null,
+                "max": null,
+                "allowed_values": ["wgpu", "cuda"],
+                "read_only": false
+            }]
+        }))
+        .unwrap();
+        assert_eq!(schema.service, "backend");
+        assert!(matches!(
+            schema.fields[0].field_type,
+            FieldType::Select { .. }
+        ));
+    }
+
+    #[test]
+    fn field_errors_are_normalized_for_ui_rendering() {
+        let result = ServiceValidationResult {
+            ok: false,
+            field_errors: HashMap::from([
+                ("port".to_string(), "Invalid port".to_string()),
+                ("host".to_string(), "Required".to_string()),
+            ]),
+        };
+        assert_eq!(
+            result.errors(),
+            [
+                FieldError {
+                    field: "host".to_string(),
+                    message: "Required".to_string(),
+                },
+                FieldError {
+                    field: "port".to_string(),
+                    message: "Invalid port".to_string(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn empty_start_request_serializes_with_no_config() {
+        let value = serde_json::to_value(StartServiceRequest::default()).unwrap();
+        assert!(value["config"].is_null());
+    }
 }

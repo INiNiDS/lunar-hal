@@ -91,7 +91,6 @@ pub struct ServiceRuntime {
     pub pid: Option<u32>,
 }
 
-
 /// Log processing and execution management engine.
 pub struct LogBackend {
     workspace: PathBuf,
@@ -139,7 +138,9 @@ impl LogBackend {
     }
 
     pub fn service(&self, name: &str) -> Option<&ServiceRuntime> {
-        self.services.iter().find(|service| service.config.name == name)
+        self.services
+            .iter()
+            .find(|service| service.config.name == name)
     }
 
     /// Replaces the configuration of a service that has no active process.
@@ -152,7 +153,10 @@ impl LogBackend {
             .iter_mut()
             .find(|service| service.config.name == config.name)
             .with_context(|| format!("unknown service '{}'", config.name))?;
-        if matches!(runtime.status, ServiceStatus::Starting | ServiceStatus::Running) {
+        if matches!(
+            runtime.status,
+            ServiceStatus::Starting | ServiceStatus::Running
+        ) {
             anyhow::bail!("service '{}' is not stopped", config.name);
         }
         runtime.config = config;
@@ -397,7 +401,9 @@ fn service_command(kind: &ServiceKind) -> String {
             cargo_args,
         } => {
             let args = cargo_args.join(" ");
-            format!("cargo run --bin {bin_name} {args}").trim().to_string()
+            format!("cargo run --bin {bin_name} {args}")
+                .trim()
+                .to_string()
         }
     }
 }
@@ -547,10 +553,7 @@ pub fn build_dx_serve_cmd(
     env: &HashMap<String, String>,
 ) -> tokio::process::Command {
     let user_port = extra_args.iter().any(|a| a == "--port" || a == "-p");
-    let dx_bin = env
-        .get("LUNAR_DX_BIN")
-        .map(String::as_str)
-        .unwrap_or("dx");
+    let dx_bin = env.get("LUNAR_DX_BIN").map(String::as_str).unwrap_or("dx");
 
     let mut cmd = tokio::process::Command::new(dx_bin);
     cmd.arg("serve")
@@ -652,10 +655,7 @@ pub async fn cargo_build(ws: &Path, build_args: &[String]) -> Result<()> {
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit());
 
-    let status = cmd
-        .status()
-        .await
-        .context("failed to run cargo build")?;
+    let status = cmd.status().await.context("failed to run cargo build")?;
 
     if !status.success() {
         anyhow::bail!("cargo build failed with status: {status}");
@@ -709,7 +709,10 @@ mod tests {
     fn test_build_dx_serve_cmd_applies_service_env_and_ports() {
         let ws = Path::new("/workspace");
         let mut env = HashMap::new();
-        env.insert("LUNAR_API_URL".to_string(), "http://localhost:8080".to_string());
+        env.insert(
+            "LUNAR_API_URL".to_string(),
+            "http://localhost:8080".to_string(),
+        );
         env.insert("LUNAR_DX_BIN".to_string(), "/opt/dioxus/dx".to_string());
 
         let extra_args = vec!["--platform".to_string(), "web".to_string()];
@@ -754,8 +757,18 @@ mod tests {
         assert_eq!(
             args,
             vec![
-                "watch", "--", "cargo", "run", "--release", "--offline", "--features", "mock",
-                "--bin", "testbench", "--", "--verbose"
+                "watch",
+                "--",
+                "cargo",
+                "run",
+                "--release",
+                "--offline",
+                "--features",
+                "mock",
+                "--bin",
+                "testbench",
+                "--",
+                "--verbose"
             ]
         );
     }
@@ -764,7 +777,10 @@ mod tests {
     fn test_build_cargo_run_cmd_applies_env() {
         let ws = Path::new("/workspace");
         let mut env = HashMap::new();
-        env.insert("DATABASE_URL".to_string(), "postgres://localhost/db".to_string());
+        env.insert(
+            "DATABASE_URL".to_string(),
+            "postgres://localhost/db".to_string(),
+        );
 
         let cargo_args = vec!["--features".to_string(), "postgres".to_string()];
         let build_args = vec![];
@@ -781,7 +797,15 @@ mod tests {
         let args = extract_args(&cmd);
         assert_eq!(
             args,
-            vec!["run", "--bin", "server", "--features", "postgres", "--", "--migrate"]
+            vec![
+                "run",
+                "--bin",
+                "server",
+                "--features",
+                "postgres",
+                "--",
+                "--migrate"
+            ]
         );
     }
 }

@@ -7,9 +7,10 @@ fn action_label(action: &EnemyAction, stars: &[ResponseStar]) -> String {
     match action {
         EnemyAction::Nothing => String::from("idle"),
         EnemyAction::AttackingStar(coord) => {
-            if let Some(star) = stars.iter().find(|s| {
-                (s.x - coord.0).abs() < 1.0 && (s.y - coord.1).abs() < 1.0
-            }) {
+            if let Some(star) = stars
+                .iter()
+                .find(|s| (s.x - coord.0).abs() < 1.0 && (s.y - coord.1).abs() < 1.0)
+            {
                 format!("atk-star#{} ({:.0},{:.0})", star.id, coord.0, coord.1)
             } else {
                 format!("atk-star ({:.0},{:.0})", coord.0, coord.1)
@@ -17,7 +18,9 @@ fn action_label(action: &EnemyAction, stars: &[ResponseStar]) -> String {
         }
         EnemyAction::AttackingEnemy(eid) => format!("atk-enemy#{}", eid),
         EnemyAction::Flying(x, y) => format!("fly→{:.0},{:.0}", x, y),
-        EnemyAction::Escaping { direction } => format!("esc ({:.0},{:.0})", direction.0, direction.1),
+        EnemyAction::Escaping { direction } => {
+            format!("esc ({:.0},{:.0})", direction.0, direction.1)
+        }
     }
 }
 
@@ -92,7 +95,13 @@ pub fn AdminPanel(
 
 fn hp_bar(hp: f32, max_hp: f32) -> Element {
     let ratio = (hp / max_hp).clamp(0.0, 1.0);
-    let color = if ratio > 0.6 { "#22c55e" } else if ratio > 0.25 { "#eab308" } else { "#ef4444" };
+    let color = if ratio > 0.6 {
+        "#22c55e"
+    } else if ratio > 0.25 {
+        "#eab308"
+    } else {
+        "#ef4444"
+    };
     rsx! {
         div { class: "w-full h-1.5 rounded-full overflow-hidden bg-white/5",
             div {

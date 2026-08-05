@@ -1,4 +1,3 @@
-
 fn skip_csi_sequence<I>(chars: &mut std::iter::Peekable<I>)
 where
     I: Iterator<Item = char>,

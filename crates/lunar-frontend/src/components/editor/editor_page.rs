@@ -189,7 +189,6 @@ fn use_sync_star_pipeline(game: Signal<Game>, version: Signal<u64>) {
     });
 }
 
-
 fn use_editor_synchronization(game: Signal<Game>, version: Signal<u64>, refresh_tick: Signal<u32>) {
     use_provide_world_camera_persistence();
     use_persist_world_camera();
@@ -378,11 +377,7 @@ pub fn Editor() -> Element {
         .as_ref()
         .map(|s| s.temperature_k)
         .unwrap_or(5778.0);
-    let star_hp = snap
-        .selected_star
-        .as_ref()
-        .map(|s| s.hp)
-        .unwrap_or(100.0);
+    let star_hp = snap.selected_star.as_ref().map(|s| s.hp).unwrap_or(100.0);
 
     let on_select_star = move |star: ResponseStar| {
         game.read().clone().select_star(Some(star));

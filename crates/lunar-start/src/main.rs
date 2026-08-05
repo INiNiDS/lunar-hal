@@ -6,7 +6,10 @@ use clap::Parser;
 use lunar_start::prelude::*;
 
 #[derive(Parser)]
-#[command(name = "lns", about = "Lunar launcher — starts testbench + testbench-backend")]
+#[command(
+    name = "lns",
+    about = "Lunar launcher — starts testbench + testbench-backend"
+)]
 struct Cli {
     /// Watch for file changes and restart (requires cargo-watch).
     #[arg(short, long)]

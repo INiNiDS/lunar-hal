@@ -304,10 +304,7 @@ impl Enemy {
                     };
                 }
             }
-            EnemyType::Thief
-            | EnemyType::Invisible
-            | EnemyType::Scavenger
-            | EnemyType::Coward => {
+            EnemyType::Thief | EnemyType::Invisible | EnemyType::Scavenger | EnemyType::Coward => {
                 let escape_dir = self.get_escape_direction(attacker.coordinates);
                 self.action = EnemyAction::Escaping {
                     direction: escape_dir,
@@ -317,7 +314,11 @@ impl Enemy {
     }
 
     #[inline]
-    fn update_stealth_and_timers(&mut self, mouse_world: Option<(f32, f32)>, payload: &UpdatePayload) {
+    fn update_stealth_and_timers(
+        &mut self,
+        mouse_world: Option<(f32, f32)>,
+        payload: &UpdatePayload,
+    ) {
         if self.enemy_type == EnemyType::Invisible {
             let is_hovered = if let Some(mw) = mouse_world {
                 let dx = self.coordinates.0 - mw.0;
@@ -413,24 +414,14 @@ impl Enemy {
         let star_hp_ratio = (star.hp / STAR_MAX_HP).clamp(0.0, 1.0);
 
         match self.enemy_type {
-            EnemyType::Tank => {
-                self.tank_star_utility(dist)
-            }
-            EnemyType::Thief => {
-                self.thief_star_utility(dist, neglect_time, d_mouse)
-            }
-            EnemyType::Invisible => {
-                self.invisible_star_utility(dist, neglect_time, d_mouse)
-            }
+            EnemyType::Tank => self.tank_star_utility(dist),
+            EnemyType::Thief => self.thief_star_utility(dist, neglect_time, d_mouse),
+            EnemyType::Invisible => self.invisible_star_utility(dist, neglect_time, d_mouse),
             EnemyType::Scavenger => {
                 self.scavenger_star_utility(dist, star_pos, star_hp_ratio, left, right)
             }
-            EnemyType::Coward => {
-                self.coward_star_utility(dist, star_pos, d_mouse, left, right)
-            }
-            EnemyType::Backstabber => {
-                self.backstabber_star_utility(dist)
-            }
+            EnemyType::Coward => self.coward_star_utility(dist, star_pos, d_mouse, left, right),
+            EnemyType::Backstabber => self.backstabber_star_utility(dist),
         }
     }
 
@@ -602,7 +593,7 @@ impl Enemy {
                 coordinates: self.coordinates,
                 target_star_id: s.id,
                 target_coordinates: target_star,
-                speed: 20.0, 
+                speed: 20.0,
                 radius: 8.0,
                 damage: self.enemy_type.damage_per_hit(),
             });
@@ -692,12 +683,7 @@ impl Enemy {
         };
 
         if let Some(attention) = payload.attention_map.get(&star.id) {
-            self.evaluate_interrupt(
-                attention.t_neglect,
-                attention.d_mouse,
-                left,
-                right,
-            )
+            self.evaluate_interrupt(attention.t_neglect, attention.d_mouse, left, right)
         } else {
             false
         }
@@ -726,9 +712,7 @@ impl Enemy {
                 });
                 t_neglect < 1.0 || d_mouse < 3.0 || low_hp_colleague_nearby
             }
-            EnemyType::Coward => {
-                t_neglect < 1.5 || d_mouse < 6.0
-            }
+            EnemyType::Coward => t_neglect < 1.5 || d_mouse < 6.0,
         }
     }
 
@@ -749,15 +733,13 @@ impl Enemy {
     }
 
     fn is_star_under_attack(&self, star_pos: Star, left: &[Enemy], right: &[Enemy]) -> bool {
-        left.iter()
-            .chain(right.iter())
-            .any(|other| {
-                if let EnemyAction::AttackingStar(pos) = other.action {
-                    (pos.0 - star_pos.0).powi(2) + (pos.1 - star_pos.1).powi(2) < 0.01
-                } else {
-                    false
-                }
-            })
+        left.iter().chain(right.iter()).any(|other| {
+            if let EnemyAction::AttackingStar(pos) = other.action {
+                (pos.0 - star_pos.0).powi(2) + (pos.1 - star_pos.1).powi(2) < 0.01
+            } else {
+                false
+            }
+        })
     }
 
     fn find_strong_rival_nearby(
@@ -798,7 +780,12 @@ impl EnemyInstance {
         }
     }
 
-    pub fn update(&mut self, dt: f32, mouse_world: Option<(f32, f32)>, payload: &UpdatePayload) -> Vec<StarDamage> {
+    pub fn update(
+        &mut self,
+        dt: f32,
+        mouse_world: Option<(f32, f32)>,
+        payload: &UpdatePayload,
+    ) -> Vec<StarDamage> {
         let mut star_damage = Vec::new();
         let mut enemy_damage: Vec<EnemyDamage> = Vec::new();
 
@@ -807,7 +794,15 @@ impl EnemyInstance {
         for i in 0..self.enemies.len() {
             let (left, right) = self.enemies.split_at_mut(i);
             let (enemy, rest) = right.split_first_mut().unwrap();
-            enemy.update(dt, mouse_world, left, rest, payload, &mut enemy_damage, &mut self.projectiles);
+            enemy.update(
+                dt,
+                mouse_world,
+                left,
+                rest,
+                payload,
+                &mut enemy_damage,
+                &mut self.projectiles,
+            );
         }
 
         for dmg in enemy_damage {

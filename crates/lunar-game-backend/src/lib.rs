@@ -14,12 +14,13 @@ pub mod validation;
 pub use actions::{ActionBuffer, ActionRecord, CameraMovement, PlayerAction, UpdatePayload};
 pub use attention::{AttentionEntry, AttentionMap};
 pub use camera::{Camera, MAX_ZOOM, MIN_ZOOM, WorldCamera, WorldCameraStore};
-pub use enemy::{Enemy, EnemyAction, EnemyDamage, EnemyType, STAR_MAX_HP, Projectile};
+pub use enemy::{Enemy, EnemyAction, EnemyDamage, EnemyType, Projectile, STAR_MAX_HP};
 pub use error::GameError;
 pub use game::{Game, GameConfig};
 pub use sector::{
-    CHUNK_SIZE_PC, INNER_EXCLUSION_PC, MAX_CACHED_CHUNKS, MAX_CONCURRENT_FETCHES,
-    MIN_FETCH_OBJECTS, MIN_FETCH_RECORDS, CHUNK_SIZE_PC as CHUNK_SIZE, PX_PER_PC, SectorKey, chunk_center,
+    CHUNK_SIZE_PC, CHUNK_SIZE_PC as CHUNK_SIZE, INNER_EXCLUSION_PC, MAX_CACHED_CHUNKS,
+    MAX_CONCURRENT_FETCHES, MIN_FETCH_OBJECTS, MIN_FETCH_RECORDS, PX_PER_PC, SectorKey,
+    chunk_center,
 };
 pub use snapshot::GameSnapshot;
 pub use validation::{

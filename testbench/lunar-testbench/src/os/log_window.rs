@@ -29,14 +29,8 @@ pub fn LogWindow(service: String) -> Element {
     });
 
     let lines = os.logs.read().get(&service).cloned().unwrap_or_default();
-    let warn_count = lines
-        .iter()
-        .filter(|l| l.level == LogLevel::Warn)
-        .count();
-    let err_count = lines
-        .iter()
-        .filter(|l| l.level == LogLevel::Error)
-        .count();
+    let warn_count = lines.iter().filter(|l| l.level == LogLevel::Warn).count();
+    let err_count = lines.iter().filter(|l| l.level == LogLevel::Error).count();
 
     rsx! {
         div { class: "flex flex-col h-full bg-bg-0/70 font-mono text-[11.5px] leading-relaxed",

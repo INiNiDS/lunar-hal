@@ -7,9 +7,7 @@ use crate::service_settings::ServiceConfigValues;
 #[derive(Clone, Debug)]
 pub enum ServiceKind {
     /// Launch a precompiled binary from `target/release/<bin_name>`.
-    Binary {
-        bin_name: String,
-    },
+    Binary { bin_name: String },
     /// Launch via `dx serve` (Dioxus dev-server).
     DxServe {
         crate_name: String,

@@ -1,8 +1,11 @@
 use crate::api;
 use dioxus::prelude::*;
-use nah::{duplicate, have_duplicate_code};
-use lunar_game_backend::{Game, PX_PER_PC, STAR_MAX_HP, enemy::{Enemy, EnemyAction, EnemyType}, Projectile};
+use lunar_game_backend::{
+    Game, PX_PER_PC, Projectile, STAR_MAX_HP,
+    enemy::{Enemy, EnemyAction, EnemyType},
+};
 use lunar_structures::ResponseStar;
+use nah::{duplicate, have_duplicate_code};
 use serde_json::json;
 
 const PLAYER_ATTACK_DAMAGE: f32 = 1.0;
@@ -270,11 +273,7 @@ fn SandboxStar(
 }
 
 #[component]
-fn SandboxEnemy(
-    enemy: Enemy,
-    selected: bool,
-    on_click: EventHandler<Enemy>,
-) -> Element {
+fn SandboxEnemy(enemy: Enemy, selected: bool, on_click: EventHandler<Enemy>) -> Element {
     let ex = enemy.coordinates.0 * PX_PER_PC;
     let ey = enemy.coordinates.1 * PX_PER_PC;
     let max_hp = enemy.enemy_type.hp();
@@ -576,7 +575,10 @@ fn SelectedEnemyPanel(
 }
 
 #[component]
-fn SelectedStarPanel(star: ResponseStar, mut selected_star: Signal<Option<ResponseStar>>) -> Element {
+fn SelectedStarPanel(
+    star: ResponseStar,
+    mut selected_star: Signal<Option<ResponseStar>>,
+) -> Element {
     let hp_ratio = (star.hp / STAR_MAX_HP).clamp(0.0, 1.0);
     let (r, g, b) = teff_to_rgb8(star.temperature_k);
     let teff_str = format!("{:.0}", star.temperature_k);
@@ -787,7 +789,9 @@ fn AiStarGenerator(
         };
 
         spawn(async move {
-            if let Err(e) = perform_ai_star_generation(entropy, pos, game, star_counter, stats, snap).await {
+            if let Err(e) =
+                perform_ai_star_generation(entropy, pos, game, star_counter, stats, snap).await
+            {
                 ai_error.set(Some(e));
             }
             ai_busy.set(false);
@@ -804,7 +808,10 @@ fn AiStarGenerator(
         let center = viewport_center();
 
         spawn(async move {
-            if let Err(e) = perform_ai_star_batch_generation(entropy, center, game, star_counter, stats, snap).await {
+            if let Err(e) =
+                perform_ai_star_batch_generation(entropy, center, game, star_counter, stats, snap)
+                    .await
+            {
                 ai_error.set(Some(e));
             }
             ai_busy.set(false);
@@ -1278,11 +1285,11 @@ fn AdminSidebar(
     let enemies = s.enemies.clone();
     let projectiles = s.projectiles.clone();
 
-    let selected_enemy = selected_enemy_id()
-        .and_then(|id| enemies.iter().find(|e| e.id == id).cloned());
+    let selected_enemy =
+        selected_enemy_id().and_then(|id| enemies.iter().find(|e| e.id == id).cloned());
 
-    let selected_star_live = selected_star()
-        .and_then(|sel| sector_stars.iter().find(|st| st.id == sel.id).cloned());
+    let selected_star_live =
+        selected_star().and_then(|sel| sector_stars.iter().find(|st| st.id == sel.id).cloned());
 
     let mw_str = format!("({:.1}, {:.1})", mouse_world().0, mouse_world().1);
     let alive_stars = sector_stars.iter().filter(|st| st.hp > 0.0).count();
@@ -1646,4 +1653,3 @@ pub fn Sandbox() -> Element {
         }
     }
 }
-

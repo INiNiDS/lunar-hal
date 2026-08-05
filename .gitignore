@@ -14,3 +14,5 @@ run_pipeline.sh
 data
 *.bpk
 models/stellar_norm.json
+node_modules/
+tailwind.css

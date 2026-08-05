@@ -3,8 +3,8 @@ use dioxus::prelude::*;
 use crate::os::{BootPhase, use_os_state};
 
 /// The single overhead lamp that lights the room. Its cone is what actually
-/// "reveals" the service rack below, so the fixture is horizontally centred on
-/// the same axis as the rack.
+/// "reveals" the desktop below, so the fixture is horizontally centred on
+/// the room axis.
 #[component]
 pub fn Lamp() -> Element {
     let os = use_os_state();
@@ -14,7 +14,7 @@ pub fn Lamp() -> Element {
     let cone_class = match phase {
         BootPhase::Dark => "lamp-cone opacity-0",
         BootPhase::LampIgnite => "lamp-cone animate-lamp-ignite",
-        BootPhase::RackReveal | BootPhase::Ready => "lamp-cone",
+        BootPhase::DesktopReveal | BootPhase::Ready => "lamp-cone",
     };
 
     rsx! {

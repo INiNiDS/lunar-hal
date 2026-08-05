@@ -30,8 +30,7 @@ pub fn resolve_port(args: &[String], env_values: &[Option<&str>], default: u16) 
 }
 
 pub fn get_host() -> String {
-    std::env::var("LUNAR_BACKEND_HOST")
-        .unwrap_or_else(|_| DEFAULT_BACKEND_HOST.to_string())
+    std::env::var("LUNAR_BACKEND_HOST").unwrap_or_else(|_| DEFAULT_BACKEND_HOST.to_string())
 }
 
 pub fn get_port() -> u16 {
@@ -64,8 +63,7 @@ pub fn get_testbench_url() -> String {
 
 /// Host for the `lunar-start-backend` service manager (see `crates/lunar-start-backend`).
 pub fn get_start_backend_host() -> String {
-    std::env::var("LUNAR_START_HOST")
-        .unwrap_or_else(|_| DEFAULT_START_BACKEND_HOST.to_string())
+    std::env::var("LUNAR_START_HOST").unwrap_or_else(|_| DEFAULT_START_BACKEND_HOST.to_string())
 }
 
 /// Port for the `lunar-start-backend` service manager.
@@ -129,12 +127,19 @@ mod tests {
         );
     }
 
-
     #[test]
     fn resolver_uses_cli_then_ordered_env_fallbacks() {
-        let args = vec!["binary".to_string(), "--port".to_string(), "28000".to_string()];
+        let args = vec![
+            "binary".to_string(),
+            "--port".to_string(),
+            "28000".to_string(),
+        ];
         assert_eq!(
-            resolve_port(&args, &[Some("26000"), Some("27000")], DEFAULT_TESTBENCH_PORT),
+            resolve_port(
+                &args,
+                &[Some("26000"), Some("27000")],
+                DEFAULT_TESTBENCH_PORT
+            ),
             28000
         );
 

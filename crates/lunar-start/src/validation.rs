@@ -16,7 +16,9 @@ pub struct ValidationResult {
 
 impl ValidationResult {
     fn add(&mut self, field: impl Into<String>, message: impl Into<String>) {
-        self.field_errors.entry(field.into()).or_insert_with(|| message.into());
+        self.field_errors
+            .entry(field.into())
+            .or_insert_with(|| message.into());
         self.ok = false;
     }
 
@@ -242,7 +244,10 @@ pub fn validate_service_config(
                     .filter(|other| other.name != config.name)
                     .any(|other| service_port(other) == Some(port))
                 {
-                    result.add(field, format!("Port {port} is already used by another service"));
+                    result.add(
+                        field,
+                        format!("Port {port} is already used by another service"),
+                    );
                 }
             }
             Err(()) => result.add(field, "Port must be an integer from 1 to 65535"),
@@ -279,7 +284,8 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let root = std::env::temp_dir().join(format!("lunar-validation-{}-{stamp}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("lunar-validation-{}-{stamp}", std::process::id()));
         fs::create_dir_all(root.join("crates")).unwrap();
         fs::create_dir_all(root.join("target/release")).unwrap();
         fs::write(root.join("Cargo.toml"), "[workspace]\n").unwrap();
@@ -301,7 +307,9 @@ mod tests {
             .env
             .insert("LUNAR_MODELS_DIR".into(), models.display().to_string());
         backend.env.insert("LUNAR_BACKEND_HOST".into(), " ".into());
-        backend.env.insert("LUNAR_BACKEND_PORT".into(), "25256".into());
+        backend
+            .env
+            .insert("LUNAR_BACKEND_PORT".into(), "25256".into());
         let peer = ServiceConfig::testbench_backend();
 
         let result = validate_service_config(&backend, &workspace, &[peer]);
@@ -322,8 +330,12 @@ mod tests {
         fs::create_dir_all(&models).unwrap();
         add_binary(&workspace, "lunar-backend");
         let mut backend = ServiceConfig::backend();
-        backend.env.insert("LUNAR_MODELS_DIR".into(), models.display().to_string());
-        backend.env.insert("LUNAR_WORLDS_DIR".into(), worlds.display().to_string());
+        backend
+            .env
+            .insert("LUNAR_MODELS_DIR".into(), models.display().to_string());
+        backend
+            .env
+            .insert("LUNAR_WORLDS_DIR".into(), worlds.display().to_string());
 
         let result = validate_service_config(&backend, &workspace, &[]);
         assert_eq!(result, ValidationResult::valid());
@@ -367,10 +379,9 @@ mod tests {
             "LUNAR_MODELS_DIR".into(),
             missing_models.display().to_string(),
         );
-        backend.env.insert(
-            "LUNAR_WORLDS_DIR".into(),
-            worlds_file.display().to_string(),
-        );
+        backend
+            .env
+            .insert("LUNAR_WORLDS_DIR".into(), worlds_file.display().to_string());
         let backend_result = validate_service_config(&backend, &workspace, &[]);
         assert!(backend_result.field_errors.contains_key("LUNAR_MODELS_DIR"));
         assert!(backend_result.field_errors.contains_key("LUNAR_WORLDS_DIR"));

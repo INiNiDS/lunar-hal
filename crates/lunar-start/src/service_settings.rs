@@ -1,8 +1,7 @@
 use std::collections::HashMap;
 
 use lunar_utils::env::{
-    DEFAULT_BACKEND_HOST, DEFAULT_BACKEND_PORT, DEFAULT_TESTBENCH_HOST,
-    DEFAULT_TESTBENCH_PORT,
+    DEFAULT_BACKEND_HOST, DEFAULT_BACKEND_PORT, DEFAULT_TESTBENCH_HOST, DEFAULT_TESTBENCH_PORT,
 };
 use serde::{Deserialize, Serialize};
 
@@ -380,10 +379,7 @@ impl TestbenchBackendSettings {
             self.port.to_string(),
         );
         env.insert("LUNAR_TESTBENCH_PORT".to_string(), self.port.to_string());
-        env.insert(
-            "LUNAR_TESTBENCH_HOST".to_string(),
-            self.client_host.clone(),
-        );
+        env.insert("LUNAR_TESTBENCH_HOST".to_string(), self.client_host.clone());
         optional_env(&mut env, "LUNAR_WORKSPACE_ROOT", &self.workspace_root);
         optional_env(&mut env, "LUNAR_ENV", &self.env_mode);
 
@@ -449,6 +445,23 @@ impl FrontendSettings {
         );
         platform.read_only = true;
 
+        let mut crate_name = field(
+            "CRATE",
+            "Crate",
+            "Managed Dioxus crate name.",
+            FieldType::String,
+            "lunar-frontend",
+        );
+        crate_name.read_only = true;
+        let mut crate_subdir = field(
+            "CRATE_SUBDIR",
+            "Working subdirectory",
+            "Workspace-relative directory containing the managed frontend crate.",
+            FieldType::Path,
+            "crates/lunar-frontend",
+        );
+        crate_subdir.read_only = true;
+
         let env_mode = field(
             "LUNAR_ENV",
             "Environment",
@@ -474,7 +487,16 @@ impl FrontendSettings {
 
         ServiceConfigSchema {
             service: "frontend".to_string(),
-            fields: vec![dx_bin, port, platform, env_mode, extra_args, build_args],
+            fields: vec![
+                dx_bin,
+                port,
+                crate_name,
+                crate_subdir,
+                platform,
+                env_mode,
+                extra_args,
+                build_args,
+            ],
         }
     }
 
@@ -549,7 +571,11 @@ mod tests {
     }
 
     fn schema_keys(schema: &ServiceConfigSchema) -> Vec<&str> {
-        schema.fields.iter().map(|field| field.key.as_str()).collect()
+        schema
+            .fields
+            .iter()
+            .map(|field| field.key.as_str())
+            .collect()
     }
 
     #[test]
@@ -569,7 +595,10 @@ mod tests {
                 "BUILD_ARGS",
             ]
         );
-        assert_eq!(schema.fields[1].default_value, DEFAULT_BACKEND_PORT.to_string());
+        assert_eq!(
+            schema.fields[1].default_value,
+            DEFAULT_BACKEND_PORT.to_string()
+        );
     }
 
     #[test]
@@ -602,6 +631,8 @@ mod tests {
             [
                 "LUNAR_DX_BIN",
                 "SERVE_PORT",
+                "CRATE",
+                "CRATE_SUBDIR",
                 "PLATFORM",
                 "LUNAR_ENV",
                 "EXTRA_ARGS",
@@ -609,6 +640,10 @@ mod tests {
             ]
         );
         assert!(schema.fields[2].read_only);
-        assert_eq!(schema.fields[2].default_value, "web");
+        assert!(schema.fields[3].read_only);
+        assert!(schema.fields[4].read_only);
+        assert_eq!(schema.fields[2].default_value, "lunar-frontend");
+        assert_eq!(schema.fields[3].default_value, "crates/lunar-frontend");
+        assert_eq!(schema.fields[4].default_value, "web");
     }
 }
