@@ -108,7 +108,7 @@ pub fn Window(win: WindowState) -> Element {
                         div { class: "max-w-sm",
                             div { class: "mx-auto mb-4 h-10 w-10 text-white/20", AppIcon { app_id: "sandbox".to_string() } }
                             h3 { class: "font-display text-sm tracking-[0.12em] text-white/70", "SANDBOX PAUSED" }
-                            p { class: "mt-3 text-xs leading-relaxed text-white/35", "Backend, Testbench Backend and Frontend must all be Running. This window is preserved until every dependency returns." }
+                            p { class: "mt-3 text-xs leading-relaxed text-white/35", "Sandbox is available only while Backend and a web Frontend with a public URL are running." }
                         }
                     }
                 } else { {app_content(&app_id)} }

@@ -2,6 +2,8 @@ use std::path::PathBuf;
 
 pub const DEFAULT_BACKEND_HOST: &str = "127.0.0.1";
 pub const DEFAULT_BACKEND_PORT: u16 = 25255;
+pub const DEFAULT_BACKEND_URL: &str = "http://127.0.0.1:25255";
+pub const DEFAULT_ANDROID_BACKEND_URL: &str = "http://10.0.2.2:25255";
 pub const DEFAULT_TESTBENCH_HOST: &str = "127.0.0.1";
 pub const DEFAULT_TESTBENCH_PORT: u16 = 25256;
 pub const DEFAULT_START_BACKEND_HOST: &str = "127.0.0.1";
@@ -57,6 +59,13 @@ pub fn get_url() -> String {
     format!("http://{}:{}", get_host(), get_port())
 }
 
+/// Resolves the backend URL supplied to a frontend runtime. Platform-specific
+/// callers provide their own default while an explicit `LUNAR_BACKEND_URL`
+/// always wins (needed for physical Android devices).
+pub fn get_frontend_backend_url(default_url: &str) -> String {
+    std::env::var("LUNAR_BACKEND_URL").unwrap_or_else(|_| default_url.to_string())
+}
+
 pub fn get_testbench_url() -> String {
     format!("http://{}:{}", get_testbench_host(), get_testbench_port())
 }
@@ -94,13 +103,13 @@ pub fn get_lunar_models_dir() -> PathBuf {
     }
 }
 
-pub fn get_worlds_dir() -> PathBuf {
+pub fn get_scenes_dir() -> PathBuf {
     let standard_storage = dirs::data_dir()
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
         .join("lunar")
-        .join("worlds");
+        .join("scenes");
 
-    std::env::var("LUNAR_WORLDS_DIR")
+    std::env::var("LUNAR_SCENES_DIR")
         .map(PathBuf::from)
         .unwrap_or(standard_storage)
 }

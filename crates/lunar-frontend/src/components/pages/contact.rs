@@ -180,7 +180,7 @@ pub fn Contact() -> Element {
                             class: "text-white/30 group-hover:text-white/50 text-[13px] leading-relaxed mb-5 \
                                    transition-all duration-500",
                             style: "font-family: {FONT_SANS}",
-                            "Follow the mission. Updates, milestones, and deep-space engineering logs."
+                            "Follow development. Updates, milestones, and deep-space engineering logs."
                         }
                         a {
                             class: "inline-block text-white/50 text-[11px] uppercase tracking-[0.15em] \

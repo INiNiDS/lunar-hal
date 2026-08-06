@@ -17,7 +17,7 @@ pub fn JourneyModal(on_continue: EventHandler<()>, on_close: EventHandler<()>) -
 
                     div { class: "flex items-center justify-between",
                         h2 { class: "text-xs uppercase tracking-widest text-white/60",
-                            "Embark"
+                            "Open Star Lab"
                         }
                         button {
                             class: "text-white/40 hover:text-white transition-colors cursor-pointer",
@@ -27,7 +27,7 @@ pub fn JourneyModal(on_continue: EventHandler<()>, on_close: EventHandler<()>) -
                     }
 
                     p { class: "text-xs text-white/45 leading-relaxed",
-                        "Cross the threshold into a fully procedural cosmos. Each world is a unique stellar population, crystallized into the archive forever."
+                        "Open the stellar workspace to create a scene, explore streamed sectors, and inspect locally generated star data."
                     }
 
                     button {
@@ -40,7 +40,7 @@ pub fn JourneyModal(on_continue: EventHandler<()>, on_close: EventHandler<()>) -
                                transition-all duration-300 \
                                cursor-pointer select-none",
                         onclick: move |_| on_continue.call(()),
-                        "ENTER ARCHIVE"
+                        "OPEN EDITOR"
                     }
 
                     button {

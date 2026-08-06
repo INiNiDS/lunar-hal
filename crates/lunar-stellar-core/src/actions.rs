@@ -1,16 +1,14 @@
 //! Player action recording with a one-minute rolling window.
 //!
 //! Every user interaction (pan, zoom, selection, parameter changes)
-//! flows through [`ActionBuffer`]. The [`Game::update`](crate::Game::update)
+//! flows through [`ActionBuffer`]. The [`Game::update`](crate::StellarScene::update)
 //! method records a camera snapshot, computes the accumulated camera
 //! delta over the rolling window, drains recent actions, and prunes
 //! the buffer.
 
 use instant::Instant;
-use std::collections::HashMap;
 use std::time::Duration;
 
-use crate::attention::AttentionEntry;
 use crate::camera::Camera;
 use crate::sector::SectorKey;
 use lunar_structures::ResponseStar;
@@ -57,7 +55,7 @@ pub struct CameraMovement {
     pub dragging: bool,
 }
 
-/// What [`Game::update`](crate::Game::update) delivers to its caller.
+/// What [`Game::update`](crate::StellarScene::update) delivers to its caller.
 ///
 /// All fields are *owned* so the payload can be sent across threads
 /// or serialized independently of the game lock.
@@ -80,7 +78,6 @@ pub struct UpdatePayload {
     /// Empty when `current_sector` is `None` or the chunk hasn't
     /// been fetched yet.
     pub sector_stars: Vec<ResponseStar>,
-    pub attention_map: HashMap<u32, AttentionEntry>,
     pub session_duration: Duration,
 }
 
@@ -88,7 +85,7 @@ pub struct UpdatePayload {
 /// them through [`ActionBuffer::build_update`].
 ///
 /// The buffer *owns* its backing [`Vec`]s and is stored inside
-/// [`GameState`](crate::game::GameState). Pruning happens on every
+/// [`GameState`](crate::stellar::GameState). Pruning happens on every
 /// update so memory stays bounded.
 #[derive(Debug)]
 pub struct ActionBuffer {
@@ -141,7 +138,6 @@ impl ActionBuffer {
             recent_actions: self.filter_recent_actions(now, elapsed),
             current_sector: None,
             sector_stars: Vec::new(),
-            attention_map: HashMap::new(),
             session_duration: elapsed,
         }
     }

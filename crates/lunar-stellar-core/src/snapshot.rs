@@ -1,25 +1,23 @@
-//! Read-only view of the game state.
+//! Read-only view of stellar-scene state.
 //!
-//! Frontends get a [`GameSnapshot`] from [`crate::Game::snapshot`]
+//! Frontends get a [`StellarSceneSnapshot`] from [`crate::StellarScene::snapshot`]
 //! and render based on it. Snapshots are lightweight to clone (no Arc) and
 //! immutable, so they can be passed freely between components.
 
 use std::collections::{HashMap, HashSet};
 
-use lunar_structures::{GnnResponse, PipelineResponse, ResponseStar, World, WorldSummary};
+use lunar_structures::{GnnResponse, PipelineResponse, ResponseStar, StarScene, StarSceneSummary};
 
-use crate::attention::AttentionEntry;
 use crate::camera::Camera;
-use crate::enemy::{Enemy, Projectile};
 use crate::sector::SectorKey;
 
-/// Immutable view of the world as the game currently sees it.
+/// Immutable view of the scene as the stellar-scene client currently sees it.
 #[derive(Clone, Debug, Default)]
-pub struct GameSnapshot {
-    /// All worlds the game knows about (server-authoritative list).
-    pub worlds: Vec<WorldSummary>,
-    /// The world currently being explored, if any.
-    pub active_world: Option<World>,
+pub struct StellarSceneSnapshot {
+    /// All scenes the client knows about (server-authoritative list).
+    pub scenes: Vec<StarSceneSummary>,
+    /// The scene currently being explored, if any.
+    pub active_scene: Option<StarScene>,
     /// Cached sector stars, flattened for rendering.
     pub sector_stars: Vec<ResponseStar>,
     /// Chunks that are currently in flight.
@@ -31,30 +29,25 @@ pub struct GameSnapshot {
     pub camera: Camera,
     /// The currently selected star, if any.
     pub selected_star: Option<ResponseStar>,
-    /// Pre-generated sector used when no world is active.
+    /// Pre-generated sector used when no scene is active.
     pub pregen: Option<GnnResponse>,
     /// Entropy / temperature used for the current pregen.
     pub temperature: f32,
     pub bp_rp: f32,
     pub g_mag: f32,
-    /// World-space center of the currently visible region.
+    /// StarScene-space center of the currently visible region.
     pub sector_center: Option<(f32, f32, f32)>,
     /// Pipeline response for the selected star, if any.
     pub pipeline: Option<PipelineResponse>,
-    /// Per-world camera persistence entries.
-    pub world_cameras: HashMap<String, crate::camera::WorldCamera>,
-    /// Player attention map: for each star — time since last attention
-    /// and distance to the mouse cursor.
-    pub attention_map: HashMap<u32, AttentionEntry>,
-    pub enemies: Vec<Enemy>,
-    pub projectiles: Vec<Projectile>,
+    /// Per-scene camera persistence entries.
+    pub scene_cameras: HashMap<String, crate::camera::SceneCamera>,
 }
 
-impl GameSnapshot {
-    /// Effective world-space center: prefer the active world, fall
+impl StellarSceneSnapshot {
+    /// Effective scene-space center: prefer the active scene, fall
     /// back to the sector center, then to the origin.
     pub fn effective_center(&self) -> (f32, f32, f32) {
-        if let Some(w) = &self.active_world {
+        if let Some(w) = &self.active_scene {
             (w.center_x, w.center_y, w.center_z)
         } else if let Some(c) = self.sector_center {
             c
@@ -63,13 +56,13 @@ impl GameSnapshot {
         }
     }
 
-    /// World center projected to XY for sector streaming.
+    /// StarScene center projected to XY for sector streaming.
     pub fn effective_center_xy(&self) -> (f32, f32) {
         let c = self.effective_center();
         (c.0, c.1)
     }
 
-    pub fn active_world_id(&self) -> Option<&str> {
-        self.active_world.as_ref().map(|w| w.id.as_str())
+    pub fn active_scene_id(&self) -> Option<&str> {
+        self.active_scene.as_ref().map(|w| w.id.as_str())
     }
 }

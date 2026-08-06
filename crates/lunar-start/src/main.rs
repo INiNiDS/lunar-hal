@@ -43,9 +43,9 @@ struct Cli {
     #[arg(long, env = "LUNAR_MODELS_DIR")]
     models_dir: Option<String>,
 
-    /// Worlds directory (env: LUNAR_WORLDS_DIR).
-    #[arg(long, env = "LUNAR_WORLDS_DIR")]
-    worlds_dir: Option<String>,
+    /// Star scenes directory (env: LUNAR_SCENES_DIR).
+    #[arg(long, env = "LUNAR_SCENES_DIR")]
+    scenes_dir: Option<String>,
 
     /// Dioxus CLI binary name (env: LUNAR_DX_BIN, default: dx).
     #[arg(long, env = "LUNAR_DX_BIN", default_value = "dx")]
@@ -79,8 +79,8 @@ async fn main() -> anyhow::Result<()> {
     if let Some(dir) = &cli.models_dir {
         config.set_env("LUNAR_MODELS_DIR", dir);
     }
-    if let Some(dir) = &cli.worlds_dir {
-        config.set_env("LUNAR_WORLDS_DIR", dir);
+    if let Some(dir) = &cli.scenes_dir {
+        config.set_env("LUNAR_SCENES_DIR", dir);
     }
     config.set_env("LUNAR_DX_BIN", &cli.dx_bin);
 

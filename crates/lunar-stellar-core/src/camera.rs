@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 /// them back when the user pans or zooms.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Camera {
-    /// Pixel offset of the world origin in viewport space.
+    /// Pixel offset of the scene origin in viewport space.
     pub offset: (f32, f32),
     /// Zoom multiplier (`1.0` = identity).
     pub zoom: f32,
@@ -26,7 +26,7 @@ impl Camera {
     }
 
     /// Compute a new camera state that zooms by `factor` around the
-    /// viewport center, preserving the world point under the center.
+    /// viewport center, preserving the scene point under the center.
     pub fn zoom_around_center(&self, viewport: (f32, f32), factor: f32) -> Self {
         let (vp_w, vp_h) = viewport;
         let (cx, cy) = (vp_w * 0.5, vp_h * 0.5);
@@ -86,17 +86,17 @@ impl Camera {
 pub const MIN_ZOOM: f32 = 0.05;
 pub const MAX_ZOOM: f32 = 15.0;
 
-/// Per-world camera state remembered between sessions. Frontends
+/// Per-scene camera state remembered between sessions. Frontends
 /// implement the actual persistence (e.g. `localStorage`); the game
-/// stores and retrieves it via [`crate::Game::world_camera`]
-/// Sets with [`crate::Game::set_world_camera`].
+/// stores and retrieves it via [`crate::StellarScene::scene_camera`]
+/// Sets with [`crate::StellarScene::set_scene_camera`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct WorldCamera {
+pub struct SceneCamera {
     pub offset: (f32, f32),
     pub zoom: f32,
 }
 
-impl WorldCamera {
+impl SceneCamera {
     pub const fn new(offset: (f32, f32), zoom: f32) -> Self {
         Self { offset, zoom }
     }
@@ -110,9 +110,9 @@ impl WorldCamera {
     }
 }
 
-/// In-memory camera persistence for worlds. Frontends can hydrate this
+/// In-memory camera persistence for scenes. Frontends can hydrate this
 /// from `localStorage`, a server, or any other source.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
-pub struct WorldCameraStore {
-    pub entries: HashMap<String, WorldCamera>,
+pub struct SceneCameraStore {
+    pub entries: HashMap<String, SceneCamera>,
 }

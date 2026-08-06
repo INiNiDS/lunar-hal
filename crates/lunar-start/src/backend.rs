@@ -20,6 +20,7 @@ use tokio::sync::mpsc;
 
 use crate::ansi::clean_line;
 use crate::config::{LauncherConfig, ServiceConfig, ServiceKind};
+use crate::service_settings::FrontendLaunchConfig;
 
 /// Coarse severity classification for a [`LogEvent`], derived from its text content.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -302,14 +303,26 @@ impl LogBackend {
                 crate_name,
                 crate_subdir,
                 default_port,
-            } => spawn_dx_serve(
-                &self.workspace,
-                crate_name,
-                crate_subdir,
-                default_port,
-                &combined_args,
-                &env,
-            )?,
+            } => {
+                if crate_name == "lunar-frontend" {
+                    spawn_frontend_dx_serve(
+                        &self.workspace,
+                        crate_name,
+                        crate_subdir,
+                        &combined_args,
+                        &env,
+                    )?
+                } else {
+                    spawn_dx_serve(
+                        &self.workspace,
+                        crate_name,
+                        crate_subdir,
+                        default_port,
+                        &combined_args,
+                        &env,
+                    )?
+                }
+            }
 
             ServiceKind::Binary { bin_name } => {
                 if self.watch {
@@ -543,6 +556,53 @@ fn spawn_cargo_watch(
     .context("failed to spawn `cargo watch`")
 }
 
+/// Builds the managed frontend command from typed platform settings.  Port
+/// arguments are emitted only for the web target; callers cannot smuggle a
+/// conflicting platform or port through `EXTRA_ARGS`.
+pub fn build_frontend_dx_serve_cmd(
+    ws: &Path,
+    crate_name: &str,
+    crate_subdir: &str,
+    extra_args: &[String],
+    env: &HashMap<String, String>,
+) -> Result<tokio::process::Command> {
+    let launch = FrontendLaunchConfig::from_values(env, extra_args)
+        .map_err(|error| anyhow::anyhow!("{}: {}", error.field, error.message))?;
+    let dx_bin = env.get("LUNAR_DX_BIN").map(String::as_str).unwrap_or("dx");
+    let mut cmd = tokio::process::Command::new(dx_bin);
+    cmd.arg("serve")
+        .args(launch.dx_args())
+        .envs(env)
+        .current_dir(ws.join(crate_subdir).join(crate_name))
+        .kill_on_drop(true)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    Ok(cmd)
+}
+
+/// Spawns the managed multi-platform frontend.
+fn spawn_frontend_dx_serve(
+    ws: &Path,
+    crate_name: &str,
+    crate_subdir: &str,
+    extra_args: &[String],
+    env: &HashMap<String, String>,
+) -> Result<Child> {
+    let dx_bin = env
+        .get("LUNAR_DX_BIN")
+        .map(String::as_str)
+        .unwrap_or("dx")
+        .to_string();
+    build_frontend_dx_serve_cmd(ws, crate_name, crate_subdir, extra_args, env)?
+        .spawn()
+        .with_context(|| {
+            format!(
+                "failed to run `{dx_bin} serve` for lunar-frontend. \
+                 Check if dioxus-cli is installed or set LUNAR_DX_BIN."
+            )
+        })
+}
+
 /// Builds command for `dx serve` inside targeted crate directory.
 pub fn build_dx_serve_cmd(
     ws: &Path,
@@ -728,6 +788,38 @@ mod tests {
 
         let args = extract_args(&cmd);
         assert_eq!(args, vec!["serve", "--port", "3000", "--platform", "web"]);
+    }
+
+    #[test]
+    fn test_build_frontend_dx_serve_cmd_uses_platform_matrix() {
+        let ws = Path::new("/workspace");
+        let mut web_env = HashMap::new();
+        web_env.insert("LUNAR_FRONTEND_PLATFORM".to_string(), "web".to_string());
+        web_env.insert("LUNAR_FRONTEND_PORT".to_string(), "8088".to_string());
+        let web = build_frontend_dx_serve_cmd(ws, "lunar-frontend", "crates", &[], &web_env)
+            .unwrap();
+        assert_eq!(
+            extract_args(&web),
+            vec!["serve", "--platform", "web", "--port", "8088"]
+        );
+
+        let mut desktop_env = HashMap::new();
+        desktop_env.insert(
+            "LUNAR_FRONTEND_PLATFORM".to_string(),
+            "desktop".to_string(),
+        );
+        let desktop = build_frontend_dx_serve_cmd(
+            ws,
+            "lunar-frontend",
+            "crates",
+            &[],
+            &desktop_env,
+        )
+        .unwrap();
+        assert_eq!(
+            extract_args(&desktop),
+            vec!["serve", "--platform", "desktop"]
+        );
     }
 
     #[test]

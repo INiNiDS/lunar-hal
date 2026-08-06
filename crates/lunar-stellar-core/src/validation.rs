@@ -12,15 +12,15 @@
 
 use thiserror::Error;
 
-use lunar_structures::{PipelineResponse, ResponseStar, World, WorldSummary};
+use lunar_structures::{PipelineResponse, ResponseStar, StarScene, StarSceneSummary};
 
 /// Bounds used across the validation module. Centralized so the UI
 /// and the game layer can't drift apart.
 pub mod limits {
-    /// Inclusive max length for a world name (characters, not bytes).
-    pub const WORLD_NAME_MAX: usize = 100;
-    /// Inclusive max length for a world id (characters, not bytes).
-    pub const WORLD_ID_MAX: usize = 64;
+    /// Inclusive max length for a scene name (characters, not bytes).
+    pub const SCENE_NAME_MAX: usize = 100;
+    /// Inclusive max length for a scene id (characters, not bytes).
+    pub const SCENE_ID_MAX: usize = 64;
 
     /// Allowed stellar parameter range.
     pub const TEMPERATURE_MIN: f32 = 0.0;
@@ -42,7 +42,7 @@ pub mod limits {
     pub const SEARCH_RADIUS_MIN: f32 = 1.0;
     pub const SEARCH_RADIUS_MAX: f32 = 100_000.0;
 
-    /// Inclusive bounds for a world-center coordinate in parsecs.
+    /// Inclusive bounds for a scene-center coordinate in parsecs.
     pub const COORD_MIN: f32 = -1_000_000.0;
     pub const COORD_MAX: f32 = 1_000_000.0;
 
@@ -187,13 +187,13 @@ fn check_non_empty<'a>(s: &'a str, field: &'static str) -> ValidationResult<&'a 
     }
 }
 
-/// Validate a user-supplied world name. Strips leading/trailing
+/// Validate a user-supplied scene name. Strips leading/trailing
 /// whitespace, rejects control characters, and enforces length.
-pub fn validate_world_name(name: &str) -> ValidationResult<&str> {
-    let field = "world.name";
+pub fn validate_scene_name(name: &str) -> ValidationResult<&str> {
+    let field = "scene.name";
     let trimmed = name.trim();
     check_non_empty(trimmed, field)?;
-    validate_length!(trimmed, limits::WORLD_NAME_MAX, field);
+    validate_length!(trimmed, limits::SCENE_NAME_MAX, field);
     for c in trimmed.chars() {
         if c.is_control() {
             return Err(ValidationError::InvalidCharacters {
@@ -205,12 +205,12 @@ pub fn validate_world_name(name: &str) -> ValidationResult<&str> {
     Ok(trimmed)
 }
 
-/// Validate a world id used in URL paths. Restricts to a safe ASCII
+/// Validate a scene id used in URL paths. Restricts to a safe ASCII
 /// subset to avoid path traversal and surprises on the wire.
-pub fn validate_world_id(id: &str) -> ValidationResult<&str> {
-    let field = "world.id";
+pub fn validate_scene_id(id: &str) -> ValidationResult<&str> {
+    let field = "scene.id";
     check_non_empty(id, field)?;
-    validate_length!(id, limits::WORLD_ID_MAX, field);
+    validate_length!(id, limits::SCENE_ID_MAX, field);
     for c in id.chars() {
         let ok = c.is_ascii_alphanumeric() || c == '-' || c == '_';
         if !ok {
@@ -300,7 +300,6 @@ pub fn validate_response_star(star: &ResponseStar) -> ValidationResult<&Response
         ("star.radius", star.radius),
         ("star.mass", star.mass),
         ("star.luminosity", star.luminosity),
-        ("star.hp", star.hp),
     ] {
         if !is_finite(v) {
             return Err(ValidationError::NotFinite { field });
@@ -335,28 +334,28 @@ pub fn validate_response_stars(stars: &[ResponseStar]) -> ValidationResult<()> {
     Ok(())
 }
 
-/// Validate a [`World`] coming from the AI backend.
-pub fn validate_world(world: &World) -> ValidationResult<&World> {
-    let _ = validate_world_id(&world.id)?;
-    let _ = validate_world_name(&world.name)?;
-    validate_center_x(world.center_x)?;
-    validate_center_y(world.center_y)?;
-    validate_center_z(world.center_z)?;
-    validate_entropy(world.temperature)?;
-    validate_bp_rp(world.bp_rp)?;
-    validate_g_mag(world.g_mag)?;
-    validate_response_stars(&world.stars)?;
-    Ok(world)
+/// Validate a [`StarScene`] coming from the AI backend.
+pub fn validate_scene(scene: &StarScene) -> ValidationResult<&StarScene> {
+    let _ = validate_scene_id(&scene.id)?;
+    let _ = validate_scene_name(&scene.name)?;
+    validate_center_x(scene.center_x)?;
+    validate_center_y(scene.center_y)?;
+    validate_center_z(scene.center_z)?;
+    validate_entropy(scene.temperature)?;
+    validate_bp_rp(scene.bp_rp)?;
+    validate_g_mag(scene.g_mag)?;
+    validate_response_stars(&scene.stars)?;
+    Ok(scene)
 }
 
-/// Validate a [`WorldSummary`].
-pub fn validate_world_summary(world: &WorldSummary) -> ValidationResult<&WorldSummary> {
-    let _ = validate_world_id(&world.id)?;
-    let _ = validate_world_name(&world.name)?;
-    validate_center_x(world.center_x)?;
-    validate_center_y(world.center_y)?;
-    validate_center_z(world.center_z)?;
-    Ok(world)
+/// Validate a [`StarSceneSummary`].
+pub fn validate_scene_summary(scene: &StarSceneSummary) -> ValidationResult<&StarSceneSummary> {
+    let _ = validate_scene_id(&scene.id)?;
+    let _ = validate_scene_name(&scene.name)?;
+    validate_center_x(scene.center_x)?;
+    validate_center_y(scene.center_y)?;
+    validate_center_z(scene.center_z)?;
+    Ok(scene)
 }
 
 /// Validate the texture inside a [`PipelineResponse`].
@@ -410,7 +409,6 @@ mod tests {
             radius: 1.0,
             mass: 1.0,
             luminosity: 1.0,
-            hp: 100.0,
             description: String::new(),
             name: String::new(),
             type_hint: String::new(),
@@ -419,53 +417,53 @@ mod tests {
     }
 
     #[test]
-    fn world_name_strips_whitespace_and_accepts_normal() {
-        let trimmed = validate_world_name("  Vela Rim  ").unwrap();
+    fn scene_name_strips_whitespace_and_accepts_normal() {
+        let trimmed = validate_scene_name("  Vela Rim  ").unwrap();
         assert_eq!(trimmed, "Vela Rim");
     }
 
     #[test]
-    fn world_name_rejects_empty() {
+    fn scene_name_rejects_empty() {
         assert!(matches!(
-            validate_world_name("   "),
+            validate_scene_name("   "),
             Err(ValidationError::Empty { .. })
         ));
     }
 
     #[test]
-    fn world_name_rejects_too_long() {
-        let long = "a".repeat(limits::WORLD_NAME_MAX + 1);
+    fn scene_name_rejects_too_long() {
+        let long = "a".repeat(limits::SCENE_NAME_MAX + 1);
         assert!(matches!(
-            validate_world_name(&long),
+            validate_scene_name(&long),
             Err(ValidationError::TooLong { .. })
         ));
     }
 
     #[test]
-    fn world_name_rejects_control_characters() {
+    fn scene_name_rejects_control_characters() {
         assert!(matches!(
-            validate_world_name("Vela\u{0000}Rim"),
+            validate_scene_name("Vela\u{0000}Rim"),
             Err(ValidationError::InvalidCharacters { .. })
         ));
     }
 
     #[test]
-    fn world_id_accepts_safe_ascii() {
-        assert_eq!(validate_world_id("abc-123_XYZ").unwrap(), "abc-123_XYZ");
+    fn scene_id_accepts_safe_ascii() {
+        assert_eq!(validate_scene_id("abc-123_XYZ").unwrap(), "abc-123_XYZ");
     }
 
     #[test]
-    fn world_id_rejects_path_traversal() {
+    fn scene_id_rejects_path_traversal() {
         assert!(matches!(
-            validate_world_id("../etc/passwd"),
+            validate_scene_id("../etc/passwd"),
             Err(ValidationError::InvalidCharacters { .. })
         ));
     }
 
     #[test]
-    fn world_id_rejects_unicode() {
+    fn scene_id_rejects_unicode() {
         assert!(matches!(
-            validate_world_id("вела"),
+            validate_scene_id("вела"),
             Err(ValidationError::InvalidCharacters { .. })
         ));
     }
@@ -547,8 +545,8 @@ mod tests {
     }
 
     #[test]
-    fn world_validates_id_name_and_coords() {
-        let mut w = World {
+    fn scene_validates_id_name_and_coords() {
+        let mut w = StarScene {
             id: "good-id".into(),
             name: "Good".into(),
             created_at: 0,
@@ -560,8 +558,8 @@ mod tests {
             g_mag: 10.0,
             stars: vec![],
         };
-        assert!(validate_world(&w).is_ok());
+        assert!(validate_scene(&w).is_ok());
         w.id = "../bad".into();
-        assert!(validate_world(&w).is_err());
+        assert!(validate_scene(&w).is_err());
     }
 }

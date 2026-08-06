@@ -108,7 +108,7 @@ pub struct BackendSettings {
     /// `None` lets lunar-utils resolve the platform data directory.
     pub models_dir: Option<String>,
     /// `None` lets lunar-utils resolve the platform data directory.
-    pub worlds_dir: Option<String>,
+    pub scenes_dir: Option<String>,
     pub env_mode: Option<String>,
     pub compute_backend: ComputeBackend,
     pub siren: bool,
@@ -122,7 +122,7 @@ impl Default for BackendSettings {
             host: DEFAULT_BACKEND_HOST.to_string(),
             port: DEFAULT_BACKEND_PORT,
             models_dir: None,
-            worlds_dir: None,
+            scenes_dir: None,
             env_mode: None,
             compute_backend: ComputeBackend::Wgpu,
             siren: true,
@@ -162,10 +162,10 @@ impl BackendSettings {
             FieldType::Path,
             "",
         );
-        let worlds_dir = field(
-            "LUNAR_WORLDS_DIR",
-            "Worlds directory",
-            "Leave empty to use the platform data directory: lunar/worlds.",
+        let scenes_dir = field(
+            "LUNAR_SCENES_DIR",
+            "Star scenes directory",
+            "Leave empty to use the platform data directory: lunar/scenes.",
             FieldType::Path,
             "",
         );
@@ -228,7 +228,7 @@ impl BackendSettings {
                 host,
                 port,
                 models_dir,
-                worlds_dir,
+                scenes_dir,
                 env_mode,
                 compute_backend,
                 siren,
@@ -243,7 +243,7 @@ impl BackendSettings {
         env.insert("LUNAR_BACKEND_HOST".to_string(), self.host.clone());
         env.insert("LUNAR_BACKEND_PORT".to_string(), self.port.to_string());
         optional_env(&mut env, "LUNAR_MODELS_DIR", &self.models_dir);
-        optional_env(&mut env, "LUNAR_WORLDS_DIR", &self.worlds_dir);
+        optional_env(&mut env, "LUNAR_SCENES_DIR", &self.scenes_dir);
         optional_env(&mut env, "LUNAR_ENV", &self.env_mode);
 
         let mut build_args = Vec::new();
@@ -391,11 +391,146 @@ impl TestbenchBackendSettings {
     }
 }
 
-/// Typed settings for the web `lunar-frontend` service launched through `dx serve`.
+/// The single supported launch target for the managed frontend service.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum FrontendPlatform {
+    #[default]
+    Web,
+    Desktop,
+    Android,
+}
+
+impl FrontendPlatform {
+    pub const ALL: [&'static str; 3] = ["web", "desktop", "android"];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Web => "web",
+            Self::Desktop => "desktop",
+            Self::Android => "android",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "web" => Some(Self::Web),
+            "desktop" => Some(Self::Desktop),
+            "android" => Some(Self::Android),
+            _ => None,
+        }
+    }
+
+    pub fn default_backend_url(self) -> String {
+        match self {
+            Self::Web | Self::Desktop => {
+                format!("http://{DEFAULT_BACKEND_HOST}:{DEFAULT_BACKEND_PORT}")
+            }
+            // Android emulators resolve host-loopback through this address.
+            Self::Android => format!("http://10.0.2.2:{DEFAULT_BACKEND_PORT}"),
+        }
+    }
+}
+
+pub const DEFAULT_FRONTEND_PORT: u16 = 8080;
+
+/// Structured frontend launch data. It is the only code path that translates
+/// configured platform, port, and custom arguments into `dx serve` arguments.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FrontendLaunchConfig {
+    pub platform: FrontendPlatform,
+    pub port: Option<u16>,
+    pub extra_args: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FrontendLaunchError {
+    pub field: &'static str,
+    pub message: String,
+}
+
+impl FrontendLaunchConfig {
+    pub fn from_values(
+        env: &HashMap<String, String>,
+        extra_args: &[String],
+    ) -> Result<Self, FrontendLaunchError> {
+        let raw_platform = env
+            .get("LUNAR_FRONTEND_PLATFORM")
+            .map(String::as_str)
+            .unwrap_or("web");
+        let platform = FrontendPlatform::parse(raw_platform).ok_or_else(|| FrontendLaunchError {
+            field: "LUNAR_FRONTEND_PLATFORM",
+            message: format!("Unsupported frontend platform: {raw_platform}"),
+        })?;
+
+        if let Some(arg) = extra_args.iter().find(|arg| {
+            matches!(arg.as_str(), "--platform" | "--port" | "-p")
+                || arg.starts_with("--platform=")
+                || arg.starts_with("--port=")
+        }) {
+            return Err(FrontendLaunchError {
+                field: "EXTRA_ARGS",
+                message: format!("{arg} is managed by the platform and web-port fields"),
+            });
+        }
+
+        let port = match platform {
+            FrontendPlatform::Web => {
+                let raw_port = env
+                    .get("LUNAR_FRONTEND_PORT")
+                    .ok_or_else(|| FrontendLaunchError {
+                        field: "LUNAR_FRONTEND_PORT",
+                        message: "A web frontend requires a port".to_string(),
+                    })?;
+                let port = raw_port.parse::<u16>().ok().filter(|port| *port != 0).ok_or_else(|| {
+                    FrontendLaunchError {
+                        field: "LUNAR_FRONTEND_PORT",
+                        message: "Web port must be an integer from 1 to 65535".to_string(),
+                    }
+                })?;
+                Some(port)
+            }
+            FrontendPlatform::Desktop | FrontendPlatform::Android => {
+                if env.contains_key("LUNAR_FRONTEND_PORT") {
+                    return Err(FrontendLaunchError {
+                        field: "LUNAR_FRONTEND_PORT",
+                        message: "Port is only configured for the web platform".to_string(),
+                    });
+                }
+                None
+            }
+        };
+
+        Ok(Self {
+            platform,
+            port,
+            extra_args: extra_args.to_vec(),
+        })
+    }
+
+    pub fn dx_args(&self) -> Vec<String> {
+        let mut args = vec!["--platform".to_string(), self.platform.as_str().to_string()];
+        if let Some(port) = self.port {
+            args.extend(["--port".to_string(), port.to_string()]);
+        }
+        args.extend(self.extra_args.clone());
+        args
+    }
+
+    pub fn public_url(&self) -> Option<String> {
+        self.port.map(|port| format!("http://127.0.0.1:{port}"))
+    }
+}
+
+/// Typed settings for the single `lunar-frontend` service.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct FrontendSettings {
     pub dx_bin: String,
+    pub platform: FrontendPlatform,
     pub port: u16,
+    /// An explicit host URL is required for a physical Android device; the
+    /// Android emulator default is supplied by `FrontendPlatform`.
+    pub backend_url: Option<String>,
     pub env_mode: Option<String>,
     pub extra_args: Vec<String>,
     pub build_args: Vec<String>,
@@ -405,7 +540,9 @@ impl Default for FrontendSettings {
     fn default() -> Self {
         Self {
             dx_bin: "dx".to_string(),
-            port: 8080,
+            platform: FrontendPlatform::Web,
+            port: DEFAULT_FRONTEND_PORT,
+            backend_url: None,
             env_mode: None,
             extra_args: Vec::new(),
             build_args: Vec::new(),
@@ -425,25 +562,39 @@ impl FrontendSettings {
         );
         dx_bin.required = true;
 
+        let platform_options = FrontendPlatform::ALL
+            .iter()
+            .map(|value| value.to_string())
+            .collect::<Vec<_>>();
+        let mut platform = field(
+            "LUNAR_FRONTEND_PLATFORM",
+            "Platform",
+            "Web publishes a URL; desktop and Android run as native Dioxus targets.",
+            FieldType::Select {
+                options: platform_options.clone(),
+            },
+            defaults.platform.as_str(),
+        );
+        platform.required = true;
+        platform.allowed_values = Some(platform_options);
+
         let mut port = field(
-            "SERVE_PORT",
-            "Serve port",
-            "Port passed to dx serve --port.",
+            "LUNAR_FRONTEND_PORT",
+            "Web port",
+            "Used and validated only when platform is web.",
             FieldType::Port,
             defaults.port.to_string(),
         );
-        port.required = true;
         port.min = Some(1.0);
         port.max = Some(65535.0);
 
-        let mut platform = field(
-            "PLATFORM",
-            "Platform",
-            "The managed frontend service is the web target.",
+        let backend_url = field(
+            "LUNAR_BACKEND_URL",
+            "Backend URL",
+            "Override the backend URL. Android defaults to 10.0.2.2; use a reachable host URL for a physical device.",
             FieldType::String,
-            "web",
+            defaults.platform.default_backend_url(),
         );
-        platform.read_only = true;
 
         let mut crate_name = field(
             "CRATE",
@@ -472,7 +623,7 @@ impl FrontendSettings {
         let extra_args = field(
             "EXTRA_ARGS",
             "Additional Dioxus arguments",
-            "Advanced arguments passed to dx serve.",
+            "Advanced arguments. Platform and web port are managed above.",
             FieldType::StringList,
             "",
         );
@@ -489,10 +640,11 @@ impl FrontendSettings {
             service: "frontend".to_string(),
             fields: vec![
                 dx_bin,
+                platform,
                 port,
+                backend_url,
                 crate_name,
                 crate_subdir,
-                platform,
                 env_mode,
                 extra_args,
                 build_args,
@@ -503,17 +655,24 @@ impl FrontendSettings {
     pub fn to_values(&self) -> ServiceConfigValues {
         let mut env = HashMap::new();
         env.insert("LUNAR_DX_BIN".to_string(), self.dx_bin.clone());
-        optional_env(&mut env, "LUNAR_ENV", &self.env_mode);
-
-        let mut extra_args = self.extra_args.clone();
-        let has_port = extra_args.iter().any(|arg| arg == "--port" || arg == "-p");
-        if !has_port {
-            extra_args.splice(0..0, ["--port".to_string(), self.port.to_string()]);
+        env.insert(
+            "LUNAR_FRONTEND_PLATFORM".to_string(),
+            self.platform.as_str().to_string(),
+        );
+        env.insert(
+            "LUNAR_BACKEND_URL".to_string(),
+            self.backend_url
+                .clone()
+                .unwrap_or_else(|| self.platform.default_backend_url()),
+        );
+        if self.platform == FrontendPlatform::Web {
+            env.insert("LUNAR_FRONTEND_PORT".to_string(), self.port.to_string());
         }
+        optional_env(&mut env, "LUNAR_ENV", &self.env_mode);
 
         ServiceConfigValues {
             env,
-            extra_args,
+            extra_args: self.extra_args.clone(),
             build_args: self.build_args.clone(),
         }
     }
@@ -561,13 +720,30 @@ mod tests {
     }
 
     #[test]
-    fn frontend_defaults_use_dx_and_serve_port_argument() {
+    fn frontend_defaults_are_web_and_use_structured_runtime_values() {
         let settings = FrontendSettings::default();
         let values = settings.to_values();
 
         assert_eq!(values.env["LUNAR_DX_BIN"], "dx");
-        assert_eq!(&values.extra_args[..2], ["--port", "8080"]);
-        assert!(!values.env.contains_key("BACKEND_API_URL"));
+        assert_eq!(values.env["LUNAR_FRONTEND_PLATFORM"], "web");
+        assert_eq!(values.env["LUNAR_FRONTEND_PORT"], "8080");
+        assert_eq!(values.env["LUNAR_BACKEND_URL"], "http://127.0.0.1:25255");
+        assert!(values.extra_args.is_empty());
+    }
+
+    #[test]
+    fn frontend_launch_arguments_are_platform_specific() {
+        let web = FrontendLaunchConfig::from_values(&FrontendSettings::default().to_values().env, &[]).unwrap();
+        assert_eq!(web.dx_args(), ["--platform", "web", "--port", "8080"]);
+        assert_eq!(web.public_url().as_deref(), Some("http://127.0.0.1:8080"));
+
+        let desktop_values = FrontendSettings { platform: FrontendPlatform::Desktop, ..FrontendSettings::default() }.to_values();
+        let desktop = FrontendLaunchConfig::from_values(&desktop_values.env, &desktop_values.extra_args).unwrap();
+        assert_eq!(desktop.dx_args(), ["--platform", "desktop"]);
+        assert_eq!(desktop.public_url(), None);
+
+        let android_values = FrontendSettings { platform: FrontendPlatform::Android, ..FrontendSettings::default() }.to_values();
+        assert_eq!(android_values.env["LUNAR_BACKEND_URL"], "http://10.0.2.2:25255");
     }
 
     fn schema_keys(schema: &ServiceConfigSchema) -> Vec<&str> {
@@ -587,7 +763,7 @@ mod tests {
                 "LUNAR_BACKEND_HOST",
                 "LUNAR_BACKEND_PORT",
                 "LUNAR_MODELS_DIR",
-                "LUNAR_WORLDS_DIR",
+                "LUNAR_SCENES_DIR",
                 "LUNAR_ENV",
                 "COMPUTE_BACKEND",
                 "SIREN",
@@ -624,26 +800,25 @@ mod tests {
     }
 
     #[test]
-    fn frontend_schema_contains_the_complete_supported_parameter_set() {
+    fn frontend_schema_contains_the_complete_platform_parameter_set() {
         let schema = FrontendSettings::schema();
         assert_eq!(
             schema_keys(&schema),
             [
                 "LUNAR_DX_BIN",
-                "SERVE_PORT",
+                "LUNAR_FRONTEND_PLATFORM",
+                "LUNAR_FRONTEND_PORT",
+                "LUNAR_BACKEND_URL",
                 "CRATE",
                 "CRATE_SUBDIR",
-                "PLATFORM",
                 "LUNAR_ENV",
                 "EXTRA_ARGS",
                 "BUILD_ARGS",
             ]
         );
-        assert!(schema.fields[2].read_only);
-        assert!(schema.fields[3].read_only);
+        assert_eq!(schema.fields[1].allowed_values.as_ref().unwrap(), &vec!["web", "desktop", "android"]);
         assert!(schema.fields[4].read_only);
-        assert_eq!(schema.fields[2].default_value, "lunar-frontend");
-        assert_eq!(schema.fields[3].default_value, "crates/lunar-frontend");
-        assert_eq!(schema.fields[4].default_value, "web");
+        assert!(schema.fields[5].read_only);
+        assert!(!schema.fields[1].read_only);
     }
 }

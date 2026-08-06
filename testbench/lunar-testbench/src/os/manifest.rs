@@ -43,7 +43,7 @@ pub struct AppDef {
 
 const BACKEND: &[&str] = &["backend"];
 const TESTBENCH_BACKEND: &[&str] = &["testbench-backend"];
-const SANDBOX_SERVICES: &[&str] = &["backend", "testbench-backend", "frontend"];
+const SANDBOX_SERVICES: &[&str] = &["backend", "frontend"];
 
 pub const ALL_APPS: &[AppDef] = &[
     AppDef {
@@ -219,10 +219,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn sandbox_requires_all_three_services() {
+    fn sandbox_requires_backend_and_frontend() {
         assert_eq!(
             app_by_id("sandbox").unwrap().required_services,
-            &["backend", "testbench-backend", "frontend"]
+            &["backend", "frontend"]
         );
     }
 

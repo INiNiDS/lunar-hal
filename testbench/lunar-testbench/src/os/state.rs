@@ -173,8 +173,31 @@ impl OsState {
                 .any(|service| service.name == *required && service.status.is_running())
         })
     }
+
+    fn sandbox_has_web_frontend(services: &[ServiceInfo]) -> bool {
+        services.iter().any(|service| {
+            service.name == "frontend"
+                && service.status.is_running()
+                && service.platform.as_deref() == Some("web")
+                && service.public_url.as_deref().is_some_and(|url| !url.is_empty())
+        })
+    }
+
+    fn sandbox_is_available(services: &[ServiceInfo]) -> bool {
+        services
+            .iter()
+            .any(|service| service.name == "backend" && service.status.is_running())
+            && Self::sandbox_has_web_frontend(services)
+    }
+
+    /// Sandbox is an iframe host rather than a generic frontend app. It is
+    /// hidden unless both backend and an addressable web frontend are running.
+    pub fn is_app_visible(&self, app_id: &str) -> bool {
+        app_id != "sandbox" || Self::sandbox_is_available(&self.services.read())
+    }
+
     pub fn is_app_available(&self, app_id: &str) -> bool {
-        self.are_app_dependencies_running(app_id)
+        self.is_app_visible(app_id) && self.are_app_dependencies_running(app_id)
     }
     pub fn service_reveal_epoch(&self, service: &str) -> u64 {
         *self.service_reveal_epochs.read().get(service).unwrap_or(&0)
@@ -196,6 +219,13 @@ impl OsState {
                 self.service_action_errors.write().remove(&service.name);
             }
         }
+        if !Self::sandbox_is_available(&next) {
+            // A stale iframe cannot represent a native frontend. Close its
+            // window as soon as the runtime switches away from web.
+            self.windows.with_mut(|windows| {
+                windows.retain(|window| window.app_id != "sandbox");
+            });
+        }
         self.services.set(next);
     }
 
@@ -214,6 +244,9 @@ impl OsState {
     /// Opens a new window for `app_id`, or un-minimizes and focuses the
     /// existing one if it's already open.
     pub fn open_window(&mut self, app_id: &str, title: &str) {
+        if !self.is_app_available(app_id) {
+            return;
+        }
         let existing_id = self
             .windows
             .read()
@@ -414,6 +447,11 @@ impl OsState {
             state.server_field_errors.clear();
         }
         let service = snapshot.service;
+        let restart_frontend = service == "frontend"
+            && self
+                .service_status("frontend")
+                .as_ref()
+                .is_some_and(ServiceStatus::is_running);
         let mut settings = self.service_settings;
         let mut drafts = self.service_config_drafts;
         let mut os = *self;
@@ -439,6 +477,22 @@ impl OsState {
             }
             if let Err(error) = api::save_service_config(&service, &values).await {
                 apply_service_error(settings, error);
+                return;
+            }
+            if restart_frontend {
+                match api::list_start_services().await {
+                    Ok(services) => {
+                        os.set_services(services);
+                        drafts.write().remove(&service);
+                        settings.set(None);
+                    }
+                    Err(error) => {
+                        if let Some(state) = settings.write().as_mut() {
+                            state.saving = false;
+                            state.error = Some(error);
+                        }
+                    }
+                }
                 return;
             }
             if let Some(state) = settings.write().as_mut() {
@@ -695,42 +749,33 @@ fn compute_features(values: &ServiceConfigValues) -> (String, bool) {
     }
     ("wgpu".into(), true)
 }
-fn frontend_args(values: &ServiceConfigValues) -> (String, Vec<String>) {
-    let mut port = "8080".to_string();
-    let mut out = Vec::new();
-    let mut i = 0;
-    while i < values.extra_args.len() {
-        if values.extra_args[i] == "--port" || values.extra_args[i] == "-p" {
-            if let Some(v) = values.extra_args.get(i + 1) {
-                port = v.clone()
-            }
-            i += 2
-        } else {
-            out.push(values.extra_args[i].clone());
-            i += 1
-        }
-    }
-    (port, out)
-}
+
 pub fn form_values_from_config(
-    service: &str,
+    _service: &str,
     schema: &ServiceConfigSchema,
     values: &ServiceConfigValues,
 ) -> HashMap<String, String> {
     let (compute, siren) = compute_features(values);
-    let (port, front) = frontend_args(values);
     schema
         .fields
         .iter()
         .map(|field| {
             let value = match field.key.as_str() {
-                "EXTRA_ARGS" if service == "frontend" => front.join("\n"),
                 "EXTRA_ARGS" => values.extra_args.join("\n"),
                 "BUILD_ARGS" => custom_build_args(values).join("\n"),
                 "COMPUTE_BACKEND" => compute.clone(),
                 "SIREN" => siren.to_string(),
-                "SERVE_PORT" => port.clone(),
-                "BIND_HOST" | "PLATFORM" | "CRATE" | "CRATE_SUBDIR" => field.default_value.clone(),
+                "LUNAR_FRONTEND_PLATFORM" => values
+                    .env
+                    .get("LUNAR_FRONTEND_PLATFORM")
+                    .cloned()
+                    .unwrap_or_else(|| field.default_value.clone()),
+                "LUNAR_FRONTEND_PORT" => values
+                    .env
+                    .get("LUNAR_FRONTEND_PORT")
+                    .cloned()
+                    .unwrap_or_else(|| field.default_value.clone()),
+                "BIND_HOST" | "CRATE" | "CRATE_SUBDIR" => field.default_value.clone(),
                 key => values
                     .env
                     .get(key)
@@ -771,11 +816,22 @@ pub fn config_from_form(
         .map(|v| split_lines(v))
         .unwrap_or_default();
     if service == "frontend" {
-        let port = form
-            .get("SERVE_PORT")
+        let platform = form
+            .get("LUNAR_FRONTEND_PLATFORM")
             .cloned()
-            .unwrap_or_else(|| "8080".into());
-        result.extra_args.splice(0..0, ["--port".into(), port]);
+            .unwrap_or_else(|| "web".into());
+        result
+            .env
+            .insert("LUNAR_FRONTEND_PLATFORM".into(), platform.clone());
+        if platform == "web" {
+            let port = form
+                .get("LUNAR_FRONTEND_PORT")
+                .cloned()
+                .unwrap_or_else(|| "8080".into());
+            result.env.insert("LUNAR_FRONTEND_PORT".into(), port);
+        } else {
+            result.env.remove("LUNAR_FRONTEND_PORT");
+        }
     }
     result.build_args = form
         .get("BUILD_ARGS")
@@ -809,11 +865,14 @@ fn configured_port(service: &str, values: &ServiceConfigValues) -> Option<u16> {
     match service {
         "backend" => values.env.get("LUNAR_BACKEND_PORT")?.parse().ok(),
         "testbench-backend" => values.env.get("LUNAR_TESTBENCH_BACKEND_PORT")?.parse().ok(),
-        "frontend" => values
-            .extra_args
-            .windows(2)
-            .find(|p| p[0] == "--port" || p[0] == "-p")
-            .and_then(|p| p[1].parse().ok()),
+        "frontend" if values
+            .env
+            .get("LUNAR_FRONTEND_PLATFORM")
+            .is_some_and(|platform| platform == "web") => values
+            .env
+            .get("LUNAR_FRONTEND_PORT")
+            .and_then(|port| port.parse().ok()),
+        "frontend" => None,
         _ => None,
     }
 }
@@ -821,7 +880,7 @@ fn port_field(service: &str) -> &'static str {
     match service {
         "backend" => "LUNAR_BACKEND_PORT",
         "testbench-backend" => "LUNAR_TESTBENCH_BACKEND_PORT",
-        "frontend" => "SERVE_PORT",
+        "frontend" => "LUNAR_FRONTEND_PORT",
         _ => "port",
     }
 }
@@ -966,40 +1025,84 @@ mod settings_tests {
             read_only: false,
         }
     }
+    fn running_service(
+        name: &str,
+        platform: Option<&str>,
+        public_url: Option<&str>,
+    ) -> ServiceInfo {
+        ServiceInfo {
+            name: name.into(),
+            status: ServiceStatus::Running,
+            pid: None,
+            platform: platform.map(str::to_owned),
+            public_url: public_url.map(str::to_owned),
+        }
+    }
+
     #[test]
-    fn frontend_round_trip_keeps_port_out_of_custom_args() {
+    fn sandbox_requires_backend_and_addressable_web_frontend() {
+        let web = vec![
+            running_service("backend", None, None),
+            running_service("frontend", Some("web"), Some("http://127.0.0.1:8080")),
+        ];
+        assert!(OsState::sandbox_is_available(&web));
+
+        let missing_backend = vec![running_service(
+            "frontend",
+            Some("web"),
+            Some("http://127.0.0.1:8080"),
+        )];
+        assert!(!OsState::sandbox_is_available(&missing_backend));
+
+        let desktop = vec![
+            running_service("backend", None, None),
+            running_service("frontend", Some("desktop"), None),
+        ];
+        assert!(!OsState::sandbox_is_available(&desktop));
+    }
+
+    #[test]
+    fn frontend_round_trip_keeps_platform_and_web_port_structured() {
         let schema = ServiceConfigSchema {
             service: "frontend".into(),
             fields: vec![
-                field("SERVE_PORT", FieldType::Port, "8080"),
+                field(
+                    "LUNAR_FRONTEND_PLATFORM",
+                    FieldType::Select { options: vec!["web".into(), "desktop".into(), "android".into()] },
+                    "web",
+                ),
+                field("LUNAR_FRONTEND_PORT", FieldType::Port, "8080"),
                 field("EXTRA_ARGS", FieldType::StringList, ""),
             ],
         };
         let values = ServiceConfigValues {
-            env: HashMap::new(),
-            extra_args: vec!["--port".into(), "9090".into(), "--hot-reload".into()],
+            env: HashMap::from([
+                ("LUNAR_FRONTEND_PLATFORM".into(), "web".into()),
+                ("LUNAR_FRONTEND_PORT".into(), "9090".into()),
+            ]),
+            extra_args: vec!["--hot-reload".into()],
             build_args: vec![],
         };
         let form = form_values_from_config("frontend", &schema, &values);
-        assert_eq!(form["SERVE_PORT"], "9090");
+        assert_eq!(form["LUNAR_FRONTEND_PLATFORM"], "web");
+        assert_eq!(form["LUNAR_FRONTEND_PORT"], "9090");
         assert_eq!(form["EXTRA_ARGS"], "--hot-reload");
-        assert_eq!(
-            config_from_form("frontend", &schema, &values, &form).extra_args,
-            ["--port", "9090", "--hot-reload"]
-        );
+        let round_trip = config_from_form("frontend", &schema, &values, &form);
+        assert_eq!(round_trip.env["LUNAR_FRONTEND_PORT"], "9090");
+        assert_eq!(round_trip.extra_args, ["--hot-reload"]);
     }
     #[test]
-    fn invalid_and_conflicting_ports_are_blocked_client_side() {
+    fn invalid_and_conflicting_web_ports_are_blocked_client_side() {
         let schema = ServiceConfigSchema {
             service: "frontend".into(),
-            fields: vec![field("SERVE_PORT", FieldType::Port, "8080")],
+            fields: vec![field("LUNAR_FRONTEND_PORT", FieldType::Port, "8080")],
         };
         assert!(
             validate_form(
                 &schema,
-                &HashMap::from([("SERVE_PORT".into(), "70000".into())])
+                &HashMap::from([("LUNAR_FRONTEND_PORT".into(), "70000".into())])
             )
-            .contains_key("SERVE_PORT")
+            .contains_key("LUNAR_FRONTEND_PORT")
         );
         let configs = HashMap::from([
             (
@@ -1012,14 +1115,17 @@ mod settings_tests {
             (
                 "frontend".into(),
                 ServiceConfigValues {
-                    extra_args: vec!["--port".into(), "25255".into()],
+                    env: HashMap::from([
+                        ("LUNAR_FRONTEND_PLATFORM".into(), "web".into()),
+                        ("LUNAR_FRONTEND_PORT".into(), "25255".into()),
+                    ]),
                     ..Default::default()
                 },
             ),
         ]);
         assert_eq!(
             known_port_conflict("frontend", &configs).unwrap().0,
-            "SERVE_PORT"
+            "LUNAR_FRONTEND_PORT"
         );
     }
 }

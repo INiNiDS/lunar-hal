@@ -1,8 +1,6 @@
-use crate::components::editor::enemy::Enemy;
-use crate::game_state::use_game_version;
+use crate::stellar_state::use_stellar_scene_version;
 use dioxus::prelude::*;
-use lunar_stellar_core::enemy::Enemy as EnemyData;
-use lunar_stellar_core::{CHUNK_SIZE_PC, Game, PX_PER_PC, Projectile, SectorKey, chunk_center};
+use lunar_stellar_core::{CHUNK_SIZE_PC, PX_PER_PC, SectorKey, StellarScene, chunk_center};
 use lunar_structures::ResponseStar;
 use std::collections::HashSet;
 
@@ -36,15 +34,6 @@ fn teff_to_rgb8(teff: f32) -> (u8, u8, u8) {
     ((r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8)
 }
 
-fn hp_color(ratio: f32) -> &'static str {
-    if ratio > 0.6 {
-        "#22c55e"
-    } else if ratio > 0.25 {
-        "#eab308"
-    } else {
-        "#ef4444"
-    }
-}
 fn render_star(
     key_prefix: &str,
     star: &ResponseStar,
@@ -52,7 +41,6 @@ fn render_star(
     center_y: f32,
     is_selected: bool,
     on_select: EventHandler<ResponseStar>,
-    on_hover: Option<EventHandler<u32>>,
 ) -> Element {
     let px = (star.x - center_x) * PX_PER_PC;
     let py = (star.y - center_y) * PX_PER_PC;
@@ -69,11 +57,6 @@ fn render_star(
 
     let delay = (star.id as f32 * 1.7).fract() * 5.0;
     let star_cloned = star.clone();
-    let on_hover = on_hover.clone();
-    let star_id = star.id;
-
-    let hp_ratio = (star.hp / 100.0).clamp(0.0, 1.0);
-    let hp_c = hp_color(hp_ratio);
 
     rsx! {
         div {
@@ -97,36 +80,6 @@ fn render_star(
                 onclick: move |e| {
                     e.stop_propagation();
                     on_select.call(star_cloned.clone());
-                },
-                onmouseenter: move |_| {
-                    if let Some(ref h) = on_hover {
-                        h.call(star_id);
-                    }
-                }
-            }
-
-            if star.hp < 100.0 {
-                div {
-                    class: "absolute pointer-events-none",
-                    style: "
-                        left: 50%;
-                        top: {size + 4.0}px;
-                        width: {size}px;
-                        height: 3px;
-                        transform: translateX(-50%);
-                        background: rgba(255,255,255,0.06);
-                        border-radius: 2px;
-                        overflow: hidden;
-                    ",
-                    div {
-                        style: "
-                            height: 100%;
-                            width: {hp_ratio * 100.0}%;
-                            background: {hp_c};
-                            border-radius: 2px;
-                            transition: width 0.3s ease;
-                        ",
-                    }
                 }
             }
         }
@@ -224,7 +177,11 @@ fn use_viewport_measurement() -> Signal<(f32, f32)> {
     viewport
 }
 
-fn use_sync_sector_loading(game: Signal<Game>, version: Signal<u64>, viewport: Signal<(f32, f32)>) {
+fn use_sync_sector_loading(
+    game: Signal<StellarScene>,
+    version: Signal<u64>,
+    viewport: Signal<(f32, f32)>,
+) {
     use_resource(move || async move {
         let _ = version();
         let vp = *viewport.read();
@@ -240,7 +197,7 @@ fn use_sync_sector_loading(game: Signal<Game>, version: Signal<u64>, viewport: S
         let g_mag = game.read().g_mag();
         for (chunk, center) in pending {
             spawn(async move {
-                let g: Game = game.read().clone();
+                let g: StellarScene = game.read().clone();
                 let _ = g
                     .fetch_sector(chunk, center, temperature, bp_rp, g_mag)
                     .await;
@@ -250,7 +207,7 @@ fn use_sync_sector_loading(game: Signal<Game>, version: Signal<u64>, viewport: S
 }
 
 fn use_sync_sector_eviction(
-    game: Signal<Game>,
+    game: Signal<StellarScene>,
     version: Signal<u64>,
     viewport: Signal<(f32, f32)>,
 ) {
@@ -275,53 +232,35 @@ fn use_starfield_backgrounds() -> (Memo<String>, Memo<String>, Memo<String>) {
 #[derive(Clone)]
 struct InteractionState {
     last_mouse: Signal<(f32, f32)>,
-    mouse_world: Signal<(f32, f32)>,
+    mouse_scene: Signal<(f32, f32)>,
 }
 
 fn use_star_map_interactions() -> InteractionState {
     let last_mouse = use_signal(|| (0.0_f32, 0.0_f32));
-    let mouse_world = use_signal(|| (0.0_f32, 0.0_f32));
+    let mouse_scene = use_signal(|| (0.0_f32, 0.0_f32));
 
     InteractionState {
         last_mouse,
-        mouse_world,
+        mouse_scene,
     }
 }
 
 #[component]
 pub fn StarMap(
-    game: Signal<Game>,
-    world_stars: Vec<ResponseStar>,
+    game: Signal<StellarScene>,
+    scene_stars: Vec<ResponseStar>,
     center_x: f32,
     center_y: f32,
     selected_id: Option<u32>,
     on_select: EventHandler<ResponseStar>,
 ) -> Element {
     let viewport = use_viewport_measurement();
-    let version = use_game_version();
+    let version = use_stellar_scene_version();
 
     use_sync_sector_loading(game, version, viewport);
     use_sync_sector_eviction(game, version, viewport);
 
     let mut interact = use_star_map_interactions();
-
-    let g_attn = game;
-    let int_attn = interact.clone();
-
-    use_future(move || async move {
-        loop {
-            delay_tick().await;
-            let g = g_attn.read().clone();
-            let snap = g.snapshot();
-            let (mx, my) = (int_attn.mouse_world)();
-            if !snap.sector_stars.is_empty() {
-                g.tick_attention(0.08, Some((mx, my)), &snap.sector_stars);
-            }
-
-            let _payload = g.update(0.08);
-            g.remove_dead_enemies();
-        }
-    });
 
     let snap = game.read().snapshot();
     let offset = snap.camera.offset;
@@ -330,9 +269,6 @@ pub fn StarMap(
 
     let sector_stars: Vec<ResponseStar> = snap.sector_stars.clone();
     let loading: HashSet<SectorKey> = snap.sector_loading.clone();
-    let enemies: Vec<EnemyData> = snap.enemies.clone();
-    let projectiles: Vec<Projectile> = snap.projectiles.clone();
-
     let (starfield_small, starfield_medium, starfield_distant) = use_starfield_backgrounds();
 
     let handle_zoom = move |factor: f32| {
@@ -341,24 +277,15 @@ pub fn StarMap(
         g.zoom_camera(vp, factor);
     };
 
-    let game_for_hover = game;
-    let on_star_hover = EventHandler::new(move |star_id: u32| {
-        game_for_hover.read().look_at_star(star_id);
-    });
-
     rsx! {
-        style {
-            "@keyframes bullet-pulse {{ 0% {{ transform: scale(0.85); }} 100% {{ transform: scale(1.3); }} }}"
-        }
-
         div {
             class: "starmap-root absolute inset-0 cursor-grab active:cursor-grabbing",
-            onmousedown: move |e| {
+            onpointerdown: move |e| {
                 let g = game.read().clone();
                 g.set_dragging(true);
                 interact.last_mouse.set((e.client_coordinates().x as f32, e.client_coordinates().y as f32));
             },
-            onmousemove: move |e| {
+            onpointermove: move |e| {
                 let nx = e.client_coordinates().x as f32;
                 let ny = e.client_coordinates().y as f32;
                 let vp = *viewport.read();
@@ -370,23 +297,23 @@ pub fn StarMap(
                     interact.last_mouse.set((nx, ny));
                 }
 
-                let mw = mouse_to_world(nx, ny, vp, offset, zoom, center_x, center_y);
-                let old_mw = (interact.mouse_world)();
+                let mw = mouse_to_scene(nx, ny, vp, offset, zoom, center_x, center_y);
+                let old_mw = (interact.mouse_scene)();
 
                 let dist_sq = (mw.0 - old_mw.0).powi(2) + (mw.1 - old_mw.1).powi(2);
                 if dist_sq > 4.0 {
-                    interact.mouse_world.set(mw);
+                    interact.mouse_scene.set(mw);
                 }
 
                 if !dragging {
                     interact.last_mouse.set((nx, ny));
                 }
             },
-            onmouseup: move |_| {
+            onpointerup: move |_| {
                 let g = game.read().clone();
                 g.set_dragging(false);
             },
-            onmouseleave: move |_| {
+            onpointerleave: move |_| {
                 let g = game.read().clone();
                 g.set_dragging(false);
             },
@@ -443,77 +370,20 @@ pub fn StarMap(
                 for star in sector_stars {
                     {
                         let is_sel = selected_id.map(|id| id == star.id).unwrap_or(false);
-                        render_star("sector", &star, center_x, center_y, is_sel, on_select, Some(on_star_hover))
+                        render_star("sector", &star, center_x, center_y, is_sel, on_select)
                     }
                 }
 
-                for star in world_stars {
+                for star in scene_stars {
                     {
                         let is_sel = selected_id.map(|id| id == star.id).unwrap_or(false);
-                        render_star("world", &star, center_x, center_y, is_sel, on_select, Some(on_star_hover))
+                        render_star("scene", &star, center_x, center_y, is_sel, on_select)
                     }
                 }
 
                 for key in loading.iter() {
                     {
                         render_loading_chunk(*key, center_x, center_y)
-                    }
-                }
-
-                for enemy in enemies {
-                    {
-                        let e = enemy;
-                        let game_c = game;
-                        rsx! {
-                            Enemy {
-                                enemy: e.clone(),
-                                center_x,
-                                center_y,
-                                px_per_pc: PX_PER_PC,
-                                on_click: EventHandler::new(move |_| {
-                                    game_c.read().damage_enemy(e.id, 1.0);
-                                }),
-                            }
-                        }
-                    }
-                }
-
-                for proj in projectiles {
-                    {
-                        let p = proj;
-                        let px = (p.coordinates.0 - center_x) * PX_PER_PC;
-                        let py = (p.coordinates.1 - center_y) * PX_PER_PC;
-                        let size = (p.radius * 2.0).max(12.0);
-                        let pid = p.id;
-                        let game_c = game;
-                        rsx! {
-                            div {
-                                key: "projectile-{pid}",
-                                class: "absolute pointer-events-auto cursor-pointer flex items-center justify-center",
-                                style: "
-                                    left: {px}px;
-                                    top: {py}px;
-                                    width: {size}px;
-                                    height: {size}px;
-                                    transform: translate(-50%, -50%);
-                                    z-index: 50;
-                                ",
-                                onclick: move |e| {
-                                    e.stop_propagation();
-                                    game_c.read().click_projectile(pid);
-                                },
-                                div {
-                                    style: "
-                                        width: 100%;
-                                        height: 100%;
-                                        background-color: #f97316;
-                                        border-radius: 50%;
-                                        box-shadow: 0 0 10px #f97316, 0 0 20px #ef4444;
-                                        animation: bullet-pulse 0.3s ease-in-out infinite alternate;
-                                    ",
-                                }
-                            }
-                        }
                     }
                 }
             }
@@ -568,7 +438,7 @@ fn prng(mut seed: u32) -> f32 {
     (seed as f32) / (u32::MAX as f32)
 }
 
-fn mouse_to_world(
+fn mouse_to_scene(
     mx: f32,
     my: f32,
     vp: (f32, f32),

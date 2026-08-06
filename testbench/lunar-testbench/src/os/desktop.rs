@@ -11,7 +11,7 @@ pub fn Desktop() -> Element {
             section { class: "desktop-category", key: "{category.service()}",
                 CategoryLamp { category }
                 div { class: "desktop-icon-grid",
-                    for (index, app) in apps_for_category(category).into_iter().enumerate() {
+                    for (index, app) in apps_for_category(category).into_iter().filter(|app| os.is_app_visible(app.id)).enumerate() {
                         { let available=os.is_app_available(app.id); let app_id=app.id; let title=app.title; let epoch=os.service_reveal_epoch(category.service()); rsx! {
                             button { key: "{app_id}-{epoch}", class: if available { "desktop-app desktop-app-reveal group" } else { "desktop-app desktop-app-disabled" }, disabled: !available, style: "--app-index: {index};", title: if available { title.to_string() } else { format!("{title}: required services are not running") },
                                 onclick: move |_| if os.is_app_available(app_id) { os.open_window(app_id,title); },

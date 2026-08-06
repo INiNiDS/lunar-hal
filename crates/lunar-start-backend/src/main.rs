@@ -26,6 +26,31 @@ struct ServiceInfo {
     name: String,
     status: ServiceStatus,
     pid: Option<u32>,
+    /// Effective frontend target when this is the managed frontend service.
+    platform: Option<String>,
+    /// Reachable only for a running web frontend; native targets have no URL.
+    public_url: Option<String>,
+}
+
+fn service_info(runtime: &ServiceRuntime) -> ServiceInfo {
+    let launch = (runtime.config.name == "frontend")
+        .then(|| FrontendLaunchConfig::from_values(&runtime.config.env, &runtime.config.extra_args).ok())
+        .flatten();
+    let platform = launch
+        .as_ref()
+        .map(|launch| launch.platform.as_str().to_string());
+    let public_url = if matches!(runtime.status, ServiceStatus::Running) {
+        launch.and_then(|launch| launch.public_url())
+    } else {
+        None
+    };
+    ServiceInfo {
+        name: runtime.config.name.clone(),
+        status: runtime.status.clone(),
+        pid: runtime.pid,
+        platform,
+        public_url,
+    }
 }
 
 #[derive(Clone)]
@@ -109,11 +134,7 @@ async fn list_services(state: SharedState) -> Json<Vec<ServiceInfo>> {
         .services()
         .await
         .iter()
-        .map(|service| ServiceInfo {
-            name: service.config.name.clone(),
-            status: service.status.clone(),
-            pid: service.pid,
-        })
+        .map(service_info)
         .collect();
     Json(services)
 }
@@ -258,11 +279,7 @@ async fn service_action_response(
         .await
         .map_err(manager_api_error)?;
     Ok(Json(ServiceActionResponse {
-        service: ServiceInfo {
-            name: runtime.config.name,
-            status: runtime.status,
-            pid: runtime.pid,
-        },
+        service: service_info(&runtime),
         config,
     }))
 }
@@ -453,7 +470,7 @@ mod tests {
 
     fn test_state(root: &std::path::Path) -> Arc<AppState> {
         let models = root.join("models");
-        let worlds = root.join("worlds");
+        let scenes = root.join("scenes");
         fs::create_dir_all(&models).unwrap();
         let mut backend = ServiceConfig::backend();
         backend
@@ -461,7 +478,7 @@ mod tests {
             .insert("LUNAR_MODELS_DIR".into(), models.display().to_string());
         backend
             .env
-            .insert("LUNAR_WORLDS_DIR".into(), worlds.display().to_string());
+            .insert("LUNAR_SCENES_DIR".into(), scenes.display().to_string());
         let config = LauncherConfig::new(root.to_path_buf()).with_service(backend);
         let manager = ServiceManager::new(&config).unwrap();
         Arc::new(AppState {
@@ -658,7 +675,7 @@ mod tests {
                 .await
                 .iter()
                 .any(|service| service.config.name == "backend"
-                    && matches!(service.status, lunar_start::ServiceStatus::Running))
+                    && matches!(service.status, ServiceStatus::Running))
         );
 
         // A valid replacement is applied before the service is started again.
@@ -713,7 +730,7 @@ mod tests {
         let validation = manager_api_error(ConfigError::Validation(ValidationResult {
             ok: false,
             field_errors: HashMap::from([(
-                "SERVE_PORT".to_string(),
+                "LUNAR_FRONTEND_PORT".to_string(),
                 "Port 8080 is already used by another service".to_string(),
             )]),
         }));

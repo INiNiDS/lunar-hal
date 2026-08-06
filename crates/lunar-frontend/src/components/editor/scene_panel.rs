@@ -1,10 +1,10 @@
 use crate::assets::FONT_SANS;
-use crate::game_state::use_game;
+use crate::stellar_state::use_stellar_scene;
 use dioxus::prelude::*;
 use lunar_stellar_core::StellarScene;
-use lunar_structures::{CreateWorldRequest, World, WorldSummary};
+use lunar_structures::{CreateStarSceneRequest, StarScene, StarSceneSummary};
 
-fn world_accent_color(id: &str) -> (String, String) {
+fn scene_accent_color(id: &str) -> (String, String) {
     let mut hash: u64 = 0xcbf29ce484222325;
     for b in id.as_bytes() {
         hash ^= *b as u64;
@@ -19,8 +19,8 @@ fn world_accent_color(id: &str) -> (String, String) {
 }
 
 #[component]
-pub fn WorldPicker(
-    worlds: Vec<WorldSummary>,
+pub fn StarScenePicker(
+    scenes: Vec<StarSceneSummary>,
     loading: bool,
     on_select: EventHandler<String>,
     on_create: EventHandler<()>,
@@ -41,9 +41,9 @@ pub fn WorldPicker(
                             "Stellarium Archive"
                         }
                     }
-                    h1 { class: "text-2xl font-bold text-white tracking-wide", "Select a World" }
+                    h1 { class: "text-2xl font-bold text-white tracking-wide", "Select a Star Scene" }
                     p { class: "text-[11px] text-white/40 mt-1.5 tracking-wider uppercase",
-                        "Each world is permanently catalogued with its own stellar population"
+                        "Each scene is permanently catalogued with its own stellar population"
                     }
                 }
 
@@ -55,19 +55,19 @@ pub fn WorldPicker(
                                 "Scanning the void..."
                             }
                         }
-                    } else if worlds.is_empty() {
+                    } else if scenes.is_empty() {
                         div { class: "flex flex-col items-center justify-center py-16 gap-3 text-center",
                             div { class: "text-[10px] uppercase tracking-widest text-white/30",
-                                "No worlds found in the archive"
+                                "No scenes found in the archive"
                             }
                             span { class: "text-xs text-white/40",
                                 "Create the first sector to begin exploration."
                             }
                         }
                     } else {
-                        for w in worlds.iter() {
-                            WorldCard {
-                                world: w.clone(),
+                        for w in scenes.iter() {
+                            StarSceneCard {
+                                scene: w.clone(),
                                 on_select: move |id: String| on_select.call(id),
                                 on_delete: move |id: String| on_delete.call(id),
                             }
@@ -77,14 +77,14 @@ pub fn WorldPicker(
 
                 div { class: "px-6 py-4 border-t border-white/[0.06] flex items-center justify-between bg-black/40",
                     span { class: "text-[10px] uppercase tracking-widest text-white/30",
-                        "{worlds.len()} world(s) catalogued"
+                        "{scenes.len()} scenes catalogued"
                     }
                     button {
                         class: "px-5 py-2.5 rounded-xl bg-amber-400/20 border border-amber-400/40 \
                                text-amber-200 text-[10px] font-bold uppercase tracking-[0.2em] \
                                hover:bg-amber-400/30 hover:text-amber-100 transition-colors cursor-pointer",
                         onclick: move |_| on_create.call(()),
-                        "+ Forge New World"
+                        "+ Create Star Scene"
                     }
                 }
             }
@@ -93,14 +93,14 @@ pub fn WorldPicker(
 }
 
 #[component]
-fn WorldCard(
-    world: WorldSummary,
+fn StarSceneCard(
+    scene: StarSceneSummary,
     on_select: EventHandler<String>,
     on_delete: EventHandler<String>,
 ) -> Element {
-    let id = world.id.clone();
-    let id_for_delete = world.id.clone();
-    let (accent, glow) = world_accent_color(&world.id);
+    let id = scene.id.clone();
+    let id_for_delete = scene.id.clone();
+    let (accent, glow) = scene_accent_color(&scene.id);
     let border_color = format!("{accent}55");
     let icon_bg = format!("linear-gradient(135deg, {accent}40, {accent}10)");
     let dot_shadow = format!("0 0 10px {glow}, 0 0 4px {accent}");
@@ -123,12 +123,12 @@ fn WorldCard(
                 div {
                     class: "text-sm font-semibold truncate",
                     style: "color: {accent};",
-                    "{world.name}"
+                    "{scene.name}"
                 }
                 div { class: "flex items-center gap-2 text-[10px] text-white/40 mt-1 tracking-wider",
-                    span { "[{world.center_x:.0}, {world.center_y:.0}, {world.center_z:.0}]" }
+                    span { "[{scene.center_x:.0}, {scene.center_y:.0}, {scene.center_z:.0}]" }
                     div { class: "w-1 h-1 rounded-full bg-white/20" }
-                    span { "{world.star_count} stars" }
+                    span { "{scene.star_count} stars" }
                 }
             }
 
@@ -146,8 +146,8 @@ fn WorldCard(
 }
 
 #[component]
-pub fn WorldCreator(on_cancel: EventHandler<()>, on_created: EventHandler<World>) -> Element {
-    let game = use_game();
+pub fn StarSceneCreator(on_cancel: EventHandler<()>, on_created: EventHandler<StarScene>) -> Element {
+    let game = use_stellar_scene();
     let name = use_signal(String::new);
 
     // Initialize coordinate signals directly inside their closures
@@ -189,7 +189,7 @@ pub fn WorldCreator(on_cancel: EventHandler<()>, on_created: EventHandler<World>
         }
         submitting.set(true);
         error_msg.set(None);
-        let req = CreateWorldRequest {
+        let req = CreateStarSceneRequest {
             name: n,
             center_x: cx(),
             center_y: cy(),
@@ -198,7 +198,7 @@ pub fn WorldCreator(on_cancel: EventHandler<()>, on_created: EventHandler<World>
         };
         spawn(async move {
             let g: StellarScene = game.read().clone();
-            match g.create_world(req).await {
+            match g.create_scene(req).await {
                 Ok(w) => on_created.call(w),
                 Err(e) => {
                     error_msg.set(Some(e.to_string()));
@@ -223,7 +223,7 @@ pub fn WorldCreator(on_cancel: EventHandler<()>, on_created: EventHandler<World>
                             "Genesis Chamber"
                         }
                     }
-                    h1 { class: "text-2xl font-bold text-white tracking-wide", "Forge New World" }
+                    h1 { class: "text-2xl font-bold text-white tracking-wide", "Create Star Scene" }
                     p { class: "text-[11px] text-white/40 mt-1.5 tracking-wider uppercase",
                         "Stars will be generated and crystallized into the archive forever"
                     }
@@ -273,7 +273,7 @@ pub fn WorldCreator(on_cancel: EventHandler<()>, on_created: EventHandler<World>
                                hover:bg-amber-300 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed",
                         disabled: submitting(),
                         onclick: submit,
-                        if submitting() { "Forging..." } else { "✦ Crystallize World" }
+                        if submitting() { "Creating..." } else { "✦ Create Star Scene" }
                     }
                 }
             }

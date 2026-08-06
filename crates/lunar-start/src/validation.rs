@@ -1,12 +1,14 @@
 use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
+use crate::service_settings::{FrontendLaunchConfig, FrontendPlatform};
 use crate::{ServiceConfig, ServiceKind};
-use lunar_utils::env::{get_lunar_models_dir, get_worlds_dir};
+use lunar_utils::env::{get_lunar_models_dir, get_scenes_dir};
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ValidationResult {
@@ -55,15 +57,9 @@ fn parse_port(config: &ServiceConfig) -> Option<(&'static str, Result<u16, ()>)>
                 .ok_or(())
                 .and_then(|value| parse_port_value(value)),
         )),
-        "frontend" => {
-            let value = config
-                .extra_args
-                .windows(2)
-                .find(|window| window[0] == "--port" || window[0] == "-p")
-                .map(|window| parse_port_value(&window[1]))
-                .unwrap_or(Err(()));
-            Some(("SERVE_PORT", value))
-        }
+        "frontend" => FrontendLaunchConfig::from_values(&config.env, &config.extra_args)
+            .ok()
+            .and_then(|launch| launch.port.map(|port| ("LUNAR_FRONTEND_PORT", Ok(port)))),
         _ => None,
     }
 }
@@ -100,14 +96,14 @@ fn validate_models_dir(result: &mut ValidationResult, config: &ServiceConfig) {
 fn validate_writable_dir(result: &mut ValidationResult, config: &ServiceConfig) {
     let path = config
         .env
-        .get("LUNAR_WORLDS_DIR")
+        .get("LUNAR_SCENES_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(get_worlds_dir);
+        .unwrap_or_else(get_scenes_dir);
     let path = path.as_path();
     if let Err(error) = fs::create_dir_all(path) {
         result.add(
-            "LUNAR_WORLDS_DIR",
-            format!("Cannot create worlds directory: {error}"),
+            "LUNAR_SCENES_DIR",
+            format!("Cannot create scenes directory: {error}"),
         );
         return;
     }
@@ -122,8 +118,8 @@ fn validate_writable_dir(result: &mut ValidationResult, config: &ServiceConfig) 
             let _ = fs::remove_file(probe);
         }
         Err(error) => result.add(
-            "LUNAR_WORLDS_DIR",
-            format!("Worlds directory is not writable: {error}"),
+            "LUNAR_SCENES_DIR",
+            format!("Star scenes directory is not writable: {error}"),
         ),
     }
 }
@@ -191,6 +187,62 @@ fn validate_dx(result: &mut ValidationResult, config: &ServiceConfig) {
         .unwrap_or("dx");
     if dx.trim().is_empty() || !executable_exists(dx) {
         result.add("LUNAR_DX_BIN", format!("Dioxus CLI was not found: {dx}"));
+    }
+}
+
+fn validate_android_prerequisites(result: &mut ValidationResult) {
+    let sdk = std::env::var("ANDROID_SDK_ROOT")
+        .or_else(|_| std::env::var("ANDROID_HOME"))
+        .ok()
+        .filter(|value| Path::new(value).is_dir());
+    if sdk.is_none() {
+        result.add(
+            "ANDROID_SDK_ROOT",
+            "Android SDK is required for the android frontend platform",
+        );
+    }
+
+    let ndk = std::env::var("ANDROID_NDK_HOME")
+        .ok()
+        .filter(|value| Path::new(value).is_dir());
+    if ndk.is_none() {
+        result.add(
+            "ANDROID_NDK_HOME",
+            "Android NDK is required for the android frontend platform",
+        );
+    }
+
+    let adb = std::env::var("ADB").unwrap_or_else(|_| "adb".to_string());
+    if adb.trim().is_empty() || !executable_exists(&adb) {
+        result.add("ADB", "adb was not found in PATH");
+        return;
+    }
+    let has_device = Command::new(&adb)
+        .arg("devices")
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
+        .is_some_and(|output| output.lines().any(|line| line.ends_with("\tdevice")));
+    if !has_device {
+        result.add(
+            "ANDROID_DEVICE",
+            "No reachable Android device or emulator was reported by adb",
+        );
+    }
+}
+
+fn validate_frontend_launch(result: &mut ValidationResult, config: &ServiceConfig) {
+    validate_dx(result, config);
+    let launch = match FrontendLaunchConfig::from_values(&config.env, &config.extra_args) {
+        Ok(launch) => launch,
+        Err(error) => {
+            result.add(error.field, error.message);
+            return;
+        }
+    };
+    if launch.platform == FrontendPlatform::Android {
+        validate_android_prerequisites(result);
     }
 }
 
@@ -265,7 +317,7 @@ pub fn validate_service_config(
             validate_required_host(&mut result, config, "LUNAR_TESTBENCH_HOST");
             validate_workspace(&mut result, config, workspace);
         }
-        "frontend" => validate_dx(&mut result, config),
+        "frontend" => validate_frontend_launch(&mut result, config),
         _ => result.add("service", "Unsupported configurable service"),
     }
 
@@ -326,7 +378,7 @@ mod tests {
     fn validates_backend_paths_features_and_binary() {
         let workspace = temp_workspace();
         let models = workspace.join("models");
-        let worlds = workspace.join("worlds");
+        let scenes = workspace.join("scenes");
         fs::create_dir_all(&models).unwrap();
         add_binary(&workspace, "lunar-backend");
         let mut backend = ServiceConfig::backend();
@@ -335,11 +387,11 @@ mod tests {
             .insert("LUNAR_MODELS_DIR".into(), models.display().to_string());
         backend
             .env
-            .insert("LUNAR_WORLDS_DIR".into(), worlds.display().to_string());
+            .insert("LUNAR_SCENES_DIR".into(), scenes.display().to_string());
 
         let result = validate_service_config(&backend, &workspace, &[]);
         assert_eq!(result, ValidationResult::valid());
-        assert!(worlds.is_dir());
+        assert!(scenes.is_dir());
         fs::remove_dir_all(workspace).unwrap();
     }
 
@@ -366,25 +418,25 @@ mod tests {
     }
 
     #[test]
-    fn reports_invalid_model_worlds_and_workspace_paths() {
+    fn reports_invalid_model_scenes_and_workspace_paths() {
         let workspace = temp_workspace();
         add_binary(&workspace, "lunar-backend");
         add_binary(&workspace, "lunar-testbench-backend");
 
         let mut backend = ServiceConfig::backend();
         let missing_models = workspace.join("missing-models");
-        let worlds_file = workspace.join("worlds-file");
-        fs::write(&worlds_file, b"not a directory").unwrap();
+        let scenes_file = workspace.join("scenes-file");
+        fs::write(&scenes_file, b"not a directory").unwrap();
         backend.env.insert(
             "LUNAR_MODELS_DIR".into(),
             missing_models.display().to_string(),
         );
         backend
             .env
-            .insert("LUNAR_WORLDS_DIR".into(), worlds_file.display().to_string());
+            .insert("LUNAR_SCENES_DIR".into(), scenes_file.display().to_string());
         let backend_result = validate_service_config(&backend, &workspace, &[]);
         assert!(backend_result.field_errors.contains_key("LUNAR_MODELS_DIR"));
-        assert!(backend_result.field_errors.contains_key("LUNAR_WORLDS_DIR"));
+        assert!(backend_result.field_errors.contains_key("LUNAR_SCENES_DIR"));
 
         let mut testbench = ServiceConfig::testbench_backend();
         testbench.env.insert(

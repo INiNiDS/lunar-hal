@@ -2,7 +2,7 @@ use lunar_stellar_core::sector::{
     CHUNK_SIZE_PC, INNER_EXCLUSION_PC, MAX_CACHED_CHUNKS, PX_PER_PC, chunk_center,
     chunk_distance_sq, evict_excess_cache, sectors_to_fetch, visible_chunks,
 };
-use lunar_stellar_core::{StellarScene, StellarConfig};
+use lunar_stellar_core::{StellarScene, StellarSceneConfig};
 use lunar_structures::ResponseStar;
 use std::collections::{HashMap, HashSet};
 
@@ -31,7 +31,7 @@ fn visible_chunks_returns_empty_for_zero_viewport() {
 
 #[test]
 fn visible_chunks_centers_around_camera() {
-    // Camera at origin looking at world (0,0); zoom 1.0; viewport 4000x4000.
+    // Camera at origin looking at scene (0,0); zoom 1.0; viewport 4000x4000.
     // We should see one chunk (the one at the origin).
     let chunks = visible_chunks((0.0, 0.0), 1.0, (4000.0, 4000.0), (0.0, 0.0));
     assert!(!chunks.is_empty());
@@ -40,7 +40,7 @@ fn visible_chunks_centers_around_camera() {
 
 #[test]
 fn visible_chunks_excludes_chunks_inside_inner_radius() {
-    // World center at (0,0). Chunks within INNER_EXCLUSION_PC of the
+    // StarScene center at (0,0). Chunks within INNER_EXCLUSION_PC of the
     // center are skipped by `sectors_to_fetch`. The chunk at (0,0)
     // has its center at CHUNK_SIZE_PC/2 = 200, which is <
     // INNER_EXCLUSION_PC = 450, so it is excluded.
@@ -55,7 +55,7 @@ fn visible_chunks_excludes_chunks_inside_inner_radius() {
         viewport: (10000.0, 10000.0),
         cam_offset: (0.0, 0.0),
         cam_zoom: 1.0,
-        world_center: (0.0, 0.0, 0.0),
+        scene_center: (0.0, 0.0, 0.0),
     };
     let to_fetch = sectors_to_fetch(request, &cache, &loading);
     assert!(!to_fetch.iter().any(|(c, _)| *c == (0, 0)));
@@ -92,7 +92,7 @@ fn sectors_to_fetch_skips_cached_and_loading() {
         viewport: (5000.0, 5000.0),
         cam_offset: (0.0, 0.0),
         cam_zoom: 1.0,
-        world_center: (0.0, 0.0, 0.0),
+        scene_center: (0.0, 0.0, 0.0),
     };
 
     let to_fetch = sectors_to_fetch(request, &cache, &loading);
@@ -122,17 +122,17 @@ fn px_per_pc_is_positive() {
 }
 
 #[test]
-fn game_can_be_constructed_with_default_config() {
+fn scene_can_be_constructed_with_default_config() {
     let _game = StellarScene::new();
 }
 
 #[test]
-fn game_can_be_constructed_with_explicit_config() {
-    let _game = StellarScene::with_config(StellarConfig::new("http://127.0.0.1:1"));
+fn scene_can_be_constructed_with_explicit_config() {
+    let _game = StellarScene::with_config(StellarSceneConfig::new("http://127.0.0.1:1"));
 }
 
 #[test]
-fn game_snapshot_reflects_camera_changes() {
+fn scene_snapshot_reflects_camera_changes() {
     let game = StellarScene::new();
     assert_eq!(game.snapshot().camera.zoom, 1.0);
     game.set_camera(lunar_stellar_core::Camera {
@@ -146,7 +146,7 @@ fn game_snapshot_reflects_camera_changes() {
 }
 
 #[test]
-fn game_camera_zoom_around_center_preserves_world_point() {
+fn scene_camera_zoom_around_center_preserves_scene_point() {
     let camera = lunar_stellar_core::Camera {
         offset: (0.0, 0.0),
         zoom: 1.0,
@@ -155,7 +155,7 @@ fn game_camera_zoom_around_center_preserves_world_point() {
     let new_camera = camera.zoom_around_center((1000.0, 1000.0), 2.0);
     assert!((new_camera.zoom - 2.0).abs() < 1e-6);
 
-    // The world point that was under the viewport center before the
+    // The scene point that was under the viewport center before the
     // zoom must still be under the center afterward.
     let viewport_center = (500.0_f32, 500.0_f32);
     let before_x = (viewport_center.0 - camera.offset.0) / (camera.zoom * PX_PER_PC);
@@ -167,13 +167,13 @@ fn game_camera_zoom_around_center_preserves_world_point() {
 }
 
 #[test]
-fn adopt_world_clears_sector_cache() {
+fn adopt_scene_clears_sector_cache() {
     let game = StellarScene::new();
     let chunk = (5, 5);
     game.apply_sector(chunk, vec![star_at(1.0, 2.0, 3.0)]);
     assert!(game.snapshot().sector_cache.contains_key(&chunk));
 
-    let world = lunar_structures::World {
+    let scene = lunar_structures::StarScene {
         id: "test".into(),
         name: "Test".into(),
         created_at: 0,
@@ -185,17 +185,17 @@ fn adopt_world_clears_sector_cache() {
         g_mag: 5.0,
         stars: vec![],
     };
-    game.adopt_world(Some(world));
+    game.adopt_scene(Some(scene));
     assert!(!game.snapshot().sector_cache.contains_key(&chunk));
 }
 
 #[test]
-fn world_camera_persists_in_memory() {
+fn scene_camera_persists_in_memory() {
     let game = StellarScene::new();
-    game.set_world_camera("foo", lunar_stellar_core::WorldCamera::new((1.0, 2.0), 1.5))
+    game.set_scene_camera("foo", lunar_stellar_core::SceneCamera::new((1.0, 2.0), 1.5))
         .unwrap();
     let snap = game.snapshot();
-    let wc = snap.world_cameras.get("foo").copied();
+    let wc = snap.scene_cameras.get("foo").copied();
     assert!(wc.is_some());
     let wc = wc.unwrap();
     assert_eq!(wc.offset, (1.0, 2.0));
@@ -203,18 +203,18 @@ fn world_camera_persists_in_memory() {
 }
 
 #[test]
-fn apply_world_camera_copies_saved_camera_to_current() {
+fn apply_scene_camera_copies_saved_camera_to_current() {
     let game = StellarScene::new();
-    game.set_world_camera("foo", lunar_stellar_core::WorldCamera::new((3.0, 4.0), 2.5))
+    game.set_scene_camera("foo", lunar_stellar_core::SceneCamera::new((3.0, 4.0), 2.5))
         .unwrap();
-    assert!(game.apply_world_camera("foo").unwrap());
+    assert!(game.apply_scene_camera("foo").unwrap());
     let cam = game.camera();
     assert_eq!(cam.offset, (3.0, 4.0));
     assert!((cam.zoom - 2.5).abs() < 1e-6);
 }
 
 #[test]
-fn apply_world_camera_returns_false_for_unknown_world() {
+fn apply_scene_camera_returns_false_for_unknown_scene() {
     let game = StellarScene::new();
-    assert!(!game.apply_world_camera("does-not-exist").unwrap());
+    assert!(!game.apply_scene_camera("does-not-exist").unwrap());
 }

@@ -5,8 +5,8 @@
 //! base URL, the client is constructed by [`Game`].
 
 use lunar_structures::{
-    CreateWorldRequest, GnnResponse, PipelineRequest, PipelineResponse, RandomStarRequest,
-    RandomStarResponse, SectorRequest, World, WorldListResponse,
+    CreateStarSceneRequest, GnnResponse, PipelineRequest, PipelineResponse, RandomStarRequest,
+    RandomStarResponse, SectorRequest, StarScene, StarSceneListResponse,
 };
 use lunar_utils::env::get_url;
 use parking_lot::RwLock;
@@ -115,20 +115,20 @@ impl ApiClient {
         Ok(())
     }
 
-    pub async fn list_worlds(&self) -> Result<WorldListResponse, ApiError> {
-        self.get_json("/worlds").await
+    pub async fn list_scenes(&self) -> Result<StarSceneListResponse, ApiError> {
+        self.get_json("/scenes").await
     }
 
-    pub async fn get_world(&self, id: &str) -> Result<World, ApiError> {
-        self.get_json(&format!("/worlds/{id}")).await
+    pub async fn get_scene(&self, id: &str) -> Result<StarScene, ApiError> {
+        self.get_json(&format!("/scenes/{id}")).await
     }
 
-    pub async fn create_world(&self, req: CreateWorldRequest) -> Result<World, ApiError> {
-        self.post_json("/worlds/create", &req).await
+    pub async fn create_scene(&self, req: CreateStarSceneRequest) -> Result<StarScene, ApiError> {
+        self.post_json("/scenes/create", &req).await
     }
 
-    pub async fn delete_world(&self, id: &str) -> Result<(), ApiError> {
-        self.delete(&format!("/worlds/{id}")).await
+    pub async fn delete_scene(&self, id: &str) -> Result<(), ApiError> {
+        self.delete(&format!("/scenes/{id}")).await
     }
 
     pub async fn sector_stars(&self, req: SectorRequest) -> Result<GnnResponse, ApiError> {

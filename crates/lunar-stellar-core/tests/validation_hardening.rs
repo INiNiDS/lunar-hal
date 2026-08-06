@@ -8,12 +8,12 @@ use lunar_stellar_core::validation::{
     ValidationError, limits, validate_bp_rp, validate_center_x, validate_center_y,
     validate_center_z, validate_entropy, validate_g_mag, validate_pipeline, validate_response_star,
     validate_response_stars, validate_search_radius, validate_sector_key, validate_temperature,
-    validate_world, validate_world_id, validate_world_name, validate_world_summary, validate_zoom,
+    validate_scene, validate_scene_id, validate_scene_name, validate_scene_summary, validate_zoom,
 };
-use lunar_stellar_core::{Game, GameError};
+use lunar_stellar_core::{StellarScene, StellarSceneError};
 use lunar_structures::{
-    CreateWorldRequest, GnnResponse, PinnResponse, PipelineRequest, PipelineResponse, ResponseStar,
-    SirenTextureResponse, StellarMetadata, World, WorldListResponse, WorldSummary,
+    CreateStarSceneRequest, GnnResponse, PinnResponse, PipelineRequest, PipelineResponse, ResponseStar,
+    SirenTextureResponse, StellarMetadata, StarScene, StarSceneListResponse, StarSceneSummary,
 };
 
 // --- pure validators ---------------------------------------------------------
@@ -21,20 +21,20 @@ use lunar_structures::{
 #[test]
 fn rejects_empty_name() {
     assert!(matches!(
-        validate_world_name(""),
+        validate_scene_name(""),
         Err(ValidationError::Empty { .. })
     ));
     assert!(matches!(
-        validate_world_name("   \t"),
+        validate_scene_name("   \t"),
         Err(ValidationError::Empty { .. })
     ));
 }
 
 #[test]
 fn rejects_overlong_name() {
-    let s = "x".repeat(limits::WORLD_NAME_MAX + 1);
+    let s = "x".repeat(limits::SCENE_NAME_MAX + 1);
     assert!(matches!(
-        validate_world_name(&s),
+        validate_scene_name(&s),
         Err(ValidationError::TooLong { .. })
     ));
 }
@@ -44,7 +44,7 @@ fn rejects_control_chars_in_name() {
     for c in ['\0', '\n', '\r', '\t', '\x1b'] {
         let s = format!("Vela{c}Rim");
         assert!(matches!(
-            validate_world_name(&s),
+            validate_scene_name(&s),
             Err(ValidationError::InvalidCharacters { .. })
         ));
     }
@@ -61,7 +61,7 @@ fn rejects_path_traversal_in_id() {
         "",
     ] {
         assert!(
-            validate_world_id(bad).is_err(),
+            validate_scene_id(bad).is_err(),
             "expected reject for id: {bad:?}"
         );
     }
@@ -71,7 +71,7 @@ fn rejects_path_traversal_in_id() {
 fn rejects_unicode_in_id() {
     for bad in ["вела", "velä", "𝓥"] {
         assert!(
-            validate_world_id(bad).is_err(),
+            validate_scene_id(bad).is_err(),
             "expected reject for id: {bad:?}"
         );
     }
@@ -147,7 +147,6 @@ fn response_star_rejects_negative_physical_and_nan() {
         radius: 1.0,
         mass: 1.0,
         luminosity: 1.0,
-        hp: 100.0,
         description: String::new(),
         name: String::new(),
         type_hint: String::new(),
@@ -175,7 +174,6 @@ fn response_stars_rejects_at_first_bad_entry() {
         radius: 1.0,
         mass: 1.0,
         luminosity: 1.0,
-        hp: 100.0,
         description: String::new(),
         name: String::new(),
         type_hint: String::new(),
@@ -239,8 +237,8 @@ fn pipeline_rejects_nan_pinn() {
 
 // --- game-level guarantees ---------------------------------------------------
 
-fn valid_world() -> World {
-    World {
+fn valid_scene() -> StarScene {
+    StarScene {
         id: "abc-123".into(),
         name: "Vela Rim".into(),
         created_at: 0,
@@ -255,21 +253,21 @@ fn valid_world() -> World {
 }
 
 #[test]
-fn world_validates_id_name_coords_and_stars() {
-    assert!(validate_world(&valid_world()).is_ok());
-    let mut w = valid_world();
+fn scene_validates_id_name_coords_and_stars() {
+    assert!(validate_scene(&valid_scene()).is_ok());
+    let mut w = valid_scene();
     w.id = "../bad".into();
-    assert!(validate_world(&w).is_err());
-    let mut w = valid_world();
+    assert!(validate_scene(&w).is_err());
+    let mut w = valid_scene();
     w.name = "".into();
-    assert!(validate_world(&w).is_err());
-    let mut w = valid_world();
+    assert!(validate_scene(&w).is_err());
+    let mut w = valid_scene();
     w.center_x = f32::INFINITY;
-    assert!(validate_world(&w).is_err());
-    let mut w = valid_world();
+    assert!(validate_scene(&w).is_err());
+    let mut w = valid_scene();
     w.bp_rp = 99.0;
-    assert!(validate_world(&w).is_err());
-    let mut w = valid_world();
+    assert!(validate_scene(&w).is_err());
+    let mut w = valid_scene();
     let mut bad_star = ResponseStar {
         id: 0,
         x: 0.0,
@@ -279,7 +277,6 @@ fn world_validates_id_name_coords_and_stars() {
         radius: 1.0,
         mass: 1.0,
         luminosity: 1.0,
-        hp: 100.0,
         description: String::new(),
         name: String::new(),
         type_hint: String::new(),
@@ -287,12 +284,12 @@ fn world_validates_id_name_coords_and_stars() {
     };
     bad_star.x = f32::NAN;
     w.stars.push(bad_star);
-    assert!(validate_world(&w).is_err());
+    assert!(validate_scene(&w).is_err());
 }
 
 #[test]
-fn world_summary_validates_id_name_coords() {
-    let summary = WorldSummary {
+fn scene_summary_validates_id_name_coords() {
+    let summary = StarSceneSummary {
         id: "abc-123".into(),
         name: "Vela".into(),
         created_at: 0,
@@ -301,15 +298,15 @@ fn world_summary_validates_id_name_coords() {
         center_z: 0.0,
         star_count: 0,
     };
-    assert!(validate_world_summary(&summary).is_ok());
+    assert!(validate_scene_summary(&summary).is_ok());
     let mut bad = summary.clone();
     bad.id = "with space".into();
-    assert!(validate_world_summary(&bad).is_err());
+    assert!(validate_scene_summary(&bad).is_err());
 }
 
 #[test]
-fn game_rejects_setting_invalid_temperature() {
-    let game = Game::new();
+fn scene_rejects_setting_invalid_temperature() {
+    let game = StellarScene::new();
     assert!(game.set_temperature(f32::NAN).is_err());
     assert!(game.set_temperature(-1.0).is_err());
     assert!(game.set_temperature(3.0).is_err());
@@ -317,8 +314,8 @@ fn game_rejects_setting_invalid_temperature() {
 }
 
 #[test]
-fn game_rejects_invalid_bp_rp_and_g_mag() {
-    let game = Game::new();
+fn scene_rejects_invalid_bp_rp_and_g_mag() {
+    let game = StellarScene::new();
     assert!(game.set_bp_rp(-0.1).is_err());
     assert!(game.set_bp_rp(6.0).is_err());
     assert!(game.set_bp_rp(1.0).is_ok());
@@ -329,8 +326,8 @@ fn game_rejects_invalid_bp_rp_and_g_mag() {
 }
 
 #[test]
-fn game_rejects_invalid_sector_center() {
-    let game = Game::new();
+fn scene_rejects_invalid_sector_center() {
+    let game = StellarScene::new();
     assert!(game.set_sector_center(Some((0.0, 0.0, 0.0))).is_ok());
     assert!(game.set_sector_center(Some((f32::NAN, 0.0, 0.0))).is_err());
     assert!(
@@ -341,36 +338,36 @@ fn game_rejects_invalid_sector_center() {
 }
 
 #[test]
-fn game_rejects_invalid_world_id_in_load_delete() {
-    let game = Game::new();
+fn scene_rejects_invalid_scene_id_in_load_delete() {
+    let game = StellarScene::new();
     // The async methods should never even reach the network for an
     // obviously broken id; we cannot easily observe the network in a
     // unit test, but we can prove the validator is invoked first by
     // using a sync call path that also requires a valid id.
     assert!(
-        game.set_world_camera("not a valid id!", Default::default())
+        game.set_scene_camera("not a valid id!", Default::default())
             .is_err()
     );
-    assert!(game.set_world_camera("", Default::default()).is_err());
-    assert!(game.apply_world_camera("../bad").is_err());
+    assert!(game.set_scene_camera("", Default::default()).is_err());
+    assert!(game.apply_scene_camera("../bad").is_err());
     assert!(game.remember_current_camera_for("not valid").is_err());
 }
 
 #[test]
-fn game_adopt_world_drops_garbage_silently() {
-    let game = Game::new();
-    let mut bad = valid_world();
+fn scene_adopt_scene_drops_garbage_silently() {
+    let game = StellarScene::new();
+    let mut bad = valid_scene();
     bad.id = "../escape".into();
-    game.adopt_world(Some(bad));
-    assert!(game.active_world().is_none());
+    game.adopt_scene(Some(bad));
+    assert!(game.active_scene().is_none());
 }
 
 #[test]
-fn game_rejects_malformed_create_request() {
-    let game = Game::new();
+fn scene_rejects_malformed_create_request() {
+    let game = StellarScene::new();
     // A request with a name that is all whitespace is also invalid
     // because the validator trims and rejects empty.
-    let req = CreateWorldRequest {
+    let req = CreateStarSceneRequest {
         name: "   ".into(),
         center_x: 0.0,
         center_y: 0.0,
@@ -381,14 +378,14 @@ fn game_rejects_malformed_create_request() {
         .enable_all()
         .build()
         .unwrap();
-    let res = rt.block_on(game.create_world(req));
-    assert!(matches!(res, Err(GameError::Validation(_))));
+    let res = rt.block_on(game.create_scene(req));
+    assert!(matches!(res, Err(StellarSceneError::Validation(_))));
 }
 
 #[test]
-fn game_rejects_create_request_with_nan_coords() {
-    let game = Game::new();
-    let req = CreateWorldRequest {
+fn scene_rejects_create_request_with_nan_coords() {
+    let game = StellarScene::new();
+    let req = CreateStarSceneRequest {
         name: "ok".into(),
         center_x: f32::NAN,
         center_y: 0.0,
@@ -399,20 +396,20 @@ fn game_rejects_create_request_with_nan_coords() {
         .enable_all()
         .build()
         .unwrap();
-    let res = rt.block_on(game.create_world(req));
-    assert!(matches!(res, Err(GameError::Validation(_))));
+    let res = rt.block_on(game.create_scene(req));
+    assert!(matches!(res, Err(StellarSceneError::Validation(_))));
 }
 
 #[test]
-fn game_apply_sector_rejects_invalid_chunk() {
-    let game = Game::new();
+fn scene_apply_sector_rejects_invalid_chunk() {
+    let game = StellarScene::new();
     assert!(!game.apply_sector((999_999, 0), vec![]));
     assert!(!game.mark_sector_loading((999_999, 0)));
 }
 
 #[test]
-fn game_apply_sector_rejects_invalid_star() {
-    let game = Game::new();
+fn scene_apply_sector_rejects_invalid_star() {
+    let game = StellarScene::new();
     let mut star = ResponseStar {
         id: 0,
         x: 0.0,
@@ -422,7 +419,6 @@ fn game_apply_sector_rejects_invalid_star() {
         radius: 1.0,
         mass: 1.0,
         luminosity: 1.0,
-        hp: 100.0,
         description: String::new(),
         name: String::new(),
         type_hint: String::new(),
@@ -459,7 +455,6 @@ fn gnn_response_with_one_bad_star_is_rejected() {
         radius: 1.0,
         mass: 1.0,
         luminosity: 1.0,
-        hp: 100.0,
         description: String::new(),
         name: String::new(),
         type_hint: String::new(),
@@ -474,8 +469,8 @@ fn gnn_response_with_one_bad_star_is_rejected() {
 }
 
 #[test]
-fn world_list_response_rejects_each_bad_summary() {
-    let summary = WorldSummary {
+fn scene_list_response_rejects_each_bad_summary() {
+    let summary = StarSceneSummary {
         id: "abc-123".into(),
         name: "Vela".into(),
         created_at: 0,
@@ -486,13 +481,13 @@ fn world_list_response_rejects_each_bad_summary() {
     };
     let mut bad = summary.clone();
     bad.id = "has space".into();
-    let _ = WorldListResponse {
-        worlds: vec![summary, bad],
+    let _ = StarSceneListResponse {
+        scenes: vec![summary, bad],
     };
     // The list itself is fine to construct; the validator is what
-    // would reject it inside `refresh_worlds`. We assert that the
+    // would reject it inside `refresh_scenes`. We assert that the
     // validator on the bad entry fails.
-    let bad = WorldSummary {
+    let bad = StarSceneSummary {
         id: "has space".into(),
         name: "Vela".into(),
         created_at: 0,
@@ -501,5 +496,5 @@ fn world_list_response_rejects_each_bad_summary() {
         center_z: 0.0,
         star_count: 0,
     };
-    assert!(validate_world_summary(&bad).is_err());
+    assert!(validate_scene_summary(&bad).is_err());
 }

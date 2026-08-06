@@ -229,6 +229,10 @@ pub struct ServiceInfo {
     pub name: String,
     pub status: ServiceStatus,
     pub pid: Option<u32>,
+    #[serde(default)]
+    pub platform: Option<String>,
+    #[serde(default)]
+    pub public_url: Option<String>,
 }
 
 /// Coarse severity of a streamed log line (mirrors `lunar_start::backend::LogLevel`).

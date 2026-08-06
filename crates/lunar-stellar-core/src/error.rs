@@ -1,11 +1,11 @@
-//! Unified error type for the game layer.
+//! Unified error type for the stellar-scene client.
 //!
-//! Every fallible operation on [`crate::Game`] returns
-//! [`Result<T, GameError>`]. The two variants cover the two trust
-//! boundaries the game crosses:
+//! Every fallible operation on [`crate::StellarScene`] returns
+//! [`Result<T, StellarSceneError>`]. The two variants cover the two trust
+//! boundaries the stellar scene client crosses:
 //!
-//! * [`GameError::Validation`] — the caller's input was invalid.
-//! * [`GameError::Api`] — the AI backend returned an error.
+//! * [`StellarSceneError::Validation`] — the caller's input was invalid.
+//! * [`StellarSceneError::Api`] — the AI backend returned an error.
 //!
 //! Both variants are lightweight to construct and easy to match.
 
@@ -14,12 +14,12 @@ use thiserror::Error;
 use crate::api_client::ApiError;
 use crate::validation::ValidationError;
 
-/// Top-level error for game operations.
+/// Top-level error for stellar-scene operations.
 #[derive(Debug, Error)]
-pub enum GameError {
+pub enum StellarSceneError {
     /// The caller provided an invalid value (empty name, NaN, out of
     /// range, etc.). The contained [`ValidationError`] is local to
-    /// the game and does not depend on the AI backend.
+    /// the stellar scene client and does not depend on the AI backend.
     #[error(transparent)]
     Validation(#[from] ValidationError),
 
@@ -29,18 +29,18 @@ pub enum GameError {
     Api(#[from] ApiError),
 }
 
-impl From<GameError> for ValidationError {
-    fn from(e: GameError) -> Self {
+impl From<StellarSceneError> for ValidationError {
+    fn from(e: StellarSceneError) -> Self {
         match e {
-            GameError::Validation(v) => v,
-            GameError::Api(_) => ValidationError::Empty {
+            StellarSceneError::Validation(v) => v,
+            StellarSceneError::Api(_) => ValidationError::Empty {
                 field: "api.backend",
             },
         }
     }
 }
 
-impl GameError {
+impl StellarSceneError {
     /// Returns `true` if this error is the caller's fault (the input
     /// was bad). The UI can use this to decide whether to show a
     /// validation hint or a network error toast.

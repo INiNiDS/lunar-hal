@@ -12,6 +12,7 @@ path = "src/main.rs"
 dioxus = { version = "0.7.1", features = ["router"] }
 lunar-structures = { path = "../lunar-structures" }
 lunar-stellar-core = { path = "../lunar-stellar-core" }
+lunar-utils = { path = "../lunar-utils" }
 lunar-ui-shared = { path = "../lunar-ui-shared" }
 image = "0.25.10"
 base64 = "0.23.1"
@@ -41,4 +42,4 @@ tokio = { version = "1", features = ["time"] }
 default = ["desktop"]
 web = ["dioxus/web", "dioxus/document", "lunar-ui-shared/web"]
 desktop = ["dioxus/desktop", "lunar-ui-shared/desktop"]
-mobile = ["dioxus/mobile"]
+android = ["dioxus/mobile"]

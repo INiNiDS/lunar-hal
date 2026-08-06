@@ -16,16 +16,16 @@ use lunar_structures::{
     PinnResponse, PipelineRequest, PipelineResponse, RandomStarRequest, RandomStarResponse,
     ResponseStar, SirenTextureRequest, SirenTextureResponse, StarDescriptionPayload, StarLore,
 };
-use lunar_utils::env::{get_host, get_port, get_worlds_dir};
+use lunar_utils::env::{get_host, get_port, get_scenes_dir};
 
 #[cfg(feature = "siren")]
 use crate::ai::{get_siren, siren_generate_texture};
 
 pub mod ai;
-pub mod worlds;
+pub mod scenes;
 
 use crate::ai::PinnInputs;
-use crate::worlds::{WorldStore, calculate_absolute_magnitude, infer_pinn_async};
+use crate::scenes::{SceneStore, calculate_absolute_magnitude, infer_pinn_async};
 
 async fn generate_siren_pixels(
     width: u32,
@@ -229,7 +229,6 @@ async fn random_star(Json(payload): Json<RandomStarRequest>) -> Json<RandomStarR
         radius: rad,
         mass,
         luminosity: lum,
-        hp: 100.0,
         description: metadata.description,
         name: metadata.designated_name,
         type_hint: metadata.spectral_class,
@@ -248,8 +247,6 @@ async fn random_star(Json(payload): Json<RandomStarRequest>) -> Json<RandomStarR
 
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
-    // LUNAR_BACKEND_HOST/LUNAR_BACKEND_PORT are the canonical bind settings.
-    // The old --port parser was removed because the listener never used its value.
     let host = get_host();
     let port = get_port();
 
@@ -262,27 +259,27 @@ async fn main() -> Result<(), anyhow::Error> {
         .allow_methods(Any)
         .allow_headers(Any);
 
-    let worlds_dir = get_worlds_dir();
-    let _ = std::fs::create_dir_all(&worlds_dir);
-    let world_store = Arc::new(WorldStore::new(worlds_dir));
+    let scenes_dir = get_scenes_dir();
+    let _ = std::fs::create_dir_all(&scenes_dir);
+    let scene_store = Arc::new(SceneStore::new(scenes_dir));
 
     let app = Router::new()
-        .route("/pinn", post(worlds::pinn))
-        .route("/gnn", post(worlds::gnn))
-        .route("/sector/stars", post(worlds::sector_stars))
+        .route("/pinn", post(scenes::pinn))
+        .route("/gnn", post(scenes::gnn))
+        .route("/sector/stars", post(scenes::sector_stars))
         .route("/description", post(description))
         .route("/random_star", post(random_star))
         .route("/siren/texture", post(siren_texture))
         .route("/siren/png", get(siren_png))
         .route("/pipeline", post(pipeline_handler))
-        .route("/worlds", get(worlds::list_worlds))
-        .route("/worlds/create", post(worlds::create_world))
+        .route("/scenes", get(scenes::list_scenes))
+        .route("/scenes/create", post(scenes::create_scene))
         .route(
-            "/worlds/{id}",
-            get(worlds::get_world).delete(worlds::delete_world),
+            "/scenes/{id}",
+            get(scenes::get_scene).delete(scenes::delete_scene),
         )
         .layer(cors)
-        .with_state(world_store);
+        .with_state(scene_store);
 
     let listener = tokio::net::TcpListener::bind(format!("{host}:{port}")).await?;
     axum::serve(listener, app.into_make_service()).await?;

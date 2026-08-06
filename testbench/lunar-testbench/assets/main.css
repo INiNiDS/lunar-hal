@@ -630,13 +630,6 @@ table.tbl {
     animation: star-twinkle 4s ease-in-out infinite;
 }
 
-.sandbox-enemy-wrap {
-    position: absolute;
-    pointer-events: auto;
-    cursor: crosshair;
-    transition: opacity 0.3s;
-}
-
 .sandbox-grid {
     position: absolute;
     opacity: 0.15;
@@ -717,19 +710,6 @@ table.tbl {
     letter-spacing: 0.08em;
 }
 .sandbox-stat-val { color: rgba(255, 255, 255, 0.85); }
-
-.sandbox-hp-bar {
-    height: 4px;
-    border-radius: 2px;
-    background: rgba(255, 255, 255, 0.06);
-    overflow: hidden;
-    flex: 1;
-}
-.sandbox-hp-fill {
-    height: 100%;
-    border-radius: 2px;
-    transition: width 0.25s ease;
-}
 
 .sandbox-input {
     background: rgba(255, 255, 255, 0.04);

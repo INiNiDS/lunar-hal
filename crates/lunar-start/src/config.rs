@@ -256,19 +256,6 @@ pub mod presets {
             cfg
         }
 
-        pub fn frontend_desktop() -> Self {
-            Self::new(
-                "frontend-desktop",
-                ServiceKind::CargoRun {
-                    bin_name: "lunar-frontend".to_string(),
-                    cargo_args: vec![
-                        "--no-default-features".to_string(),
-                        "--features".to_string(),
-                        "desktop".to_string(),
-                    ],
-                },
-            )
-        }
     }
 
     impl LauncherConfig {
@@ -315,11 +302,6 @@ pub mod presets {
             Self::new(workspace_root()).with_service(ServiceConfig::frontend())
         }
 
-        pub fn for_frontend_desktop() -> Self {
-            Self::new(workspace_root())
-                .with_service(ServiceConfig::frontend_desktop())
-                .build_release(true)
-        }
     }
 }
 
@@ -379,6 +361,7 @@ mod tests {
 
         let frontend = ServiceConfig::frontend();
         assert_eq!(frontend.env["LUNAR_DX_BIN"], "dx");
-        assert_eq!(&frontend.extra_args[..2], ["--port", "8080"]);
+        assert_eq!(frontend.env["LUNAR_FRONTEND_PLATFORM"], "web");
+        assert_eq!(frontend.env["LUNAR_FRONTEND_PORT"], "8080");
     }
 }

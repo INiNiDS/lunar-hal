@@ -8,8 +8,8 @@ use axum::{
     http::StatusCode,
 };
 use lunar_structures::{
-    CreateWorldRequest, GnnRequest, GnnResponse, PinnRequest, PinnResponse, ResponseStar,
-    SectorRequest, World, WorldListResponse, WorldSummary,
+    CreateStarSceneRequest, GnnRequest, GnnResponse, PinnRequest, PinnResponse, ResponseStar,
+    SectorRequest, StarScene, StarSceneListResponse, StarSceneSummary,
 };
 use std::collections::HashMap;
 use std::path::{Path as StdPath, PathBuf};
@@ -259,12 +259,12 @@ pub async fn sector_stars(Json(payload): Json<SectorRequest>) -> Json<GnnRespons
 }
 
 #[derive(Default)]
-pub struct WorldStore {
-    inner: Arc<RwLock<HashMap<String, World>>>,
+pub struct SceneStore {
+    inner: Arc<RwLock<HashMap<String, StarScene>>>,
     dir: PathBuf,
 }
 
-impl WorldStore {
+impl SceneStore {
     pub fn new(dir: PathBuf) -> Self {
         let store = Self {
             inner: Arc::new(RwLock::new(HashMap::new())),
@@ -293,24 +293,24 @@ impl WorldStore {
             .ok_or("missing file stem")?;
 
         let bytes = std::fs::read(path)?;
-        let world = serde_json::from_slice::<World>(&bytes)?;
+        let scene = serde_json::from_slice::<StarScene>(&bytes)?;
 
         let mut guard = self
             .inner
             .write()
             .map_err(|_| "failed to acquire write lock")?;
-        guard.insert(id.to_string(), world);
+        guard.insert(id.to_string(), scene);
 
         Ok(())
     }
 
-    pub async fn list(&self) -> WorldListResponse {
+    pub async fn list(&self) -> StarSceneListResponse {
         let Ok(guard) = self.inner.read() else {
-            return WorldListResponse { worlds: vec![] };
+            return StarSceneListResponse { scenes: vec![] };
         };
-        let mut worlds: Vec<WorldSummary> = guard
+        let mut scenes: Vec<StarSceneSummary> = guard
             .values()
-            .map(|w| WorldSummary {
+            .map(|w| StarSceneSummary {
                 id: w.id.clone(),
                 name: w.name.clone(),
                 created_at: w.created_at,
@@ -320,24 +320,24 @@ impl WorldStore {
                 star_count: w.stars.len(),
             })
             .collect();
-        worlds.sort_by_key(|w| std::cmp::Reverse(w.created_at));
-        WorldListResponse { worlds }
+        scenes.sort_by_key(|w| std::cmp::Reverse(w.created_at));
+        StarSceneListResponse { scenes }
     }
 
-    pub async fn get(&self, id: &str) -> Option<World> {
+    pub async fn get(&self, id: &str) -> Option<StarScene> {
         let guard = self.inner.read().ok()?;
         guard.get(id).cloned()
     }
 
-    pub async fn insert(&self, world: World) -> Result<(), String> {
-        let path = self.dir.join(format!("{}.json", world.id));
-        let json = serde_json::to_vec_pretty(&world).map_err(|e| e.to_string())?;
+    pub async fn insert(&self, scene: StarScene) -> Result<(), String> {
+        let path = self.dir.join(format!("{}.json", scene.id));
+        let json = serde_json::to_vec_pretty(&scene).map_err(|e| e.to_string())?;
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
         std::fs::write(&path, json).map_err(|e| e.to_string())?;
         let mut guard = self.inner.write().map_err(|e| e.to_string())?;
-        guard.insert(world.id.clone(), world);
+        guard.insert(scene.id.clone(), scene);
         Ok(())
     }
 
@@ -364,16 +364,16 @@ fn generate_id() -> String {
     format!("{:016x}", seed)
 }
 
-pub async fn create_world(
-    State(store): State<Arc<WorldStore>>,
-    Json(req): Json<CreateWorldRequest>,
-) -> Result<Json<World>, (StatusCode, String)> {
+pub async fn create_scene(
+    State(store): State<Arc<SceneStore>>,
+    Json(req): Json<CreateStarSceneRequest>,
+) -> Result<Json<StarScene>, (StatusCode, String)> {
     let name = req.name.trim();
     if name.is_empty() {
-        return Err((StatusCode::BAD_REQUEST, "World name cannot be empty".into()));
+        return Err((StatusCode::BAD_REQUEST, "StarScene name cannot be empty".into()));
     }
 
-    let (stars, bp_rp, g_mag) = generate_world_stars(&req)
+    let (stars, bp_rp, g_mag) = generate_scene_stars(&req)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
     let temperature = req.temperature;
@@ -384,7 +384,7 @@ pub async fn create_world(
         .map(|d| d.as_secs())
         .unwrap_or(0);
 
-    let world = World {
+    let scene = StarScene {
         id,
         name: name.to_string(),
         created_at,
@@ -398,30 +398,30 @@ pub async fn create_world(
     };
 
     store
-        .insert(world.clone())
+        .insert(scene.clone())
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
 
-    Ok(Json(world))
+    Ok(Json(scene))
 }
 
-pub async fn list_worlds(State(store): State<Arc<WorldStore>>) -> Json<WorldListResponse> {
+pub async fn list_scenes(State(store): State<Arc<SceneStore>>) -> Json<StarSceneListResponse> {
     Json(store.list().await)
 }
 
-pub async fn get_world(
-    State(store): State<Arc<WorldStore>>,
+pub async fn get_scene(
+    State(store): State<Arc<SceneStore>>,
     Path(id): Path<String>,
-) -> Result<Json<World>, (StatusCode, String)> {
+) -> Result<Json<StarScene>, (StatusCode, String)> {
     store
         .get(&id)
         .await
         .map(Json)
-        .ok_or_else(|| (StatusCode::NOT_FOUND, format!("World {id} not found")))
+        .ok_or_else(|| (StatusCode::NOT_FOUND, format!("StarScene {id} not found")))
 }
 
-pub async fn delete_world(
-    State(store): State<Arc<WorldStore>>,
+pub async fn delete_scene(
+    State(store): State<Arc<SceneStore>>,
     Path(id): Path<String>,
 ) -> StatusCode {
     if store.delete(&id).await {
@@ -431,8 +431,8 @@ pub async fn delete_world(
     }
 }
 
-async fn generate_world_stars(
-    req: &CreateWorldRequest,
+async fn generate_scene_stars(
+    req: &CreateStarSceneRequest,
 ) -> Result<(Vec<ResponseStar>, f32, f32), String> {
     let seed = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -447,17 +447,17 @@ async fn generate_world_stars(
             .fold(0u64, |a, b| a.wrapping_mul(31).wrapping_add(b as u64)));
 
     let mut rng = SimpleRng::new(seed);
-    let world_bp_rp = 0.4 + rng.next_f32() * 2.6;
-    let world_g_mag = 4.0 + rng.next_f32() * 12.0;
+    let scene_bp_rp = 0.4 + rng.next_f32() * 2.6;
+    let scene_g_mag = 4.0 + rng.next_f32() * 12.0;
 
     let [teff, rad, mass, lum] = infer_pinn_async(PinnInputs {
         position: [req.center_x, req.center_y, req.center_z],
-        bp_rp: world_bp_rp,
-        g_mag: world_g_mag,
+        bp_rp: scene_bp_rp,
+        g_mag: scene_g_mag,
     })
     .await;
 
-    let mg = calculate_absolute_magnitude(req.center_x, req.center_y, req.center_z, world_g_mag);
+    let mg = calculate_absolute_magnitude(req.center_x, req.center_y, req.center_z, scene_g_mag);
 
     let features = tokio::task::spawn_blocking({
         let center = [req.center_x, req.center_y, req.center_z];
@@ -481,5 +481,5 @@ async fn generate_world_stars(
 
     let response_stars = compile_response_stars(&features, req.temperature).await;
 
-    Ok((response_stars, world_bp_rp, world_g_mag))
+    Ok((response_stars, scene_bp_rp, scene_g_mag))
 }

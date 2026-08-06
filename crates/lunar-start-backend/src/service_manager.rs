@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use lunar_start::{
-    BackendSettings, FrontendSettings, LauncherConfig, LogBackend, LogEvent, ServiceConfig,
+    BackendSettings, FrontendLaunchConfig, FrontendSettings, LauncherConfig, LogBackend, LogEvent, ServiceConfig,
     ServiceConfigSchema, ServiceConfigValues, ServiceRuntime, ServiceStatus,
     TestbenchBackendSettings, ValidationResult, validate_service_config,
 };
@@ -254,6 +254,48 @@ impl ServiceManager {
         name: &str,
         values: ServiceConfigValues,
     ) -> Result<ServiceConfigState, ConfigError> {
+        // A frontend platform switch is a runtime change, not merely a saved
+        // preference. Restart it through the same validated lifecycle used by
+        // the explicit restart endpoint so desktop/android never retain a web
+        // process (and vice versa).
+        let restart_for_platform_change = if name == "frontend" {
+            let old_platform = self
+                .configs
+                .lock()
+                .await
+                .get(name)
+                .map(|managed| {
+                    managed
+                        .state
+                        .saved
+                        .env
+                        .get("LUNAR_FRONTEND_PLATFORM")
+                        .cloned()
+                        .unwrap_or_else(|| "web".to_string())
+                })
+                .ok_or_else(|| ConfigError::UnknownService(name.to_string()))?;
+            let new_platform = FrontendLaunchConfig::from_values(&values.env, &values.extra_args)
+                .map(|launch| launch.platform.as_str().to_string())
+                .unwrap_or_else(|_| values
+                .env
+                .get("LUNAR_FRONTEND_PLATFORM")
+                .cloned()
+                .unwrap_or_else(|| "web".to_string()));
+            old_platform != new_platform
+                && self
+                    .backend
+                    .lock()
+                    .await
+                    .is_running("frontend")
+        } else {
+            false
+        };
+
+        if restart_for_platform_change {
+            self.restart(name, Some(values)).await?;
+            return self.config_state(name).await;
+        }
+
         let _operation = self.operations.lock().await;
         self.ensure_editable(name).await?;
         let validation = self.validate(name, values.clone()).await?;
@@ -422,7 +464,7 @@ mod tests {
         add_binary(&root, "lunar-backend");
         add_binary(&root, "lunar-testbench-backend");
         let models = root.join("models");
-        let worlds = root.join("worlds");
+        let scenes = root.join("scenes");
         fs::create_dir_all(&models).unwrap();
         let mut backend = ServiceConfig::backend();
         backend
@@ -430,7 +472,7 @@ mod tests {
             .insert("LUNAR_MODELS_DIR".into(), models.display().to_string());
         backend
             .env
-            .insert("LUNAR_WORLDS_DIR".into(), worlds.display().to_string());
+            .insert("LUNAR_SCENES_DIR".into(), scenes.display().to_string());
         let config = LauncherConfig::new(root.clone())
             .with_service(backend)
             .with_service(ServiceConfig::testbench_backend());

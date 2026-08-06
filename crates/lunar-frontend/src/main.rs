@@ -2,10 +2,11 @@ use dioxus::prelude::*;
 
 mod assets;
 mod components;
-mod game_state;
+mod stellar_state;
 mod local_storage;
+mod runtime_config;
 
-use crate::game_state::use_provide_game;
+use crate::stellar_state::use_provide_stellar_scene;
 use components::{About, Contact, Editor, HeroSection};
 
 const MAIN_CSS: Asset = asset!("/assets/main.css");
@@ -36,7 +37,7 @@ fn Home() -> Element {
 
 #[component]
 fn App() -> Element {
-    let _game = use_provide_game();
+    let _scene = use_provide_stellar_scene();
     rsx! {
         document::Link { rel: "stylesheet", href: MAIN_CSS }
         document::Link { rel: "stylesheet", href: TAILWIND_CSS }

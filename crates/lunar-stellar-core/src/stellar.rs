@@ -1,13 +1,12 @@
-//! The [`Game`] struct: a single source of truth for all gameplay states.
+//! The [`StellarScene`] struct: a single source of truth for all gameplay states.
 //!
 //! Every UI (Dioxus, a hypothetical TUI, a future test harness, ...)
-//! talks to the same [`Game`] and renders the resulting
+//! talks to the same [`StellarScene`] and renders the resulting
 //! [`GameSnapshot`](GameSnapshot). The frontend never reaches
 //! into [`lunar_backend`](https://docs.rs/lunar-backend) directly; the
 //! game layer is the only client of the AI HTTP API.
 
 use parking_lot::RwLock;
-use rand::RngExt;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::watch;
@@ -19,9 +18,7 @@ use lunar_structures::{
 
 use crate::actions::{ActionBuffer, PlayerAction, UpdatePayload};
 use crate::api_client::ApiClient;
-use crate::attention::AttentionMap;
 use crate::camera::{Camera, WorldCamera};
-use crate::enemy::EnemyInstance;
 use crate::error::GameError;
 use crate::sector::{SectorFetchRequest, SectorKey};
 use crate::snapshot::GameSnapshot;
@@ -34,13 +31,13 @@ use crate::validation::{
 
 /// How the game reaches the AI backend.
 #[derive(Clone, Debug)]
-pub struct GameConfig {
+pub struct StellarConfig {
     /// Base URL, e.g. `http://127.0.0.1:25255`. Defaults to
     /// `LUNAR_BACKEND_HOST:LUNAR_BACKEND_PORT` (or 127.0.0.1:25255).
     pub backend_url: String,
 }
 
-impl GameConfig {
+impl StellarConfig {
     pub fn new(backend_url: impl Into<String>) -> Self {
         Self {
             backend_url: backend_url.into(),
@@ -48,7 +45,7 @@ impl GameConfig {
     }
 }
 
-impl Default for GameConfig {
+impl Default for StellarConfig {
     fn default() -> Self {
         Self {
             backend_url: lunar_utils::env::get_url(),
@@ -57,7 +54,7 @@ impl Default for GameConfig {
 }
 
 #[derive(Default)]
-struct GameState {
+struct StellarSceneState {
     worlds: Vec<WorldSummary>,
     active_world: Option<World>,
     sector_cache: HashMap<SectorKey, Vec<ResponseStar>>,
@@ -77,14 +74,9 @@ struct GameState {
     version: u64,
     /// Rolling buffer of recent player actions and camera snapshots.
     action_buffer: ActionBuffer,
-    /// Player attention: for each star — time since last attention and
-    /// distance to the mouse cursor.
-    attention_map: AttentionMap,
-    enemy_instance: EnemyInstance,
-    mouse_world: Option<(f32, f32)>,
 }
 
-impl GameState {
+impl StellarSceneState {
     fn new() -> Self {
         Self {
             temperature: 0.7,
@@ -92,35 +84,8 @@ impl GameState {
             g_mag: 10.0,
             last_temp: 0.7,
             camera: Camera::new(),
-            enemy_instance: EnemyInstance::new(),
             ..Self::default()
         }
-    }
-
-    fn apply_star_damage(&mut self, star_id: u32, amount: f32) -> (bool, bool) {
-        let mut found = false;
-        let mut changed = false;
-        for stars in self.sector_cache.values_mut() {
-            if let Some(star) = stars.iter_mut().find(|s| s.id == star_id) {
-                found = true;
-                let new_hp = (star.hp - amount).max(0.0);
-                if new_hp != star.hp {
-                    star.hp = new_hp;
-                    changed = true;
-                }
-            }
-        }
-        if let Some(ref mut world) = self.active_world {
-            if let Some(star) = world.stars.iter_mut().find(|s| s.id == star_id) {
-                found = true;
-                let new_hp = (star.hp - amount).max(0.0);
-                if new_hp != star.hp {
-                    star.hp = new_hp;
-                    changed = true;
-                }
-            }
-        }
-        (found, changed)
     }
 }
 
@@ -131,14 +96,14 @@ type ChangeHandler = Box<dyn Fn(u64) + Send + Sync + 'static>;
 /// `Game` is `Clone` (lightweight, internal `Arc`-sharing) and is safe to
 /// pass into UI components. It is also `Send + Sync`, so it can be
 /// driven from background tasks (e.g., fetch workers).
-pub struct Game {
-    state: Arc<RwLock<GameState>>,
+pub struct StellarScene {
+    state: Arc<RwLock<StellarSceneState>>,
     api: Arc<ApiClient>,
     on_change: Arc<RwLock<Option<ChangeHandler>>>,
     change_tx: watch::Sender<u64>,
 }
 
-impl Clone for Game {
+impl Clone for StellarScene {
     fn clone(&self) -> Self {
         Self {
             state: Arc::clone(&self.state),
@@ -149,23 +114,23 @@ impl Clone for Game {
     }
 }
 
-impl Default for Game {
+impl Default for StellarScene {
     fn default() -> Self {
-        Self::with_config(GameConfig::default())
+        Self::with_config(StellarConfig::default())
     }
 }
 
-impl Game {
+impl StellarScene {
     /// Build a game pointed at the AI backend URL stored in
     /// `LUNAR_BACKEND_HOST` / `LUNAR_BACKEND_PORT` (or 127.0.0.1:25255).
     pub fn new() -> Self {
         Self::default()
     }
 
-    pub fn with_config(config: GameConfig) -> Self {
+    pub fn with_config(config: StellarConfig) -> Self {
         let (change_tx, _) = watch::channel(0u64);
         Self {
-            state: Arc::new(RwLock::new(GameState::new())),
+            state: Arc::new(RwLock::new(StellarSceneState::new())),
             api: Arc::new(ApiClient::new(config.backend_url)),
             on_change: Arc::new(RwLock::new(None)),
             change_tx,
@@ -176,7 +141,7 @@ impl Game {
     /// callback receives the new monotonic version. Frontends use
     /// this to bump a Dioxus `Signal<u64>` (or equivalent) so the UI
     /// re-renders. The callback must be `Send + Sync`; if you need a
-    /// non-`Send` subscriber, use [`Game::subscribe`] instead.
+    /// non-`Send` subscriber, use [`StellarScene::subscribe`] instead.
     pub fn with_change_handler<F>(self, handler: F) -> Self
     where
         F: Fn(u64) + Send + Sync + 'static,
@@ -240,9 +205,6 @@ impl Game {
             sector_center: s.sector_center,
             pipeline: s.pipeline.clone(),
             world_cameras: s.world_cameras.clone(),
-            attention_map: s.attention_map.snapshot(),
-            enemies: s.enemy_instance.enemies().to_vec(),
-            projectiles: s.enemy_instance.projectiles.clone(),
         }
     }
 
@@ -453,7 +415,7 @@ impl Game {
     /// If a per-world camera has been recorded for `world_id`, apply
     /// it as the current camera. Returns whether anything was
     /// applied. Frontends call this after hydrating
-    /// [`Game::set_world_camera`] from their storage layer.
+    /// [`StellarScene::set_world_camera`] from their storage layer.
     pub fn apply_world_camera(&self, world_id: &str) -> ValidationResult<bool> {
         let world_id = validate_world_id(world_id)?.to_string();
         let mut s = self.state.write();
@@ -577,7 +539,7 @@ impl Game {
     }
 
     /// Internal bookkeeping; intentionally infallible because the
-    /// caller has just produced `t` via [`Game::set_temperature`],
+    /// caller has just produced `t` via [`StellarScene::set_temperature`],
     /// which already validated it.
     pub fn set_last_temp(&self, t: f32) {
         self.state.write().last_temp = t;
@@ -789,8 +751,6 @@ impl Game {
         s.sector_cache.contains_key(&chunk) || s.sector_loading.contains(&chunk)
     }
 
-    // ============== Pipeline ==============
-
     pub fn pipeline(&self) -> Option<PipelineResponse> {
         self.state.read().pipeline.clone()
     }
@@ -866,110 +826,11 @@ impl Game {
         }
 
         payload.sector_stars = all_stars;
-        payload.attention_map = s.attention_map.snapshot();
-
-        if !payload.sector_stars.is_empty() && s.enemy_instance.enemies().len() < 4 {
-            let mut rng = rand::rng();
-            if rng.random_bool(0.01) {
-                let alive_stars: Vec<&ResponseStar> = payload
-                    .sector_stars
-                    .iter()
-                    .filter(|st| st.hp > 0.0)
-                    .collect();
-
-                if !alive_stars.is_empty() {
-                    let target_star = alive_stars[rng.random_range(0..alive_stars.len())];
-                    let et = crate::enemy::EnemyType::from(rng.random_range(0..6));
-
-                    let angle = rng.random_range(0.0..std::f32::consts::TAU);
-                    let dist = rng.random_range(120.0..200.0);
-                    let spawn_pos = (
-                        target_star.x + angle.cos() * dist,
-                        target_star.y + angle.sin() * dist,
-                    );
-
-                    let next_id = s.enemy_instance.next_id();
-
-                    s.enemy_instance.spawn(next_id, et, spawn_pos);
-                    s.version += 1;
-                }
-            }
-        }
 
         payload
     }
-
-    pub fn tick_attention(&self, dt: f32, mouse_world: Option<(f32, f32)>, stars: &[ResponseStar]) {
-        let mut s = self.state.write();
-        s.mouse_world = mouse_world;
-        s.attention_map.tick(dt, mouse_world, stars);
-    }
-
-    pub fn look_at_star(&self, star_id: u32) {
-        self.state.write().attention_map.on_player_look(star_id);
-    }
-
-    pub fn attention_snapshot(&self) -> HashMap<u32, crate::attention::AttentionEntry> {
-        self.state.read().attention_map.snapshot()
-    }
-
-    // ============== Sandbox ==============
-
-    /// Spawn an enemy at the given world-space position. Used by the
-    /// testbench sandbox to insert a controllable enemy into the live
-    /// [`EnemyInstance`]. The enemy id is allocated automatically.
-    pub fn spawn_enemy(&self, et: crate::enemy::EnemyType, position: (f32, f32)) -> usize {
-        let id = {
-            let s = self.state.read();
-            s.enemy_instance.next_id()
-        };
-        {
-            let mut s = self.state.write();
-            s.enemy_instance.spawn(id, et, position);
-            s.version += 1;
-        }
-        self.notify();
-        id
-    }
-
-    /// Apply damage to the enemy with the given id. Returns `true`
-    /// when the damage killed the enemy. Used by the testbench
-    /// sandbox to let the player attack enemies by clicking.
-    pub fn damage_enemy(&self, id: usize, amount: f32) -> bool {
-        let killed = {
-            let mut s = self.state.write();
-            s.enemy_instance.damage_enemy(id, amount)
-        };
-        if killed {
-            let mut s = self.state.write();
-            s.enemy_instance.remove_dead();
-            s.version += 1;
-            drop(s);
-            self.notify();
-        }
-        killed
-    }
-
-    /// Remove every enemy whose HP has dropped to zero or below.
-    /// Returns how many were evicted. Safe to call every frame; it
-    /// only notifies when something actually changes.
-    pub fn remove_dead_enemies(&self) -> usize {
-        let removed = {
-            let mut s = self.state.write();
-            let n = s.enemy_instance.remove_dead();
-            if n > 0 {
-                s.version += 1;
-            }
-            n
-        };
-        if removed > 0 {
-            self.notify();
-        }
-        removed
-    }
-
     /// Spawn a star into the sector cache at the chunk that contains
-    /// its world-space position. Unlike [`Game::apply_sector`], this
+    /// its world-space position. Unlike [`StellarScene::apply_sector`], this
     /// appends to the chunk rather than overwriting it and never
     /// drops stars that were already there.
     pub fn spawn_star(&self, star: ResponseStar) -> bool {
@@ -995,52 +856,6 @@ impl Game {
         true
     }
 
-    /// Apply damage to the star with the given id, scanning every
-    /// cached sector. Returns `true` when the star was found (and
-    /// either damaged or already at 0 HP).
-    pub fn damage_star(&self, star_id: u32, amount: f32) -> bool {
-        let mut s = self.state.write();
-        let (found, changed) = s.apply_star_damage(star_id, amount);
-        if changed {
-            s.version += 1;
-            drop(s);
-            self.notify();
-        }
-        found
-    }
-
-    /// Regenerate HP on every cached star by `amount` (capped at
-    /// [`crate::enemy::STAR_MAX_HP`]). Cheap when nothing changes.
-    pub fn regen_star_hp(&self, amount: f32) {
-        let max = crate::enemy::STAR_MAX_HP;
-        let mut changed = false;
-        {
-            let mut s = self.state.write();
-            for stars in s.sector_cache.values_mut() {
-                for star in stars.iter_mut() {
-                    if star.hp > 0.0 && star.hp < max {
-                        star.hp = (star.hp + amount).min(max);
-                        changed = true;
-                    }
-                }
-            }
-            if let Some(ref mut world) = s.active_world {
-                for star in world.stars.iter_mut() {
-                    if star.hp > 0.0 && star.hp < max {
-                        star.hp = (star.hp + amount).min(max);
-                        changed = true;
-                    }
-                }
-            }
-            if changed {
-                s.version += 1;
-            }
-        }
-        if changed {
-            self.notify();
-        }
-    }
-
     /// Wipe everything the sandbox owns: every cached sector and
     /// every enemy in the live [`EnemyInstance`]. Camera, world
     /// list, and other long-lived states are left alone.
@@ -1049,33 +864,14 @@ impl Game {
             let mut s = self.state.write();
             s.sector_cache.clear();
             s.sector_loading.clear();
-            s.enemy_instance.clear();
             s.selected_star = None;
             s.version += 1;
         }
         self.notify();
     }
-
-    /// Total number of enemies currently alive in the sandbox.
-    pub fn enemy_count(&self) -> usize {
-        self.state.read().enemy_instance.enemies().len()
-    }
-
-    pub fn click_projectile(&self, id: usize) -> bool {
-        let mut s = self.state.write();
-        let before = s.enemy_instance.projectiles.len();
-        s.enemy_instance.projectiles.retain(|p| p.id != id);
-        let changed = before != s.enemy_instance.projectiles.len();
-        if changed {
-            s.version += 1;
-            drop(s);
-            self.notify();
-        }
-        changed
-    }
 }
 
-fn get_world_center(s: &GameState) -> (f32, f32) {
+fn get_world_center(s: &StellarSceneState) -> (f32, f32) {
     s.active_world
         .as_ref()
         .map(|w| (w.center_x, w.center_y))
