@@ -6,7 +6,7 @@
 
 use lunar_structures::{
     CreateStarSceneRequest, GnnResponse, PipelineRequest, PipelineResponse, RandomStarRequest,
-    RandomStarResponse, SectorRequest, StarScene, StarSceneListResponse,
+    RandomStarResponse, SectorRequest, LiveSceneSnapshot, StarScene, StarSceneListResponse,
 };
 use lunar_utils::env::get_url;
 use parking_lot::RwLock;
@@ -119,8 +119,12 @@ impl ApiClient {
         self.get_json("/scenes").await
     }
 
-    pub async fn get_scene(&self, id: &str) -> Result<StarScene, ApiError> {
+    pub async fn get_live_scene(&self, id: &str) -> Result<LiveSceneSnapshot, ApiError> {
         self.get_json(&format!("/scenes/{id}")).await
+    }
+
+    pub async fn get_scene(&self, id: &str) -> Result<StarScene, ApiError> {
+        Ok(self.get_live_scene(id).await?.scene)
     }
 
     pub async fn create_scene(&self, req: CreateStarSceneRequest) -> Result<StarScene, ApiError> {

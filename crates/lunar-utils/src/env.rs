@@ -103,6 +103,17 @@ pub fn get_lunar_models_dir() -> PathBuf {
     }
 }
 
+pub fn get_gallery_dir() -> PathBuf {
+    let standard_storage = dirs::data_dir()
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+        .join("lunar")
+        .join("gallery");
+
+    std::env::var("LUNAR_GALLERY_DIR")
+        .map(PathBuf::from)
+        .unwrap_or(standard_storage)
+}
+
 pub fn get_scenes_dir() -> PathBuf {
     let standard_storage = dirs::data_dir()
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))

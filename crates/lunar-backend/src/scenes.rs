@@ -6,15 +6,22 @@ use axum::{
     Json,
     extract::{Path, State},
     http::StatusCode,
+    response::{Sse, sse::{Event, KeepAlive}},
 };
 use lunar_structures::{
-    CreateStarSceneRequest, GnnRequest, GnnResponse, PinnRequest, PinnResponse, ResponseStar,
-    SectorRequest, StarScene, StarSceneListResponse, StarSceneSummary,
+    ClearSceneRequest, CreateGalleryStarRequest, CreateSceneStarRequest, CreateStarSceneRequest,
+    GallerySource, GenerateSceneStarsRequest, GnnRequest, GnnResponse, LiveSceneSnapshot,
+    PinnRequest, PinnResponse, ResponseStar, SceneEvent, SectorRequest, StarModelInputs,
+    StarScene, StarSceneListResponse, StarSceneSummary, StellarMetadata, UpdateSceneStarRequest,
 };
 use std::collections::HashMap;
+use std::convert::Infallible;
 use std::path::{Path as StdPath, PathBuf};
 use std::sync::{Arc, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
+use tokio_stream::{StreamExt, wrappers::BroadcastStream};
+
+use crate::AppState;
 
 pub const STARS_PER_SECTOR: usize = 30;
 pub const SEARCH_RADIUS: f32 = 250.0;
@@ -332,11 +339,18 @@ impl SceneStore {
     pub async fn insert(&self, scene: StarScene) -> Result<(), String> {
         let path = self.dir.join(format!("{}.json", scene.id));
         let json = serde_json::to_vec_pretty(&scene).map_err(|e| e.to_string())?;
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        std::fs::write(&path, json).map_err(|e| e.to_string())?;
-        let mut guard = self.inner.write().map_err(|e| e.to_string())?;
+        let parent = path
+            .parent()
+            .ok_or_else(|| "scene path has no parent directory".to_string())?;
+        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let temporary = parent.join(format!(".{}.{}.tmp", scene.id, stamp));
+        std::fs::write(&temporary, json).map_err(|error| error.to_string())?;
+        std::fs::rename(&temporary, &path).map_err(|error| error.to_string())?;
+        let mut guard = self.inner.write().map_err(|error| error.to_string())?;
         guard.insert(scene.id.clone(), scene);
         Ok(())
     }
@@ -365,25 +379,22 @@ fn generate_id() -> String {
 }
 
 pub async fn create_scene(
-    State(store): State<Arc<SceneStore>>,
+    State(state): State<AppState>,
     Json(req): Json<CreateStarSceneRequest>,
-) -> Result<Json<StarScene>, (StatusCode, String)> {
+) -> Result<Json<LiveSceneSnapshot>, (StatusCode, String)> {
     let name = req.name.trim();
     if name.is_empty() {
         return Err((StatusCode::BAD_REQUEST, "StarScene name cannot be empty".into()));
     }
 
-    let (stars, bp_rp, g_mag) = generate_scene_stars(&req)
+    let (stars, bp_rp, g_mag) = generate_initial_scene_stars(&req)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
-    let temperature = req.temperature;
-
+        .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error))?;
     let id = generate_id();
     let created_at = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
+        .map(|duration| duration.as_secs())
         .unwrap_or(0);
-
     let scene = StarScene {
         id,
         name: name.to_string(),
@@ -391,47 +402,341 @@ pub async fn create_scene(
         center_x: req.center_x,
         center_y: req.center_y,
         center_z: req.center_z,
-        temperature,
+        temperature: req.temperature,
         bp_rp,
         g_mag,
         stars,
     };
-
-    store
+    state
+        .scenes
         .insert(scene.clone())
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
-
-    Ok(Json(scene))
+        .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error))?;
+    Ok(Json(scene.into()))
 }
 
-pub async fn list_scenes(State(store): State<Arc<SceneStore>>) -> Json<StarSceneListResponse> {
-    Json(store.list().await)
+pub async fn list_scenes(State(state): State<AppState>) -> Json<StarSceneListResponse> {
+    Json(state.scenes.list().await)
 }
 
 pub async fn get_scene(
-    State(store): State<Arc<SceneStore>>,
+    State(state): State<AppState>,
     Path(id): Path<String>,
-) -> Result<Json<StarScene>, (StatusCode, String)> {
-    store
+) -> Result<Json<LiveSceneSnapshot>, (StatusCode, String)> {
+    state
+        .scenes
         .get(&id)
         .await
+        .map(LiveSceneSnapshot::from)
         .map(Json)
         .ok_or_else(|| (StatusCode::NOT_FOUND, format!("StarScene {id} not found")))
 }
 
-pub async fn delete_scene(
-    State(store): State<Arc<SceneStore>>,
-    Path(id): Path<String>,
-) -> StatusCode {
-    if store.delete(&id).await {
+pub async fn delete_scene(State(state): State<AppState>, Path(id): Path<String>) -> StatusCode {
+    if state.scenes.delete(&id).await {
         StatusCode::NO_CONTENT
     } else {
         StatusCode::NOT_FOUND
     }
 }
 
-async fn generate_scene_stars(
+fn event_scene_id(event: &SceneEvent) -> &str {
+    match event {
+        SceneEvent::StarAdded { scene_id, .. }
+        | SceneEvent::StarUpdated { scene_id, .. }
+        | SceneEvent::StarRemoved { scene_id, .. }
+        | SceneEvent::SceneCleared { scene_id } => scene_id,
+    }
+}
+
+pub async fn scene_events(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>>, (StatusCode, String)> {
+    if state.scenes.get(&id).await.is_none() {
+        return Err((StatusCode::NOT_FOUND, format!("StarScene {id} not found")));
+    }
+    let stream = BroadcastStream::new(state.scene_events.subscribe()).filter_map(move |message| {
+        match message {
+            Ok(event) if event_scene_id(&event) == id => serde_json::to_string(&event)
+                .ok()
+                .map(|data| Ok::<Event, Infallible>(Event::default().data(data))),
+            _ => None,
+        }
+    });
+    Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
+}
+
+fn next_star_id(scene: &StarScene) -> u32 {
+    scene
+        .stars
+        .iter()
+        .map(|star| star.id)
+        .max()
+        .unwrap_or(0)
+        .saturating_add(1)
+}
+
+fn fallback_generated_star(scene: &StarScene, id: u32, entropy: f32) -> ResponseStar {
+    let phase = (id as f32 * 0.618_034 + entropy).fract();
+    let radius = 0.5 + phase * 1.7;
+    let temperature = 3500.0 + phase * 6500.0;
+    ResponseStar {
+        id,
+        x: scene.center_x + (phase - 0.5) * 120.0,
+        y: scene.center_y + ((phase * 7.0).fract() - 0.5) * 120.0,
+        z: scene.center_z + ((phase * 13.0).fract() - 0.5) * 40.0,
+        temperature_k: temperature,
+        radius,
+        mass: 0.6 + phase * 1.4,
+        luminosity: 0.2 + phase * 3.0,
+        description: "Backend-generated stellar record".into(),
+        name: format!("Generated-{id}"),
+        type_hint: if temperature > 7500.0 { "A" } else { "G" }.into(),
+        velocity_vector: [0.0; 3],
+    }
+}
+
+fn gallery_request_for_scene_star(
+    request_id: String,
+    source: GallerySource,
+    star: ResponseStar,
+    inputs: StarModelInputs,
+) -> CreateGalleryStarRequest {
+    CreateGalleryStarRequest {
+        request_id,
+        source,
+        pinn: Some(PinnResponse {
+            temperature_k: star.temperature_k,
+            radius_solar: star.radius,
+            mass_solar: star.mass,
+            luminosity_solar: star.luminosity,
+        }),
+        metadata: Some(StellarMetadata {
+            spectral_class: star.type_hint.clone(),
+            category: "live scene".into(),
+            designated_name: star.name.clone(),
+            description: star.description.clone(),
+        }),
+        name: Some(star.name.clone()),
+        tags: vec!["scene".into()],
+        notes: None,
+        star,
+        inputs,
+    }
+}
+
+async fn archive_scene_star(
+    state: &AppState,
+    request_id: String,
+    source: GallerySource,
+    star: ResponseStar,
+    inputs: StarModelInputs,
+) -> Option<String> {
+    let request = gallery_request_for_scene_star(request_id, source, star, inputs);
+    let texture = crate::gallery::texture_for(&request).await;
+    state.gallery.create(request, texture).ok().map(|record| record.id)
+}
+
+pub async fn generate_scene_stars(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(request): Json<GenerateSceneStarsRequest>,
+) -> Result<Json<Vec<ResponseStar>>, (StatusCode, String)> {
+    if request.request_id.trim().is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "request_id is required".into()));
+    }
+    let mut scene = state
+        .scenes
+        .get(&id)
+        .await
+        .ok_or_else(|| (StatusCode::NOT_FOUND, format!("StarScene {id} not found")))?;
+    let count = request.count.clamp(1, 32);
+    let entropy = request.entropy_temperature.unwrap_or(scene.temperature);
+    let seed = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos() as u64)
+        .unwrap_or(0);
+    let candidates = generate_sector_internal(SectorQuery {
+        center: [scene.center_x, scene.center_y, scene.center_z],
+        search_radius: 120.0,
+        temperature: entropy,
+        bp_rp: scene.bp_rp,
+        g_mag: scene.g_mag,
+        seed,
+    })
+    .await;
+    let mut next_id = next_star_id(&scene);
+    let mut created = Vec::new();
+    for index in 0..count as usize {
+        let mut star = candidates
+            .get(index)
+            .cloned()
+            .unwrap_or_else(|| fallback_generated_star(&scene, next_id, entropy));
+        star.id = next_id;
+        next_id = next_id.saturating_add(1);
+        let inputs = StarModelInputs {
+            x_pc: star.x,
+            y_pc: star.y,
+            z_pc: star.z,
+            bp_rp: scene.bp_rp,
+            g_mag: scene.g_mag,
+            entropy_temperature: Some(entropy),
+        };
+        let gallery_id = archive_scene_star(
+            &state,
+            format!("{}:{index}", request.request_id),
+            GallerySource::AdminGenerated,
+            star.clone(),
+            inputs,
+        )
+        .await;
+        scene.stars.push(star.clone());
+        let _ = state.scene_events.send(SceneEvent::StarAdded {
+            scene_id: id.clone(),
+            star: star.clone(),
+            gallery_id,
+        });
+        created.push(star);
+    }
+    state
+        .scenes
+        .insert(scene)
+        .await
+        .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error))?;
+    Ok(Json(created))
+}
+
+pub async fn create_scene_star(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(request): Json<CreateSceneStarRequest>,
+) -> Result<Json<ResponseStar>, (StatusCode, String)> {
+    if request.request_id.trim().is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "request_id is required".into()));
+    }
+    let mut scene = state
+        .scenes
+        .get(&id)
+        .await
+        .ok_or_else(|| (StatusCode::NOT_FOUND, format!("StarScene {id} not found")))?;
+    let mut star = if let Some(gallery_id) = &request.gallery_id {
+        state
+            .gallery
+            .get(gallery_id)
+            .map(|record| record.star)
+            .ok_or_else(|| (StatusCode::NOT_FOUND, format!("Gallery star {gallery_id} not found")))?
+    } else {
+        request
+            .star
+            .clone()
+            .ok_or_else(|| (StatusCode::BAD_REQUEST, "star or gallery_id is required".into()))?
+    };
+    star.id = next_star_id(&scene);
+    let inputs = request
+        .inputs
+        .clone()
+        .unwrap_or_else(|| StarModelInputs::from_star(&star));
+    let gallery_id = if request.gallery_id.is_some() {
+        request.gallery_id.clone()
+    } else {
+        archive_scene_star(
+            &state,
+            request.request_id.clone(),
+            request.gallery_source,
+            star.clone(),
+            inputs,
+        )
+        .await
+    };
+    scene.stars.push(star.clone());
+    state
+        .scenes
+        .insert(scene)
+        .await
+        .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error))?;
+    let _ = state.scene_events.send(SceneEvent::StarAdded {
+        scene_id: id,
+        star: star.clone(),
+        gallery_id,
+    });
+    Ok(Json(star))
+}
+
+pub async fn update_scene_star(
+    State(state): State<AppState>,
+    Path((id, star_id)): Path<(String, u32)>,
+    Json(update): Json<UpdateSceneStarRequest>,
+) -> Result<Json<ResponseStar>, (StatusCode, String)> {
+    let mut scene = state
+        .scenes
+        .get(&id)
+        .await
+        .ok_or_else(|| (StatusCode::NOT_FOUND, format!("StarScene {id} not found")))?;
+    let star = scene
+        .stars
+        .iter_mut()
+        .find(|star| star.id == star_id)
+        .ok_or_else(|| (StatusCode::NOT_FOUND, format!("Star {star_id} not found")))?;
+    if let Some(value) = update.name { star.name = value; }
+    if let Some(value) = update.description { star.description = value; }
+    if let Some(value) = update.type_hint { star.type_hint = value; }
+    if let Some(value) = update.temperature_k { star.temperature_k = value; }
+    if let Some(value) = update.radius { star.radius = value; }
+    if let Some(value) = update.mass { star.mass = value; }
+    if let Some(value) = update.luminosity { star.luminosity = value; }
+    let updated = star.clone();
+    state
+        .scenes
+        .insert(scene)
+        .await
+        .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error))?;
+    let _ = state.scene_events.send(SceneEvent::StarUpdated {
+        scene_id: id,
+        star: updated.clone(),
+    });
+    Ok(Json(updated))
+}
+
+pub async fn delete_scene_star(
+    State(state): State<AppState>,
+    Path((id, star_id)): Path<(String, u32)>,
+) -> StatusCode {
+    let Some(mut scene) = state.scenes.get(&id).await else {
+        return StatusCode::NOT_FOUND;
+    };
+    let old_len = scene.stars.len();
+    scene.stars.retain(|star| star.id != star_id);
+    if scene.stars.len() == old_len {
+        return StatusCode::NOT_FOUND;
+    }
+    if state.scenes.insert(scene).await.is_err() {
+        return StatusCode::INTERNAL_SERVER_ERROR;
+    }
+    let _ = state.scene_events.send(SceneEvent::StarRemoved { scene_id: id, star_id });
+    StatusCode::NO_CONTENT
+}
+
+pub async fn clear_scene(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(request): Json<ClearSceneRequest>,
+) -> StatusCode {
+    if request.request_id.trim().is_empty() {
+        return StatusCode::BAD_REQUEST;
+    }
+    let Some(mut scene) = state.scenes.get(&id).await else {
+        return StatusCode::NOT_FOUND;
+    };
+    scene.stars.clear();
+    if state.scenes.insert(scene).await.is_err() {
+        return StatusCode::INTERNAL_SERVER_ERROR;
+    }
+    let _ = state.scene_events.send(SceneEvent::SceneCleared { scene_id: id });
+    StatusCode::NO_CONTENT
+}
+
+async fn generate_initial_scene_stars(
     req: &CreateStarSceneRequest,
 ) -> Result<(Vec<ResponseStar>, f32, f32), String> {
     let seed = SystemTime::now()
@@ -482,4 +787,58 @@ async fn generate_scene_stars(
     let response_stars = compile_response_stars(&features, req.temperature).await;
 
     Ok((response_stars, scene_bp_rp, scene_g_mag))
+}
+
+
+#[cfg(test)]
+mod live_scene_tests {
+    use super::*;
+
+    fn temporary_directory() -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "lunar-scene-store-{}",
+            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+        ))
+    }
+
+    fn scene() -> StarScene {
+        StarScene {
+            id: "scene-persistence".into(),
+            name: "Persistence test".into(),
+            created_at: 1,
+            center_x: 0.0,
+            center_y: 0.0,
+            center_z: 0.0,
+            temperature: 0.7,
+            bp_rp: 0.85,
+            g_mag: 4.83,
+            stars: vec![],
+        }
+    }
+
+    #[tokio::test]
+    async fn scene_store_persists_atomic_snapshots_for_restart() {
+        let dir = temporary_directory();
+        let store = SceneStore::new(dir.clone());
+        let scene = scene();
+        store.insert(scene.clone()).await.unwrap();
+        assert!(dir.join("scene-persistence.json").exists());
+        assert_eq!(store.get("scene-persistence").await, Some(scene.clone()));
+
+        let reloaded = SceneStore::new(dir.clone());
+        assert_eq!(reloaded.get("scene-persistence").await, Some(scene));
+        let leftovers = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .filter(|entry| entry.file_name().to_string_lossy().ends_with(".tmp"))
+            .count();
+        assert_eq!(leftovers, 0);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn event_ids_are_scoped_to_their_scene() {
+        let event = SceneEvent::SceneCleared { scene_id: "scene-a".into() };
+        assert_eq!(event_scene_id(&event), "scene-a");
+    }
 }

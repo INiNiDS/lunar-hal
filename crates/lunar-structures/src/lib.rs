@@ -183,3 +183,16 @@ pub struct SectorRequest {
     pub g_mag: f32,
     pub search_radius: Option<f32>,
 }
+
+pub mod gallery;
+pub mod live_scene;
+
+pub use gallery::{
+    CreateGalleryStarRequest, GalleryListResponse, GallerySource, GalleryStar,
+    StarDragPayload, StarDragSource, StarModelInputs, UpdateGalleryStarRequest,
+    GALLERY_SCHEMA_VERSION,
+};
+pub use live_scene::{
+    ClearSceneRequest, CreateSceneStarRequest, FrontendUiEvent, GenerateSceneStarsRequest,
+    LiveSceneSnapshot, SceneEvent, UpdateSceneStarRequest, LIVE_SCENE_SCHEMA_VERSION,
+};

@@ -13,7 +13,7 @@ use tokio::sync::watch;
 
 use lunar_structures::{
     CreateStarSceneRequest, GnnResponse, PipelineRequest, PipelineResponse, RandomStarRequest,
-    ResponseStar, StarScene, StarSceneListResponse, StarSceneSummary,
+    ResponseStar, SceneEvent, StarScene, StarSceneListResponse, StarSceneSummary,
 };
 
 use crate::api_client::ApiClient;
@@ -323,6 +323,80 @@ impl StellarScene {
 
     pub fn clear_active_scene(&self) {
         self.adopt_scene(None);
+    }
+
+    /// Apply a backend-owned live-scene event to the local read model. This
+    /// deliberately contains no admin command logic: the mutation already
+    /// happened in `lunar-backend`; the client only reflects it in the active
+    /// scene and lets the renderer re-render.
+    pub fn apply_scene_event(&self, event: SceneEvent) {
+        let mut changed = false;
+        {
+            let mut state = self.state.write();
+            match event {
+                SceneEvent::StarAdded { scene_id, star, .. } => {
+                    if state.active_scene.as_ref().is_some_and(|scene| scene.id == scene_id) {
+                        let scene = state.active_scene.as_mut().expect("checked active scene");
+                        if let Some(index) = scene.stars.iter().position(|item| item.id == star.id) {
+                            scene.stars[index] = star;
+                        } else {
+                            scene.stars.push(star);
+                        }
+                        changed = true;
+                    }
+                }
+                SceneEvent::StarUpdated { scene_id, star } => {
+                    let selected = state
+                        .selected_star
+                        .as_ref()
+                        .is_some_and(|selected| selected.id == star.id);
+                    if state.active_scene.as_ref().is_some_and(|scene| scene.id == scene_id) {
+                        let scene = state.active_scene.as_mut().expect("checked active scene");
+                        if let Some(index) = scene.stars.iter().position(|item| item.id == star.id) {
+                            scene.stars[index] = star.clone();
+                            if selected {
+                                state.selected_star = Some(star);
+                            }
+                            changed = true;
+                        }
+                    }
+                }
+                SceneEvent::StarRemoved { scene_id, star_id } => {
+                    let selected = state
+                        .selected_star
+                        .as_ref()
+                        .is_some_and(|selected| selected.id == star_id);
+                    if state.active_scene.as_ref().is_some_and(|scene| scene.id == scene_id) {
+                        let scene = state.active_scene.as_mut().expect("checked active scene");
+                        let old_len = scene.stars.len();
+                        scene.stars.retain(|item| item.id != star_id);
+                        changed = scene.stars.len() != old_len;
+                        if selected {
+                            state.selected_star = None;
+                            state.pipeline = None;
+                        }
+                    }
+                }
+                SceneEvent::SceneCleared { scene_id } => {
+                    let has_selection = state.selected_star.is_some();
+                    if state.active_scene.as_ref().is_some_and(|scene| scene.id == scene_id) {
+                        let scene = state.active_scene.as_mut().expect("checked active scene");
+                        if !scene.stars.is_empty() || has_selection {
+                            scene.stars.clear();
+                            state.selected_star = None;
+                            state.pipeline = None;
+                            changed = true;
+                        }
+                    }
+                }
+            }
+            if changed {
+                state.version += 1;
+            }
+        }
+        if changed {
+            self.notify();
+        }
     }
 
     pub fn camera(&self) -> Camera {

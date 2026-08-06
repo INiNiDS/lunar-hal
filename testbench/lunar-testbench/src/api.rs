@@ -172,6 +172,13 @@ async fn get_ok(base: &str, path: &str) -> Result<(), String> {
     Ok(())
 }
 
+pub use lunar_structures::{
+    ClearSceneRequest, CreateGalleryStarRequest, CreateSceneStarRequest, CreateStarSceneRequest,
+    GalleryListResponse, GallerySource, GalleryStar, GenerateSceneStarsRequest,
+    LiveSceneSnapshot, ResponseStar, StarModelInputs, StarSceneListResponse,
+    UpdateGalleryStarRequest, UpdateSceneStarRequest,
+};
+
 pub use lunar_structures_testbench::{
     Job, JobIdPayload, ModelArtifact, SystemSnapshot, TrainSpec, ValidateSpec,
 };
@@ -634,6 +641,154 @@ pub async fn backend_proxy(
         return Ok(Value::Null);
     }
     serde_json::from_str(&text).map_err(err_to_string)
+}
+
+
+async fn patch_json<B: Serialize, T: DeserializeOwned>(
+    base: &str,
+    path: &str,
+    body: &B,
+) -> Result<T, String> {
+    let url = format!("{base}{path}");
+    let response = Request::patch(&url)
+        .json(body)
+        .map_err(err_to_string)?
+        .send()
+        .await
+        .map_err(err_to_string)?;
+    decode_json(response).await
+}
+
+async fn delete_ok(base: &str, path: &str) -> Result<(), String> {
+    let url = format!("{base}{path}");
+    let response = Request::delete(&url).send().await.map_err(err_to_string)?;
+    if !(200..300).contains(&response.status()) {
+        return Err(format!("HTTP {}", response.status()));
+    }
+    Ok(())
+}
+
+async fn post_ok<B: Serialize>(base: &str, path: &str, body: &B) -> Result<(), String> {
+    let url = format!("{base}{path}");
+    let response = Request::post(&url)
+        .json(body)
+        .map_err(err_to_string)?
+        .send()
+        .await
+        .map_err(err_to_string)?;
+    if !(200..300).contains(&response.status()) {
+        let status = response.status();
+        let text = response.text().await.unwrap_or_default();
+        return Err(format!("HTTP {status}: {text}"));
+    }
+    Ok(())
+}
+
+/// Public backend base URL used by iframe-adjacent WebOS pages.
+pub fn stellar_backend_url() -> String {
+    get_url()
+}
+
+pub async fn list_star_scenes() -> Result<StarSceneListResponse, String> {
+    get_json(&get_url(), "/scenes").await
+}
+
+pub async fn get_live_scene(id: &str) -> Result<LiveSceneSnapshot, String> {
+    get_json(&get_url(), &format!("/scenes/{id}")).await
+}
+
+pub async fn create_star_scene(
+    request: &CreateStarSceneRequest,
+) -> Result<LiveSceneSnapshot, String> {
+    post_json(&get_url(), "/scenes/create", request).await
+}
+
+pub async fn generate_scene_stars(
+    scene_id: &str,
+    request: &GenerateSceneStarsRequest,
+) -> Result<Vec<ResponseStar>, String> {
+    post_json(
+        &get_url(),
+        &format!("/scenes/{scene_id}/stars/generate"),
+        request,
+    )
+    .await
+}
+
+pub async fn create_scene_star(
+    scene_id: &str,
+    request: &CreateSceneStarRequest,
+) -> Result<ResponseStar, String> {
+    post_json(&get_url(), &format!("/scenes/{scene_id}/stars"), request).await
+}
+
+pub async fn update_scene_star(
+    scene_id: &str,
+    star_id: u32,
+    request: &UpdateSceneStarRequest,
+) -> Result<ResponseStar, String> {
+    patch_json(
+        &get_url(),
+        &format!("/scenes/{scene_id}/stars/{star_id}"),
+        request,
+    )
+    .await
+}
+
+pub async fn delete_scene_star(scene_id: &str, star_id: u32) -> Result<(), String> {
+    delete_ok(&get_url(), &format!("/scenes/{scene_id}/stars/{star_id}")).await
+}
+
+pub async fn clear_live_scene(scene_id: &str, request: &ClearSceneRequest) -> Result<(), String> {
+    post_ok(&get_url(), &format!("/scenes/{scene_id}/clear"), request).await
+}
+
+pub async fn list_gallery_stars(
+    cursor: Option<&str>,
+    limit: usize,
+    sort: Option<&str>,
+    query: Option<&str>,
+) -> Result<GalleryListResponse, String> {
+    let mut params = vec![format!("limit={}", limit.clamp(1, 100))];
+    if let Some(cursor) = cursor.filter(|value| !value.is_empty()) {
+        params.push(format!("cursor={}", urlencoding(cursor)));
+    }
+    if let Some(sort) = sort.filter(|value| !value.is_empty()) {
+        params.push(format!("sort={}", urlencoding(sort)));
+    }
+    if let Some(query) = query.filter(|value| !value.is_empty()) {
+        params.push(format!("query={}", urlencoding(query)));
+    }
+    get_json(&get_url(), &format!("/gallery/stars?{}", params.join("&"))).await
+}
+
+pub async fn create_gallery_star(
+    request: &CreateGalleryStarRequest,
+) -> Result<GalleryStar, String> {
+    post_json(&get_url(), "/gallery/stars", request).await
+}
+
+pub async fn get_gallery_star(id: &str) -> Result<GalleryStar, String> {
+    get_json(&get_url(), &format!("/gallery/stars/{id}")).await
+}
+
+pub async fn update_gallery_star(
+    id: &str,
+    request: &UpdateGalleryStarRequest,
+) -> Result<GalleryStar, String> {
+    patch_json(&get_url(), &format!("/gallery/stars/{id}"), request).await
+}
+
+pub async fn delete_gallery_star(id: &str) -> Result<(), String> {
+    delete_ok(&get_url(), &format!("/gallery/stars/{id}")).await
+}
+
+pub fn gallery_texture_url(id: &str) -> String {
+    format!("{}/gallery/stars/{id}/texture.png", get_url())
+}
+
+pub fn gallery_thumbnail_url(id: &str) -> String {
+    format!("{}/gallery/stars/{id}/thumbnail", get_url())
 }
 
 pub fn read_png_dims(bytes: &[u8]) -> Option<(u32, u32)> {

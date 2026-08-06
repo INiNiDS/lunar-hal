@@ -1,4 +1,5 @@
 use crate::assets::FONT_SANS;
+use crate::components::editor::embedded::{EmbeddedSandbox, embedded_scene_id};
 use crate::components::editor::sidebar::StarSidebar;
 use crate::components::editor::star_map::StarMap;
 use crate::components::editor::scene_panel::{StarSceneCreator, StarScenePicker};
@@ -301,6 +302,10 @@ fn ActiveStarSceneOverlays(
 
 #[component]
 pub fn Editor() -> Element {
+    if let Some(scene_id) = embedded_scene_id() {
+        return rsx! { EmbeddedSandbox { scene_id } };
+    }
+
     let game = use_stellar_scene();
     let version = use_context::<Signal<u64>>();
 

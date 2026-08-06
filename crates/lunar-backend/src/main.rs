@@ -1,11 +1,12 @@
 use axum::{
     Json, Router,
     extract::Query,
-    routing::{get, post},
+    routing::{get, patch, post},
 };
 use lunar_utils::*;
 use serde::Deserialize;
 use std::sync::Arc;
+use tokio::sync::broadcast;
 use tower_http::cors::{Any, CorsLayer};
 
 use crate::ai::{
@@ -16,18 +17,29 @@ use lunar_structures::{
     PinnResponse, PipelineRequest, PipelineResponse, RandomStarRequest, RandomStarResponse,
     ResponseStar, SirenTextureRequest, SirenTextureResponse, StarDescriptionPayload, StarLore,
 };
-use lunar_utils::env::{get_host, get_port, get_scenes_dir};
+use lunar_utils::env::{get_gallery_dir, get_host, get_port, get_scenes_dir};
 
 #[cfg(feature = "siren")]
 use crate::ai::{get_siren, siren_generate_texture};
 
 pub mod ai;
+pub mod gallery;
 pub mod scenes;
 
 use crate::ai::PinnInputs;
+use crate::gallery::GalleryStore;
 use crate::scenes::{SceneStore, calculate_absolute_magnitude, infer_pinn_async};
+use lunar_structures::SceneEvent;
 
-async fn generate_siren_pixels(
+#[derive(Clone)]
+pub struct AppState {
+    pub scenes: Arc<SceneStore>,
+    pub gallery: Arc<GalleryStore>,
+    pub scene_events: broadcast::Sender<SceneEvent>,
+}
+
+
+pub(crate) async fn generate_siren_pixels(
     width: u32,
     height: u32,
     bp_rp: f32,
@@ -260,8 +272,15 @@ async fn main() -> Result<(), anyhow::Error> {
         .allow_headers(Any);
 
     let scenes_dir = get_scenes_dir();
+    let gallery_dir = get_gallery_dir();
     let _ = std::fs::create_dir_all(&scenes_dir);
-    let scene_store = Arc::new(SceneStore::new(scenes_dir));
+    let _ = std::fs::create_dir_all(&gallery_dir);
+    let (scene_events, _) = broadcast::channel(256);
+    let state = AppState {
+        scenes: Arc::new(SceneStore::new(scenes_dir)),
+        gallery: Arc::new(GalleryStore::new(gallery_dir)),
+        scene_events,
+    };
 
     let app = Router::new()
         .route("/pinn", post(scenes::pinn))
@@ -278,8 +297,28 @@ async fn main() -> Result<(), anyhow::Error> {
             "/scenes/{id}",
             get(scenes::get_scene).delete(scenes::delete_scene),
         )
+        .route("/scenes/{id}/events", get(scenes::scene_events))
+        .route("/scenes/{id}/stars/generate", post(scenes::generate_scene_stars))
+        .route("/scenes/{id}/stars", post(scenes::create_scene_star))
+        .route(
+            "/scenes/{id}/stars/{star_id}",
+            patch(scenes::update_scene_star).delete(scenes::delete_scene_star),
+        )
+        .route("/scenes/{id}/clear", post(scenes::clear_scene))
+        .route(
+            "/gallery/stars",
+            get(gallery::list_gallery_stars).post(gallery::create_gallery_star),
+        )
+        .route(
+            "/gallery/stars/{id}",
+            get(gallery::get_gallery_star)
+                .patch(gallery::update_gallery_star)
+                .delete(gallery::delete_gallery_star),
+        )
+        .route("/gallery/stars/{id}/texture.png", get(gallery::gallery_texture))
+        .route("/gallery/stars/{id}/thumbnail", get(gallery::gallery_thumbnail))
         .layer(cors)
-        .with_state(scene_store);
+        .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(format!("{host}:{port}")).await?;
     axum::serve(listener, app.into_make_service()).await?;

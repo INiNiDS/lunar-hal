@@ -1,188 +1,252 @@
-use crate::api;
-use crate::components::StarShaderCanvas;
-use crate::components::ui::{NumberFieldU32, PageHeader, StatusDot, base64_encode};
+//! Persistent SIREN Gallery backed by `lunar-backend`.
+//!
+//! Unlike the old one-render preview, this page is a searchable catalog of
+//! Gallery records. Creating a record asks the backend to render and atomically
+//! save the texture before it appears here.
+
 use dioxus::prelude::*;
+
+use crate::api::{
+    self, CreateGalleryStarRequest, GallerySource, GalleryStar, ResponseStar, StarModelInputs,
+    UpdateGalleryStarRequest,
+};
+use crate::os::use_os_state;
+
+fn gallery_request_id() -> String {
+    format!("gallery-ui-{}", js_sys::Date::now())
+}
+
+fn display_name(record: &GalleryStar) -> String {
+    record
+        .name
+        .clone()
+        .unwrap_or_else(|| record.star.name.clone())
+}
+
+fn source_label(source: &GallerySource) -> &'static str {
+    match source {
+        GallerySource::AdminGenerated => "Admin generated",
+        GallerySource::SceneSaved => "Scene saved",
+        GallerySource::Imported => "Imported",
+    }
+}
+
+fn parse_tags(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|tag| !tag.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
+}
 
 #[component]
 pub fn SirenGallery() -> Element {
-    let width = use_signal(|| 128_u32);
-    let height = use_signal(|| 128_u32);
-    let mut bp_rp = use_signal(|| 1.5_f32);
-    let mut m_g = use_signal(|| 5.0_f32);
-    let mut teff = use_signal(|| 5778.0_f32);
-    let mut data_url = use_signal(|| None::<String>);
-    let mut dims = use_signal(|| (0_u32, 0_u32));
-    let mut error = use_signal(|| None::<String>);
+    let mut os = use_os_state();
+    let mut records = use_signal(Vec::<GalleryStar>::new);
+    let mut selected = use_signal(|| None::<GalleryStar>);
+    let mut query = use_signal(String::new);
+    let mut sort = use_signal(|| "updated_desc".to_string());
+    let mut refresh_tick = use_signal(|| 0_u32);
+    let mut status = use_signal(|| None::<String>);
     let mut busy = use_signal(|| false);
 
-    let presets: Vec<(f32, f32, f32, String)> = vec![
-        (1.20, 4.5, 6500.0, "F-type main seq".to_string()),
-        (0.85, 4.8, 5778.0, "Sun-like G".to_string()),
-        (1.60, 6.5, 4500.0, "K-type".to_string()),
-        (3.10, 8.5, 3200.0, "Cool M-dwarf".to_string()),
-        (-0.20, -1.0, 12000.0, "Hot A-star".to_string()),
-        (0.30, 1.2, 9500.0, "B-type".to_string()),
-        (1.85, 10.0, 3900.0, "Red giant".to_string()),
-        (3.20, 12.0, 2900.0, "Cool giant".to_string()),
-    ];
+    let mut name = use_signal(|| "Generated star".to_string());
+    let mut bp_rp = use_signal(|| 0.85_f32);
+    let mut g_mag = use_signal(|| 4.83_f32);
+    let mut temperature = use_signal(|| 5778.0_f32);
+    let mut tags = use_signal(|| "generated, siren".to_string());
 
-    let run = move |_| {
+    let mut detail_name = use_signal(String::new);
+    let mut detail_tags = use_signal(String::new);
+    let mut detail_notes = use_signal(String::new);
+
+    use_resource(move || {
+        let search = query();
+        let ordering = sort();
+        let tick = refresh_tick();
+        async move {
+            let _ = tick;
+            match api::list_gallery_stars(None, 72, Some(&ordering), Some(&search)).await {
+                Ok(list) => records.set(list.stars),
+                Err(error) => status.set(Some(error)),
+            }
+        }
+    });
+
+    let mut choose = move |record: GalleryStar| {
+        detail_name.set(display_name(&record));
+        detail_tags.set(record.tags.join(", "));
+        detail_notes.set(record.notes.clone().unwrap_or_default());
+        selected.set(Some(record));
+    };
+
+    let generate_and_save = move |_| {
         busy.set(true);
-        error.set(None);
-        let q = api::SirenPngQuery {
-            width: width(),
-            height: height(),
-            bp_rp: bp_rp(),
-            m_g: m_g(),
-            temperature_k: teff(),
+        status.set(None);
+        let star = ResponseStar {
+            id: 0,
+            x: 10.0,
+            y: 0.0,
+            z: 0.0,
+            temperature_k: temperature().max(1.0),
+            radius: 1.0,
+            mass: 1.0,
+            luminosity: 1.0,
+            description: "SIREN Gallery generation".into(),
+            name: name().trim().to_string(),
+            type_hint: "generated".into(),
+            velocity_vector: [0.0; 3],
+        };
+        let request = CreateGalleryStarRequest {
+            request_id: gallery_request_id(),
+            source: GallerySource::AdminGenerated,
+            inputs: StarModelInputs {
+                x_pc: star.x,
+                y_pc: star.y,
+                z_pc: star.z,
+                bp_rp: bp_rp(),
+                g_mag: g_mag(),
+                entropy_temperature: None,
+            },
+            star,
+            pinn: None,
+            metadata: None,
+            name: Some(name().trim().to_string()),
+            tags: parse_tags(&tags()),
+            notes: None,
         };
         spawn(async move {
-            match api::siren_png(&q).await {
-                Ok((bytes, w, h)) => {
-                    let b64 = base64_encode(&bytes);
-                    data_url.set(Some(format!("data:image/png;base64,{}", b64)));
-                    dims.set((w, h));
+            match api::create_gallery_star(&request).await {
+                Ok(record) => {
+                    detail_name.set(display_name(&record));
+                    detail_tags.set(record.tags.join(", "));
+                    detail_notes.set(record.notes.clone().unwrap_or_default());
+                    selected.set(Some(record));
+                    refresh_tick.set(refresh_tick().wrapping_add(1));
+                    status.set(Some("Texture generated and saved to the persistent Gallery.".into()));
                 }
-                Err(e) => error.set(Some(e)),
+                Err(error) => status.set(Some(error)),
             }
             busy.set(false);
         });
     };
 
-    let noise_scale = use_signal(|| 2.0_f32);
-    let noise_speed = use_signal(|| 1.0_f32);
-    let shader_contrast = use_signal(|| 0.35_f32);
-    let mut show_shader = use_signal(|| false);
+    let save_details = move |_| {
+        let Some(record) = selected() else { return };
+        busy.set(true);
+        let id = record.id.clone();
+        let request = UpdateGalleryStarRequest {
+            name: Some(detail_name().trim().to_string()),
+            tags: Some(parse_tags(&detail_tags())),
+            notes: Some(detail_notes().trim().to_string()),
+        };
+        spawn(async move {
+            match api::update_gallery_star(&id, &request).await {
+                Ok(updated) => {
+                    selected.set(Some(updated));
+                    refresh_tick.set(refresh_tick().wrapping_add(1));
+                    status.set(Some("Gallery metadata saved.".into()));
+                }
+                Err(error) => status.set(Some(error)),
+            }
+            busy.set(false);
+        });
+    };
+
+    let delete_selected = move |_| {
+        let Some(record) = selected() else { return };
+        busy.set(true);
+        let id = record.id;
+        spawn(async move {
+            match api::delete_gallery_star(&id).await {
+                Ok(()) => {
+                    selected.set(None);
+                    refresh_tick.set(refresh_tick().wrapping_add(1));
+                    status.set(Some("Gallery record deleted.".into()));
+                }
+                Err(error) => status.set(Some(error)),
+            }
+            busy.set(false);
+        });
+    };
+
+    let open_sandbox = move |_| os.open_window("sandbox", "Sandbox");
+    let selected_thumbnail = selected()
+        .as_ref()
+        .and_then(|record| record.thumbnail_url.as_ref())
+        .map(|_| api::gallery_thumbnail_url(&selected().expect("selected record").id));
 
     rsx! {
-        div { class: "page",
-            // PageHeader moved inside the ".page" container for even centering with the grid
-            PageHeader {
-                title: "SIREN Gallery".to_string(),
-                subtitle: "Render stellar surface textures via the SIREN network. Tweak Bp-Rp, M_G, and effective temperature to explore the latent space.".to_string(),
+        div { class: "page space-y-4",
+            div { class: "flex flex-wrap items-end justify-between gap-3",
+                div { h1 { class: "text-xl font-semibold text-white", "SIREN Gallery" } p { class: "mt-1 max-w-2xl text-sm text-white/55", "Persistent stellar records, model inputs, metadata, and backend-rendered previews." } }
+                if busy() { span { class: "rounded-lg bg-amber-400/15 px-3 py-2 text-xs text-amber-200", "Saving…" } }
             }
+            if let Some(message) = status() { p { class: "rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/70", "{message}" } }
 
-            div { class: "split",
-                div { class: "card",
-                    div { class: "card-title", "Renderer parameters" }
-                    div { class: "grid",
-                        NumberFieldU32 { label: "width".to_string(), value: width }
-                        NumberFieldU32 { label: "height".to_string(), value: height }
-                        NumberFieldF32 { label: "bp_rp".to_string(), value: bp_rp, step: 0.05 }
-                        NumberFieldF32 { label: "M_G".to_string(), value: m_g, step: 0.1 }
-                        NumberFieldF32 { label: "T_eff (K)".to_string(), value: teff, step: 100.0 }
+            div { class: "grid gap-4 xl:grid-cols-[19rem_minmax(0,1fr)_20rem]",
+                // Generation panel: a real POST /gallery/stars flow, not a temporary PNG.
+                section { class: "card space-y-3",
+                    h2 { class: "card-title", "Generate & save" }
+                    label { class: "block text-xs text-white/55", "Name" input { class: "mt-1 w-full rounded-lg bg-black/35 px-2 py-1.5 text-sm", value: "{name()}", oninput: move |event| name.set(event.value()) } }
+                    div { class: "grid grid-cols-2 gap-2",
+                        label { class: "text-xs text-white/55", "Bp–Rp" input { class: "mt-1 w-full rounded-lg bg-black/35 px-2 py-1.5 text-sm", r#type: "number", step: "0.05", value: "{bp_rp()}", oninput: move |event| if let Ok(value) = event.value().parse() { bp_rp.set(value); } } }
+                        label { class: "text-xs text-white/55", "G magnitude" input { class: "mt-1 w-full rounded-lg bg-black/35 px-2 py-1.5 text-sm", r#type: "number", step: "0.1", value: "{g_mag()}", oninput: move |event| if let Ok(value) = event.value().parse() { g_mag.set(value); } } }
                     }
-                    div { class: "section-title", "Quick presets" }
-                    div { class: "row",
-                        for p in presets.clone().into_iter() {
-                            {
-                                let b = p.0;
-                                let m = p.1;
-                                let t = p.2;
-                                let name = p.3;
-                                rsx! {
-                                    button {
-                                        class: "btn btn-sm",
-                                        onclick: move |_| {
-                                            bp_rp.set(b);
-                                            m_g.set(m);
-                                            teff.set(t);
-                                        },
-                                        "{name}"
+                    label { class: "block text-xs text-white/55", "Temperature (K)" input { class: "mt-1 w-full rounded-lg bg-black/35 px-2 py-1.5 text-sm", r#type: "number", value: "{temperature()}", oninput: move |event| if let Ok(value) = event.value().parse() { temperature.set(value); } } }
+                    label { class: "block text-xs text-white/55", "Tags" input { class: "mt-1 w-full rounded-lg bg-black/35 px-2 py-1.5 text-sm", value: "{tags()}", oninput: move |event| tags.set(event.value()) } }
+                    button { class: "w-full rounded-lg bg-violet-500/35 px-3 py-2 text-sm font-medium text-white hover:bg-violet-500/55", onclick: generate_and_save, "Generate & save" }
+                    p { class: "text-[11px] leading-relaxed text-white/40", "The backend produces the SIREN PNG, writes metadata atomically, and returns a durable Gallery URL." }
+                }
+
+                section { class: "min-w-0 space-y-3",
+                    div { class: "flex flex-wrap items-center gap-2",
+                        input { class: "min-w-40 flex-1 rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm", placeholder: "Search name, tag, or id", value: "{query()}", oninput: move |event| query.set(event.value()) }
+                        select { class: "rounded-lg border border-white/10 bg-black/35 px-2 py-2 text-xs", value: "{sort()}", onchange: move |event| sort.set(event.value()),
+                            option { value: "updated_desc", "Recently updated" }
+                            option { value: "created_asc", "Oldest first" }
+                            option { value: "name", "Name" }
+                        }
+                    }
+                    if records().is_empty() {
+                        div { class: "rounded-2xl border border-dashed border-white/15 p-10 text-center text-sm text-white/45", "No saved stars match this view." }
+                    } else {
+                        div { class: "grid grid-cols-2 gap-3 sm:grid-cols-3 2xl:grid-cols-4",
+                            for record in records() {
+                                {
+                                    let label = display_name(&record);
+                                    let id = record.id.clone();
+                                    let thumbnail = record.thumbnail_url.as_ref().map(|_| api::gallery_thumbnail_url(&id));
+                                    let source = source_label(&record.source);
+                                    rsx! {
+                                        button { class: "group overflow-hidden rounded-xl border border-white/10 bg-white/[0.03] text-left focus:outline-none focus:ring-2 focus:ring-violet-400/70", onclick: move |_| choose(record.clone()),
+                                            div { class: "aspect-square bg-gradient-to-br from-violet-500/20 via-slate-900 to-cyan-500/10",
+                                                if let Some(src) = thumbnail { img { class: "h-full w-full object-cover", src: "{src}", alt: "Texture preview for {label}" } }
+                                            }
+                                            div { class: "space-y-1 p-2", p { class: "truncate text-sm font-medium text-white/85", "{label}" } p { class: "truncate text-[10px] uppercase tracking-wider text-white/40", "{source}" } }
+                                        }
                                     }
                                 }
                             }
                         }
                     }
-                    div { class: "toolbar", style: "margin-top: 16px;",
-                        button {
-                            class: "btn btn-primary",
-                            disabled: busy(),
-                            onclick: run,
-                            if busy() { span { class: "spinner" } }
-                            span { "Render" }
-                        }
-                    }
-                    if let Some(e) = error() {
-                        div { class: "status-banner status-err", style: "margin-top: 12px;", "{e}" }
-                    }
                 }
-                div { class: "card",
-                    div { class: "card-title",
-                        StatusDot { status: if data_url().is_some() { "ok".to_string() } else { "off".to_string() } }
-                        span { "Latest render" }
-                        if data_url().is_some() {
-                            span { class: "mono", style: "margin-left: auto; color: var(--text-3);",
-                                "{dims().0}x{dims().1}"
-                            }
-                        }
-                    }
-                    if let Some(url) = data_url() {
-                        img {
-                            src: "{url}",
-                            width: "{dims().0}",
-                            height: "{dims().1}",
-                            style: "image-rendering: pixelated; max-width: 100%; border-radius: 8px; border: 1px solid var(--border); background: #000;",
-                        }
+
+                aside { class: "card min-h-64 space-y-3",
+                    h2 { class: "card-title", "Details" }
+                    if let Some(record) = selected() {
+                        if let Some(src) = selected_thumbnail { img { class: "aspect-square w-full rounded-xl border border-white/10 object-cover", src: "{src}", alt: "Selected texture preview" } }
+                        label { class: "block text-xs text-white/55", "Name" input { class: "mt-1 w-full rounded-lg bg-black/35 px-2 py-1.5 text-sm", value: "{detail_name()}", oninput: move |event| detail_name.set(event.value()) } }
+                        label { class: "block text-xs text-white/55", "Tags" input { class: "mt-1 w-full rounded-lg bg-black/35 px-2 py-1.5 text-sm", value: "{detail_tags()}", oninput: move |event| detail_tags.set(event.value()) } }
+                        label { class: "block text-xs text-white/55", "Notes" textarea { class: "mt-1 min-h-20 w-full rounded-lg bg-black/35 px-2 py-1.5 text-sm", value: "{detail_notes()}", oninput: move |event| detail_notes.set(event.value()) } }
+                        div { class: "text-[11px] text-white/45", p { "{record.star.temperature_k:.0} K · {record.star.type_hint}" } p { "ID {record.id}" } }
+                        div { class: "flex flex-wrap gap-2", button { class: "rounded-lg bg-sky-500/25 px-2 py-1.5 text-xs hover:bg-sky-500/40", onclick: save_details, "Save" } button { class: "rounded-lg bg-emerald-500/20 px-2 py-1.5 text-xs hover:bg-emerald-500/35", onclick: open_sandbox, "Open in Sandbox" } button { class: "rounded-lg bg-red-500/20 px-2 py-1.5 text-xs hover:bg-red-500/35", onclick: delete_selected, "Delete" } }
+                        p { class: "text-[10px] leading-relaxed text-white/35", "Keyboard/touch fallback: select this card and use Open in Sandbox; shared drag payloads are reserved for the following drag-and-drop stage." }
                     } else {
-                        div { class: "empty", "No render yet" }
+                        p { class: "text-sm text-white/45", "Select a saved star to inspect its texture and edit its metadata." }
                     }
                 }
-            }
-
-            div { class: "card", style: "margin-top: 16px;",
-                div { class: "card-title",
-                    StatusDot { status: if show_shader() { "ok" } else { "off" } }
-                    span { "GPU Star Shader" }
-                    span { class: "mono", style: "margin-left: auto; font-size: 11px; color: var(--text-3);", "Rust + web-sys &middot; WebGL2" }
-                }
-                div { style: "display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 12px;",
-                    p { style: "margin: 0; font-size: 13px; color: var(--text-2); flex: 1;",
-                        "Live GPU-accelerated star shader. Pure Rust via web-sys — no JavaScript."
-                    }
-                    button {
-                        class: "btn btn-primary",
-                        onclick: move |_| show_shader.set(!show_shader()),
-                        if show_shader() { "Hide Shader" } else { "Show Shader" }
-                    }
-                }
-                if show_shader() {
-                    div { class: "grid", style: "margin-bottom: 12px;",
-                        NumberFieldF32 { label: "noise_scale".to_string(), value: noise_scale, step: 0.1 }
-                        NumberFieldF32 { label: "noise_speed".to_string(), value: noise_speed, step: 0.1 }
-                        NumberFieldF32 { label: "contrast".to_string(), value: shader_contrast, step: 0.05 }
-                    }
-                    div { style: "width: 100%; height: 520px; border-radius: 8px; overflow: hidden;",
-                        StarShaderCanvas {
-                            width: 520,
-                            height: 520,
-                            teff: teff() as f64,
-                            bp_rp: bp_rp() as f64,
-                            noise_scale: noise_scale() as f64,
-                            noise_speed: noise_speed() as f64,
-                            contrast: shader_contrast() as f64,
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-#[component]
-fn NumberFieldF32(label: String, value: Signal<f32>, step: f32) -> Element {
-    rsx! {
-        div { class: "field",
-            span { class: "field-label", "{label}" }
-            input {
-                r#type: "number",
-                step: "{step}",
-                value: "{value()}",
-                oninput: move |e| {
-                    if let Ok(v) = e.value().parse::<f32>() {
-                        value.set(v);
-                    }
-                },
             }
         }
     }
