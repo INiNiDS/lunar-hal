@@ -1,18 +1,19 @@
-use crate::api::{self, ServiceInfo, ServiceLogEvent};
+use crate::api::{self, ServiceInfo, ServiceLogEvent, ServiceStatus};
 use crate::components::ui::{PageHeader, StatusDot, Tag, tokio_time_sleep};
 use dioxus::prelude::*;
 use futures_util::StreamExt;
 use gloo_net::eventsource::futures::EventSource;
+use crate::os::state::{is_window_lifecycle_visible, use_window_lifecycle};
+use crate::os::WindowLifecycle;
 
 const MAX_LOG_LINES: usize = 2000;
 
-fn status_kind(status: &str) -> String {
-    let s = status.to_lowercase();
-    if s.contains("running") {
+fn status_kind(status: &ServiceStatus) -> String {
+    if status.is_running() {
         "ok".to_string()
-    } else if s.contains("starting") {
+    } else if matches!(status, ServiceStatus::Starting) {
         "busy".to_string()
-    } else if s.contains("failed") {
+    } else if matches!(status, ServiceStatus::Failed { .. }) {
         "err".to_string()
     } else {
         "off".to_string()
@@ -21,29 +22,55 @@ fn status_kind(status: &str) -> String {
 
 #[component]
 pub fn Services() -> Element {
-    let services = use_resource(|| async { api::list_start_services().await });
+    let mut services = use_resource(|| async { api::list_start_services().await });
     let mut logs = use_signal(Vec::<ServiceLogEvent>::new);
     let mut sse_state = use_signal(|| "connecting".to_string());
     let mut log_filter = use_signal(|| None::<String>);
     let mut error = use_signal(|| None::<String>);
 
-    // Poll the service list periodically.
+    let lifecycle = use_window_lifecycle();
+    let polling_lifecycle = lifecycle;
+
     use_future(move || async move {
         loop {
             tokio_time_sleep(2000).await;
-            services.restart();
+            if is_window_lifecycle_visible(polling_lifecycle) {
+                services.restart();
+            }
         }
     });
 
-    // Keep a live log stream open against lunar-start-backend, reconnecting on drop/error.
+    use_effect(move || {
+        if let Some(lifecycle) = lifecycle {
+            if *lifecycle.read() == WindowLifecycle::Visible {
+                services.restart();
+            }
+        }
+    });
+
+    let stream_lifecycle = lifecycle;
     use_future(move || async move {
         loop {
+            if !is_window_lifecycle_visible(stream_lifecycle) {
+                if sse_state.peek().as_str() != "paused" {
+                    sse_state.set("paused".to_string());
+                }
+                tokio_time_sleep(250).await;
+                continue;
+            }
+
             let url = api::start_backend_logs_url();
             match EventSource::new(&url) {
                 Ok(mut es) => {
                     sse_state.set("connected".to_string());
                     if let Ok(mut stream) = es.subscribe("message") {
                         while let Some(Ok((_kind, msg))) = stream.next().await {
+                            if !is_window_lifecycle_visible(stream_lifecycle) {
+                                if sse_state.peek().as_str() != "paused" {
+                                    sse_state.set("paused".to_string());
+                                }
+                                break;
+                            }
                             if let Some(text) = msg.data().as_string() {
                                 if let Ok(entry) = serde_json::from_str::<ServiceLogEvent>(&text) {
                                     logs.with_mut(|l| {
@@ -57,11 +84,14 @@ pub fn Services() -> Element {
                             }
                         }
                     }
-                    sse_state.set("disconnected".to_string());
+                    if is_window_lifecycle_visible(stream_lifecycle) {
+                        sse_state.set("disconnected".to_string());
+                    }
                 }
-                Err(_) => {
+                Err(_) if is_window_lifecycle_visible(stream_lifecycle) => {
                     sse_state.set("error".to_string());
                 }
+                Err(_) => {}
             }
             tokio_time_sleep(2000).await;
         }

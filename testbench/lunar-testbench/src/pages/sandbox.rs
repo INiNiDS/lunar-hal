@@ -11,10 +11,35 @@ use crate::api::{
     GallerySource, GenerateSceneStarsRequest, ResponseStar, StarModelInputs,
     UpdateSceneStarRequest,
 };
-use crate::os::use_os_state;
+use crate::os::state::{is_window_lifecycle_visible, use_window_lifecycle};
+use crate::os::{use_os_state, WindowLifecycle};
 
 fn request_id(prefix: &str) -> String {
     format!("{prefix}-{}", js_sys::Date::now())
+}
+
+/// Keep the exact iframe URL while dependencies are temporarily unavailable.
+/// A replacement URL is applied only when a live web frontend supplies one.
+fn retain_iframe_src(previous: Option<String>, candidate: Option<String>) -> Option<String> {
+    candidate.or(previous)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::retain_iframe_src;
+
+    #[test]
+    fn temporary_dependency_loss_keeps_the_existing_iframe_url() {
+        let original = Some("http://127.0.0.1:8080/editor?scene_id=scene-a".to_string());
+        assert_eq!(retain_iframe_src(original.clone(), None), original);
+        assert_eq!(
+            retain_iframe_src(
+                Some("http://127.0.0.1:8080/editor?scene_id=scene-a".to_string()),
+                Some("http://127.0.0.1:8081/editor?scene_id=scene-a".to_string()),
+            ),
+            Some("http://127.0.0.1:8081/editor?scene_id=scene-a".to_string())
+        );
+    }
 }
 
 #[component]
@@ -30,10 +55,17 @@ pub fn Sandbox() -> Element {
                 && service.platform.as_deref() == Some("web")
         })
         .and_then(|service| service.public_url.clone());
+    let lifecycle = use_window_lifecycle();
+    let is_blocked = lifecycle
+        .map(|signal| *signal.read() == WindowLifecycle::Blocked)
+        .unwrap_or(false);
 
     let mut scenes = use_signal(Vec::new);
     let mut gallery = use_signal(Vec::new);
     let mut selected_scene = use_signal(|| None::<String>);
+    // Do not conditionally remove the iframe when a dependency disappears.
+    // Its URL is retained until a live replacement is available.
+    let mut retained_iframe_src = use_signal(|| None::<String>);
     let mut snapshot = use_signal(|| None::<api::LiveSceneSnapshot>);
     let mut selected_star = use_signal(|| None::<u32>);
     let mut refresh_tick = use_signal(|| 0_u32);
@@ -50,10 +82,15 @@ pub fn Sandbox() -> Element {
     let mut edit_name = use_signal(String::new);
     let mut import_gallery_id = use_signal(|| None::<String>);
 
+    let listing_lifecycle = lifecycle;
     use_resource(move || {
         let tick = refresh_tick();
+        let visible = is_window_lifecycle_visible(listing_lifecycle);
         async move {
             let _ = tick;
+            if !visible {
+                return;
+            }
             match api::list_star_scenes().await {
                 Ok(list) => {
                     let first = list.scenes.first().map(|scene| scene.id.clone());
@@ -77,9 +114,14 @@ pub fn Sandbox() -> Element {
         }
     });
 
+    let scene_lifecycle = lifecycle;
     use_resource(move || {
         let scene_id = selected_scene();
+        let visible = is_window_lifecycle_visible(scene_lifecycle);
         async move {
+            if !visible {
+                return;
+            }
             match scene_id {
                 Some(id) => match api::get_live_scene(&id).await {
                     Ok(value) => snapshot.set(Some(value)),
@@ -90,11 +132,36 @@ pub fn Sandbox() -> Element {
         }
     });
 
-    let iframe_src = frontend_url.as_ref().and_then(|base| {
-        selected_scene().as_ref().map(|scene_id| {
-            format!("{base}/editor?embedded=sandbox&scene_id={scene_id}")
-        })
+    use_effect(move || {
+        if let Some(lifecycle) = lifecycle {
+            if *lifecycle.read() == WindowLifecycle::Visible {
+                refresh_tick.set(refresh_tick().wrapping_add(1));
+            }
+        }
     });
+
+    let control_disabled = is_blocked || busy();
+
+    let iframe_src_candidate = if lifecycle
+        .map(|signal| *signal.read() == WindowLifecycle::Visible)
+        .unwrap_or(true)
+    {
+        frontend_url.as_ref().and_then(|base| {
+            selected_scene().as_ref().map(|scene_id| {
+                format!("{base}/editor?embedded=sandbox&scene_id={scene_id}")
+            })
+        })
+    } else {
+        None
+    };
+    use_effect(move || {
+        let previous = retained_iframe_src.peek().clone();
+        let next = retain_iframe_src(previous.clone(), iframe_src_candidate.clone());
+        if previous != next {
+            retained_iframe_src.set(next);
+        }
+    });
+    let iframe_src = retained_iframe_src();
 
     let create_scene = move |_| {
         busy.set(true);
@@ -303,19 +370,19 @@ pub fn Sandbox() -> Element {
                         option { value: "", "Select a scene" }
                         for scene in scenes() { option { value: "{scene.id}", "{scene.name} · {scene.star_count}" } }
                     }
-                    div { class: "flex gap-2", input { class: "min-w-0 flex-1 rounded-lg bg-black/50 px-2 py-1.5 text-xs", value: "{create_name()}", oninput: move |event| create_name.set(event.value()) } button { class: "rounded-lg bg-violet-500/30 px-2 text-xs hover:bg-violet-500/50", onclick: create_scene, "New" } }
+                    div { class: "flex gap-2", input { class: "min-w-0 flex-1 rounded-lg bg-black/50 px-2 py-1.5 text-xs", value: "{create_name()}", oninput: move |event| create_name.set(event.value()) } button { class: "rounded-lg bg-violet-500/30 px-2 text-xs hover:bg-violet-500/50", disabled: control_disabled, onclick: create_scene, "New" } }
                 }
 
                 div { class: "space-y-2 rounded-xl border border-white/10 p-2",
                     label { class: "block text-[10px] uppercase tracking-wider text-white/45", "Generate one or batch" }
-                    div { class: "flex gap-2", input { class: "w-16 rounded-lg bg-black/50 px-2 py-1.5 text-xs", r#type: "number", min: "1", max: "32", value: "{batch_count()}", oninput: move |event| if let Ok(value) = event.value().parse() { batch_count.set(value); } } button { class: "flex-1 rounded-lg bg-cyan-500/25 px-2 py-1.5 text-xs hover:bg-cyan-500/40", onclick: generate, "Generate & archive" } }
+                    div { class: "flex gap-2", input { class: "w-16 rounded-lg bg-black/50 px-2 py-1.5 text-xs", r#type: "number", min: "1", max: "32", value: "{batch_count()}", oninput: move |event| if let Ok(value) = event.value().parse() { batch_count.set(value); } } button { class: "flex-1 rounded-lg bg-cyan-500/25 px-2 py-1.5 text-xs hover:bg-cyan-500/40", disabled: control_disabled, onclick: generate, "Generate & archive" } }
                 }
 
                 div { class: "space-y-2 rounded-xl border border-white/10 p-2",
                     label { class: "block text-[10px] uppercase tracking-wider text-white/45", "Custom star" }
                     input { class: "w-full rounded-lg bg-black/50 px-2 py-1.5 text-xs", value: "{custom_name()}", oninput: move |event| custom_name.set(event.value()) }
                     div { class: "grid grid-cols-3 gap-1", input { class: "min-w-0 rounded bg-black/50 px-1.5 py-1 text-xs", placeholder: "x", value: "{custom_x()}", oninput: move |event| if let Ok(value) = event.value().parse() { custom_x.set(value); } } input { class: "min-w-0 rounded bg-black/50 px-1.5 py-1 text-xs", placeholder: "y", value: "{custom_y()}", oninput: move |event| if let Ok(value) = event.value().parse() { custom_y.set(value); } } input { class: "min-w-0 rounded bg-black/50 px-1.5 py-1 text-xs", placeholder: "z", value: "{custom_z()}", oninput: move |event| if let Ok(value) = event.value().parse() { custom_z.set(value); } } }
-                    div { class: "flex gap-2", input { class: "min-w-0 flex-1 rounded bg-black/50 px-2 py-1 text-xs", r#type: "number", value: "{custom_temp()}", oninput: move |event| if let Ok(value) = event.value().parse() { custom_temp.set(value); } } button { class: "rounded-lg bg-violet-500/25 px-2 py-1 text-xs hover:bg-violet-500/40", onclick: create_custom, "Add" } }
+                    div { class: "flex gap-2", input { class: "min-w-0 flex-1 rounded bg-black/50 px-2 py-1 text-xs", r#type: "number", value: "{custom_temp()}", oninput: move |event| if let Ok(value) = event.value().parse() { custom_temp.set(value); } } button { class: "rounded-lg bg-violet-500/25 px-2 py-1 text-xs hover:bg-violet-500/40", disabled: control_disabled, onclick: create_custom, "Add" } }
                 }
 
                 div { class: "space-y-2 rounded-xl border border-white/10 p-2",
@@ -324,14 +391,14 @@ pub fn Sandbox() -> Element {
                         option { value: "", "Choose saved star" }
                         for item in gallery() { option { value: "{item.id}", "{item.name.clone().unwrap_or_else(|| item.star.name.clone())}" } }
                     }
-                    button { class: "w-full rounded-lg bg-emerald-500/25 px-2 py-1.5 text-xs hover:bg-emerald-500/40", onclick: import_gallery, "Copy to scene" }
+                    button { class: "w-full rounded-lg bg-emerald-500/25 px-2 py-1.5 text-xs hover:bg-emerald-500/40", disabled: control_disabled, onclick: import_gallery, "Copy to scene" }
                 }
 
                 div { class: "space-y-2 rounded-xl border border-white/10 p-2",
                     label { class: "block text-[10px] uppercase tracking-wider text-white/45", "Scene stars" }
-                    div { class: "max-h-28 space-y-1 overflow-y-auto", for star in visible_stars { button { class: "block w-full truncate rounded px-2 py-1 text-left text-xs hover:bg-white/10", onclick: move |_| { selected_star.set(Some(star.id)); edit_name.set(star.name.clone()); }, "{star.name} · {star.temperature_k:.0} K" } } }
-                    if selected_star().is_some() { div { class: "flex gap-1", input { class: "min-w-0 flex-1 rounded bg-black/50 px-2 py-1 text-xs", value: "{edit_name()}", oninput: move |event| edit_name.set(event.value()) } button { class: "rounded bg-sky-500/25 px-2 text-xs", onclick: rename_star, "Save" } button { class: "rounded bg-red-500/25 px-2 text-xs", onclick: delete_star, "Delete" } } }
-                    button { class: "w-full rounded bg-red-500/15 px-2 py-1 text-xs text-red-100 hover:bg-red-500/30", onclick: clear_scene, "Clear live scene" }
+                    div { class: "max-h-28 space-y-1 overflow-y-auto", for star in visible_stars { button { class: "block w-full truncate rounded px-2 py-1 text-left text-xs hover:bg-white/10", disabled: control_disabled, onclick: move |_| { selected_star.set(Some(star.id)); edit_name.set(star.name.clone()); }, "{star.name} · {star.temperature_k:.0} K" } } }
+                    if selected_star().is_some() { div { class: "flex gap-1", input { class: "min-w-0 flex-1 rounded bg-black/50 px-2 py-1 text-xs", value: "{edit_name()}", oninput: move |event| edit_name.set(event.value()) } button { class: "rounded bg-sky-500/25 px-2 text-xs", disabled: control_disabled, onclick: rename_star, "Save" } button { class: "rounded bg-red-500/25 px-2 text-xs", disabled: control_disabled, onclick: delete_star, "Delete" } } }
+                    button { class: "w-full rounded bg-red-500/15 px-2 py-1 text-xs text-red-100 hover:bg-red-500/30", disabled: control_disabled, onclick: clear_scene, "Clear live scene" }
                 }
             }
         }

@@ -12,6 +12,7 @@ use lunar_structures::SceneEvent;
 
 use crate::components::editor::star_map::StarMap;
 use crate::stellar_state::{
+    clear_selection,
     use_stellar_scene, use_stellar_scene_snapshot, use_stellar_scene_version,
 };
 
@@ -128,7 +129,7 @@ pub fn EmbeddedSandbox(scene_id: String) -> Element {
     let on_select = move |star: ResponseStar| {
         game.read().clone().select_star(Some(star));
     };
-    let clear_selection = move |_| game.read().clone().select_star(None);
+    let clear_selection = move |_| clear_selection(&game.read().clone());
 
     rsx! {
         div { class: "h-screen w-screen overflow-hidden bg-[#050505] relative select-none",

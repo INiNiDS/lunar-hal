@@ -6102,6 +6102,7 @@ dependencies = [
  "lunar-structures",
  "lunar-ui-shared",
  "lunar-utils",
+ "serde",
  "serde_json",
  "tokio",
  "tracing",

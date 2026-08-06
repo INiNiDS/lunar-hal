@@ -23,6 +23,44 @@ pub enum BootPhase {
     Ready,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WindowLifecycle {
+    Visible,
+    Minimized,
+    Blocked,
+}
+
+/// Derive lifecycle without changing window ownership. The `WindowState` is
+/// removed only by `close_window`; a temporary dependency loss is `Blocked`.
+pub fn window_lifecycle_for(minimized: bool, missing_dependencies: &[String]) -> WindowLifecycle {
+    if minimized {
+        WindowLifecycle::Minimized
+    } else if missing_dependencies.is_empty() {
+        WindowLifecycle::Visible
+    } else {
+        WindowLifecycle::Blocked
+    }
+}
+
+/// Safe to call from a spawned task because it reads a captured signal rather
+/// than looking up a Dioxus context from outside the component render.
+pub fn is_window_lifecycle_visible(lifecycle: Option<Signal<WindowLifecycle>>) -> bool {
+    lifecycle
+        .map(|signal| *signal.read() == WindowLifecycle::Visible)
+        .unwrap_or(true)
+}
+
+#[derive(Clone, Debug)]
+pub struct WindowRuntimeContext {
+    pub window_id: u64,
+    pub app_id: String,
+    pub lifecycle: Signal<WindowLifecycle>,
+}
+
+pub fn use_window_lifecycle() -> Option<Signal<WindowLifecycle>> {
+    try_use_context::<WindowRuntimeContext>().map(|ctx| ctx.lifecycle)
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct ServiceSettingsState {
     pub service: String,
@@ -163,15 +201,60 @@ impl OsState {
     }
 
     pub fn are_app_dependencies_running(&self, app_id: &str) -> bool {
-        let Some(app) = app_by_id(app_id) else {
-            return app_id.starts_with("log:");
-        };
+        self.missing_app_dependencies(app_id).is_empty()
+    }
+
+    pub fn missing_app_dependencies(&self, app_id: &str) -> Vec<String> {
+        let mut missing = Vec::new();
         let services = self.services.read();
-        app.required_services.iter().all(|required| {
-            services
+
+        if let Some(service) = app_id.strip_prefix("log:") {
+            let is_running = services
                 .iter()
-                .any(|service| service.name == *required && service.status.is_running())
-        })
+                .any(|s| s.name == service && s.status.is_running());
+            if !is_running {
+                missing.push(service.to_string());
+            }
+            return missing;
+        }
+
+        if app_id == "sandbox" {
+            let backend_running = services
+                .iter()
+                .any(|s| s.name == "backend" && s.status.is_running());
+            if !backend_running {
+                missing.push("backend".to_string());
+            }
+
+            let frontend = services.iter().find(|s| s.name == "frontend");
+            let frontend_running = frontend.as_ref().is_some_and(|s| s.status.is_running());
+            let frontend_is_web =
+                frontend.as_ref().and_then(|s| s.platform.as_deref()) == Some("web");
+            let frontend_has_url = frontend
+                .as_ref()
+                .and_then(|s| s.public_url.as_deref())
+                .is_some_and(|url| !url.is_empty());
+
+            if !frontend_running {
+                missing.push("frontend".to_string());
+            } else if !frontend_is_web || !frontend_has_url {
+                missing.push("frontend (web platform with public URL required)".to_string());
+            }
+            return missing;
+        }
+
+        if let Some(app) = app_by_id(app_id) {
+            for required in app.required_services {
+                let running = services
+                    .iter()
+                    .any(|s| s.name == *required && s.status.is_running());
+                if !running {
+                    missing.push((*required).to_string());
+                }
+            }
+        }
+
+        missing
     }
 
     fn sandbox_has_web_frontend(services: &[ServiceInfo]) -> bool {
@@ -179,7 +262,10 @@ impl OsState {
             service.name == "frontend"
                 && service.status.is_running()
                 && service.platform.as_deref() == Some("web")
-                && service.public_url.as_deref().is_some_and(|url| !url.is_empty())
+                && service
+                    .public_url
+                    .as_deref()
+                    .is_some_and(|url| !url.is_empty())
         })
     }
 
@@ -188,6 +274,22 @@ impl OsState {
             .iter()
             .any(|service| service.name == "backend" && service.status.is_running())
             && Self::sandbox_has_web_frontend(services)
+    }
+
+    /// A deliberate frontend platform switch makes the existing iframe invalid.
+    /// A stopped/restarting service does not: its window stays mounted and is
+    /// covered by the normal Blocked lifecycle overlay.
+    fn sandbox_should_close_for_platform_switch(
+        previous: &[ServiceInfo],
+        next: &[ServiceInfo],
+    ) -> bool {
+        if !Self::sandbox_has_web_frontend(previous) {
+            return false;
+        }
+        next.iter().find(|service| service.name == "frontend").is_some_and(|frontend| {
+            frontend.status.is_running()
+                && matches!(frontend.platform.as_deref(), Some("desktop" | "android"))
+        })
     }
 
     /// Sandbox is an iframe host rather than a generic frontend app. It is
@@ -219,9 +321,9 @@ impl OsState {
                 self.service_action_errors.write().remove(&service.name);
             }
         }
-        if !Self::sandbox_is_available(&next) {
-            // A stale iframe cannot represent a native frontend. Close its
-            // window as soon as the runtime switches away from web.
+        if Self::sandbox_should_close_for_platform_switch(&previous, &next) {
+            // Desktop/Android cannot be embedded in an iframe. This is a
+            // deliberate platform change, unlike a temporary service outage.
             self.windows.with_mut(|windows| {
                 windows.retain(|window| window.app_id != "sandbox");
             });
@@ -397,6 +499,7 @@ impl OsState {
             self.service_config_drafts.write().insert(service, values);
         }
     }
+
     pub fn reset_service_settings(&mut self) {
         let mut draft = None;
         if let Some(state) = self.service_settings.write().as_mut() {
@@ -413,6 +516,7 @@ impl OsState {
             self.service_config_drafts.write().insert(service, values);
         }
     }
+
     pub fn validate_and_start_service(&mut self) {
         let Some(snapshot) = self.service_settings.read().clone() else {
             return;
@@ -865,13 +969,17 @@ fn configured_port(service: &str, values: &ServiceConfigValues) -> Option<u16> {
     match service {
         "backend" => values.env.get("LUNAR_BACKEND_PORT")?.parse().ok(),
         "testbench-backend" => values.env.get("LUNAR_TESTBENCH_BACKEND_PORT")?.parse().ok(),
-        "frontend" if values
-            .env
-            .get("LUNAR_FRONTEND_PLATFORM")
-            .is_some_and(|platform| platform == "web") => values
-            .env
-            .get("LUNAR_FRONTEND_PORT")
-            .and_then(|port| port.parse().ok()),
+        "frontend"
+            if values
+                .env
+                .get("LUNAR_FRONTEND_PLATFORM")
+                .is_some_and(|platform| platform == "web") =>
+        {
+            values
+                .env
+                .get("LUNAR_FRONTEND_PORT")
+                .and_then(|port| port.parse().ok())
+        }
         "frontend" => None,
         _ => None,
     }
@@ -1062,13 +1170,58 @@ mod settings_tests {
     }
 
     #[test]
+    fn temporary_dependency_loss_blocks_but_does_not_close_sandbox() {
+        let web = vec![
+            running_service("backend", None, None),
+            running_service("frontend", Some("web"), Some("http://127.0.0.1:8080")),
+        ];
+        let backend_stopped = vec![
+            ServiceInfo {
+                name: "backend".into(),
+                status: ServiceStatus::Stopped {
+                    reason: "restart".into(),
+                },
+                pid: None,
+                platform: None,
+                public_url: None,
+            },
+            running_service("frontend", Some("web"), Some("http://127.0.0.1:8080")),
+        ];
+        assert!(!OsState::sandbox_should_close_for_platform_switch(
+            &web,
+            &backend_stopped
+        ));
+
+        let desktop = vec![
+            running_service("backend", None, None),
+            running_service("frontend", Some("desktop"), None),
+        ];
+        assert!(OsState::sandbox_should_close_for_platform_switch(&web, &desktop));
+    }
+
+    #[test]
+    fn window_lifecycle_preserves_minimized_and_blocked_sessions() {
+        assert_eq!(window_lifecycle_for(false, &[]), WindowLifecycle::Visible);
+        assert_eq!(
+            window_lifecycle_for(false, &["backend".into()]),
+            WindowLifecycle::Blocked
+        );
+        assert_eq!(
+            window_lifecycle_for(true, &["backend".into()]),
+            WindowLifecycle::Minimized
+        );
+    }
+
+    #[test]
     fn frontend_round_trip_keeps_platform_and_web_port_structured() {
         let schema = ServiceConfigSchema {
             service: "frontend".into(),
             fields: vec![
                 field(
                     "LUNAR_FRONTEND_PLATFORM",
-                    FieldType::Select { options: vec!["web".into(), "desktop".into(), "android".into()] },
+                    FieldType::Select {
+                        options: vec!["web".into(), "desktop".into(), "android".into()],
+                    },
                     "web",
                 ),
                 field("LUNAR_FRONTEND_PORT", FieldType::Port, "8080"),

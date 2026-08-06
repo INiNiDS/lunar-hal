@@ -5,6 +5,8 @@ use crate::components::ui::{
 };
 use dioxus::prelude::*;
 use lunar_structures_testbench::{Job, JobStatus, ModelKind, ValidateSpec};
+use crate::os::state::{is_window_lifecycle_visible, use_window_lifecycle};
+use crate::os::WindowLifecycle;
 
 #[component]
 pub fn Validation() -> Element {
@@ -106,10 +108,23 @@ fn ValidationBody(
         });
     };
 
+    let lifecycle = use_window_lifecycle();
+    let polling_lifecycle = lifecycle;
+
     use_future(move || async move {
         loop {
             tokio_time_sleep(2000).await;
-            jobs.restart();
+            if is_window_lifecycle_visible(polling_lifecycle) {
+                jobs.restart();
+            }
+        }
+    });
+
+    use_effect(move || {
+        if let Some(lifecycle) = lifecycle {
+            if *lifecycle.read() == WindowLifecycle::Visible {
+                jobs.restart();
+            }
         }
     });
 

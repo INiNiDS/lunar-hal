@@ -10,7 +10,8 @@ use crate::api::{
     self, CreateGalleryStarRequest, GallerySource, GalleryStar, ResponseStar, StarModelInputs,
     UpdateGalleryStarRequest,
 };
-use crate::os::use_os_state;
+use crate::os::state::{is_window_lifecycle_visible, use_window_lifecycle};
+use crate::os::{use_os_state, WindowLifecycle};
 
 fn gallery_request_id() -> String {
     format!("gallery-ui-{}", js_sys::Date::now())
@@ -50,6 +51,10 @@ pub fn SirenGallery() -> Element {
     let mut refresh_tick = use_signal(|| 0_u32);
     let mut status = use_signal(|| None::<String>);
     let mut busy = use_signal(|| false);
+    let lifecycle = use_window_lifecycle();
+    let is_blocked = lifecycle
+        .map(|signal| *signal.read() == WindowLifecycle::Blocked)
+        .unwrap_or(false);
 
     let mut name = use_signal(|| "Generated star".to_string());
     let mut bp_rp = use_signal(|| 0.85_f32);
@@ -61,12 +66,17 @@ pub fn SirenGallery() -> Element {
     let mut detail_tags = use_signal(String::new);
     let mut detail_notes = use_signal(String::new);
 
+    let listing_lifecycle = lifecycle;
     use_resource(move || {
         let search = query();
         let ordering = sort();
         let tick = refresh_tick();
+        let visible = is_window_lifecycle_visible(listing_lifecycle);
         async move {
             let _ = tick;
+            if !visible {
+                return;
+            }
             match api::list_gallery_stars(None, 72, Some(&ordering), Some(&search)).await {
                 Ok(list) => records.set(list.stars),
                 Err(error) => status.set(Some(error)),
@@ -171,6 +181,15 @@ pub fn SirenGallery() -> Element {
         });
     };
 
+    use_effect(move || {
+        if let Some(lifecycle) = lifecycle {
+            if *lifecycle.read() == WindowLifecycle::Visible {
+                refresh_tick.set(refresh_tick().wrapping_add(1));
+            }
+        }
+    });
+
+    let controls_disabled = is_blocked || busy();
     let open_sandbox = move |_| os.open_window("sandbox", "Sandbox");
     let selected_thumbnail = selected()
         .as_ref()
@@ -196,7 +215,7 @@ pub fn SirenGallery() -> Element {
                     }
                     label { class: "block text-xs text-white/55", "Temperature (K)" input { class: "mt-1 w-full rounded-lg bg-black/35 px-2 py-1.5 text-sm", r#type: "number", value: "{temperature()}", oninput: move |event| if let Ok(value) = event.value().parse() { temperature.set(value); } } }
                     label { class: "block text-xs text-white/55", "Tags" input { class: "mt-1 w-full rounded-lg bg-black/35 px-2 py-1.5 text-sm", value: "{tags()}", oninput: move |event| tags.set(event.value()) } }
-                    button { class: "w-full rounded-lg bg-violet-500/35 px-3 py-2 text-sm font-medium text-white hover:bg-violet-500/55", onclick: generate_and_save, "Generate & save" }
+                    button { class: "w-full rounded-lg bg-violet-500/35 px-3 py-2 text-sm font-medium text-white hover:bg-violet-500/55", disabled: controls_disabled, onclick: generate_and_save, "Generate & save" }
                     p { class: "text-[11px] leading-relaxed text-white/40", "The backend produces the SIREN PNG, writes metadata atomically, and returns a durable Gallery URL." }
                 }
 
@@ -241,7 +260,7 @@ pub fn SirenGallery() -> Element {
                         label { class: "block text-xs text-white/55", "Tags" input { class: "mt-1 w-full rounded-lg bg-black/35 px-2 py-1.5 text-sm", value: "{detail_tags()}", oninput: move |event| detail_tags.set(event.value()) } }
                         label { class: "block text-xs text-white/55", "Notes" textarea { class: "mt-1 min-h-20 w-full rounded-lg bg-black/35 px-2 py-1.5 text-sm", value: "{detail_notes()}", oninput: move |event| detail_notes.set(event.value()) } }
                         div { class: "text-[11px] text-white/45", p { "{record.star.temperature_k:.0} K · {record.star.type_hint}" } p { "ID {record.id}" } }
-                        div { class: "flex flex-wrap gap-2", button { class: "rounded-lg bg-sky-500/25 px-2 py-1.5 text-xs hover:bg-sky-500/40", onclick: save_details, "Save" } button { class: "rounded-lg bg-emerald-500/20 px-2 py-1.5 text-xs hover:bg-emerald-500/35", onclick: open_sandbox, "Open in Sandbox" } button { class: "rounded-lg bg-red-500/20 px-2 py-1.5 text-xs hover:bg-red-500/35", onclick: delete_selected, "Delete" } }
+                        div { class: "flex flex-wrap gap-2", button { class: "rounded-lg bg-sky-500/25 px-2 py-1.5 text-xs hover:bg-sky-500/40", disabled: controls_disabled, onclick: save_details, "Save" } button { class: "rounded-lg bg-emerald-500/20 px-2 py-1.5 text-xs hover:bg-emerald-500/35", disabled: controls_disabled, onclick: open_sandbox, "Open in Sandbox" } button { class: "rounded-lg bg-red-500/20 px-2 py-1.5 text-xs hover:bg-red-500/35", disabled: controls_disabled, onclick: delete_selected, "Delete" } }
                         p { class: "text-[10px] leading-relaxed text-white/35", "Keyboard/touch fallback: select this card and use Open in Sandbox; shared drag payloads are reserved for the following drag-and-drop stage." }
                     } else {
                         p { class: "text-sm text-white/45", "Select a saved star to inspect its texture and edit its metadata." }

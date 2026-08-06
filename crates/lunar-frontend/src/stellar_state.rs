@@ -8,7 +8,7 @@
 //! [`StellarSceneSnapshot`]) and Dioxus tracks the dependency for us.
 
 use dioxus::prelude::*;
-use lunar_stellar_core::{StellarScene, StellarSceneConfig, StellarSceneSnapshot};
+use lunar_stellar_core::{SceneCamera, StellarScene, StellarSceneConfig, StellarSceneSnapshot};
 use tracing::warn;
 
 use crate::local_storage;
@@ -51,7 +51,6 @@ pub fn use_provide_stellar_scene() -> Signal<StellarScene> {
 /// Provide a pre-configured [`StellarScene`] instance. Useful when a host
 /// application already constructed a stellar-scene client and wants to inject it
 /// into the Dioxus context.
-#[allow(dead_code)]
 pub fn use_provide_stellar_scene_with(initial: StellarScene) -> Signal<StellarScene> {
     let version = use_signal(|| 0u64);
     let game = use_signal(|| initial);
@@ -84,30 +83,74 @@ pub fn use_stellar_scene_snapshot() -> StellarSceneSnapshot {
     game.read().snapshot()
 }
 
-/// Install a per-scene camera persistence hook that mirrors the
-/// client's `scene_cameras` map into `localStorage` (web) or a no-op
-/// stub (desktop). Call this once near the top of the editor.
-pub fn use_provide_scene_camera_persistence() {
-    let game = use_stellar_scene();
-    let version = use_stellar_scene_version();
+const CAMERA_PERSIST_DEBOUNCE_MS: u32 = 350;
 
-    use_effect(move || {
-        let _ = version();
-        let snap = game.read().snapshot();
-        if let Some(id) = snap.active_scene_id() {
-            if let Some(wc) = snap.scene_cameras.get(id).copied() {
-                local_storage::save_scene_camera(id, wc);
-            }
+async fn wait_for_camera_persist_debounce() {
+    #[cfg(feature = "web")]
+    gloo_timers::future::TimeoutFuture::new(CAMERA_PERSIST_DEBOUNCE_MS).await;
+
+    #[cfg(not(feature = "web"))]
+    tokio::time::sleep(std::time::Duration::from_millis(
+        CAMERA_PERSIST_DEBOUNCE_MS.into(),
+    ))
+    .await;
+}
+
+/// Schedule one durable camera write after a quiet period. A newer mutation
+/// supersedes the older task, so panning/zooming does not write every frame.
+fn persist_camera_debounced(
+    scene_id: String,
+    camera: SceneCamera,
+    generation: u64,
+    latest_generation: Signal<u64>,
+) {
+    spawn(async move {
+        wait_for_camera_persist_debounce().await;
+        if *latest_generation.peek() == generation {
+            local_storage::save_scene_camera(&scene_id, camera);
         }
     });
 }
 
-pub fn hydrate_scene_camera_from_storage(game: &StellarScene, scene_id: &str) {
-    if let Some(wc) = local_storage::load_scene_camera(scene_id) {
-        if let Err(e) = game.set_scene_camera(scene_id, wc) {
-            warn!(error = %e, scene_id, "ignoring invalid saved camera");
-        }
+/// Install per-scene camera persistence. The same schema is used by web
+/// localStorage and desktop/Android filesystem storage.
+pub fn use_provide_scene_camera_persistence() {
+    let game = use_stellar_scene();
+    let version = use_stellar_scene_version();
+    let mut latest_generation = use_signal(|| 0_u64);
+
+    use_effect(move || {
+        let _ = version();
+        let snap = game.read().snapshot();
+        let Some(scene_id) = snap.active_scene_id().map(str::to_owned) else {
+            return;
+        };
+        let camera = SceneCamera::new(snap.camera.offset, snap.camera.zoom);
+        let generation = latest_generation.peek().wrapping_add(1);
+        latest_generation.set(generation);
+        persist_camera_debounced(scene_id, camera, generation, latest_generation);
+    });
+}
+
+/// Load a persisted camera, validate it through the stellar core, and apply it
+/// as the active view. Corrupt records are deleted by `local_storage`.
+pub fn restore_camera(game: &StellarScene, scene_id: &str) {
+    let Some(camera) = local_storage::load_scene_camera(scene_id) else {
+        return;
+    };
+    if let Err(error) = game.set_scene_camera(scene_id, camera) {
+        warn!(%error, scene_id, "discarding invalid saved camera");
+        local_storage::remove_scene_camera(scene_id);
+        return;
     }
+    if let Err(error) = game.apply_scene_camera(scene_id) {
+        warn!(%error, scene_id, "failed to apply restored scene camera");
+    }
+}
+
+/// Clear transient editor selection without replacing the scene session.
+pub fn clear_selection(game: &StellarScene) {
+    game.select_star(None);
 }
 
 /// Helper for components that want to know whether the scene id

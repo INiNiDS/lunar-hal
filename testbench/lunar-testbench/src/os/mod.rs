@@ -17,9 +17,10 @@ pub mod service_settings;
 pub mod state;
 pub mod window;
 pub mod window_manager;
+pub mod app_host;
 
 pub use room::Room;
-pub use state::{BootPhase, DragKind, OsState, WindowState, use_os_state};
+pub use state::{BootPhase, DragKind, OsState, WindowState, use_os_state, WindowRuntimeContext, WindowLifecycle};
 
 /// Current browser viewport size in CSS pixels, used for maximize/snap math.
 /// Falls back to a reasonable desktop default if unavailable.

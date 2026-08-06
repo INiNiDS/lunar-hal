@@ -125,6 +125,19 @@ pub fn get_scenes_dir() -> PathBuf {
         .unwrap_or(standard_storage)
 }
 
+/// Durable frontend-only state such as per-scene camera positions.
+/// This is intentionally separate from backend-owned Gallery and Scene data.
+pub fn get_frontend_state_dir() -> PathBuf {
+    let standard_storage = dirs::data_dir()
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+        .join("lunar")
+        .join("frontend");
+
+    std::env::var("LUNAR_FRONTEND_STATE_DIR")
+        .map(PathBuf::from)
+        .unwrap_or(standard_storage)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

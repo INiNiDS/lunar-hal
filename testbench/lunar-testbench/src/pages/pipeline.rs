@@ -1,4 +1,6 @@
 use crate::api;
+use crate::os::state::use_window_lifecycle;
+use crate::os::WindowLifecycle;
 use crate::components::ui::{
     NumberFieldF64, NumberFieldU32, PageHeader, StatusDot, Tag, base64_encode,
 };
@@ -22,6 +24,7 @@ pub fn Pipeline() -> Element {
 
     let mut busy = use_signal(|| 0_u8);
     let mut error = use_signal(|| None::<String>);
+    let mut pipeline_result_stale = use_signal(|| false);
 
     let run_pipeline = move |_| {
         busy.set(1);
@@ -33,8 +36,16 @@ pub fn Pipeline() -> Element {
         });
         spawn(async move {
             match api::pipeline(&payload).await {
-                Ok(v) => pipeline_result.set(Some(v)),
-                Err(e) => error.set(Some(e)),
+                Ok(v) => {
+                    pipeline_result.set(Some(v));
+                    pipeline_result_stale.set(false);
+                }
+                Err(e) => {
+                    if pipeline_result().is_some() {
+                        pipeline_result_stale.set(true);
+                    }
+                    error.set(Some(e));
+                }
             }
             busy.set(0);
         });
@@ -113,110 +124,125 @@ pub fn Pipeline() -> Element {
         });
     };
 
-    rsx! {
-        PageHeader {
-            title: "Pipeline Composer".to_string(),
-            subtitle: "Compose full PINN → SIREN → metadata pipelines. Build and probe the same flows used by the front-end, in isolation.".to_string(),
+    let lifecycle = use_window_lifecycle();
+    use_effect(move || {
+        if lifecycle
+            .map(|signal| *signal.read() == WindowLifecycle::Blocked)
+            .unwrap_or(false)
+            && pipeline_result().is_some()
+            && !*pipeline_result_stale.peek()
+        {
+            pipeline_result_stale.set(true);
         }
-        div { class: "page",
-            div { class: "split",
-                div { class: "card",
-                    div { class: "card-title", "Coordinates" }
-                    div { class: "grid",
-                        NumberFieldF64 { label: "x_pc".to_string(), value: x, step: 0.1 }
-                        NumberFieldF64 { label: "y_pc".to_string(), value: y, step: 0.1 }
-                        NumberFieldF64 { label: "z_pc".to_string(), value: z, step: 1.0 }
-                        NumberFieldF64 { label: "bp_rp".to_string(), value: bp_rp, step: 0.05 }
-                        NumberFieldF64 { label: "g_mag".to_string(), value: g_mag, step: 0.1 }
-                        NumberFieldU32 { label: "texture_size".to_string(), value: texture_size }
-                    }
-                    if let Some(e) = error() {
-                        div { class: "status-banner status-err", "{e}" }
-                    }
-                    div { class: "section-title", "Pipeline steps" }
-                    div { class: "grid",
-                        button { class: "btn btn-primary",
-                            disabled: busy() != 0,
-                            onclick: run_pipeline,
-                            if busy() == 1 { span { class: "spinner" } }
-                            span { "Run /pipeline (JSON)" }
-                        }
-                        button { class: "btn",
-                            disabled: busy() != 0,
-                            onclick: run_png,
-                            if busy() == 2 { span { class: "spinner" } }
-                            span { "Run /pipeline/png" }
-                        }
-                        button { class: "btn",
-                            disabled: busy() != 0,
-                            onclick: run_random,
-                            if busy() == 3 { span { class: "spinner" } }
-                            span { "Random star (entropy=1.0)" }
-                        }
-                        button { class: "btn",
-                            disabled: busy() != 0,
-                            onclick: run_description,
-                            if busy() == 4 { span { class: "spinner" } }
-                            span { "Run /description" }
-                        }
-                    }
-                }
-                div {
+    });
+
+    rsx! {
+            PageHeader {
+                title: "Pipeline Composer".to_string(),
+                subtitle: "Compose full PINN → SIREN → metadata pipelines. Build and probe the same flows used by the front-end, in isolation.".to_string(),
+            }
+            div { class: "page",
+                div { class: "split",
                     div { class: "card",
-                        div { class: "card-title",
-                            StatusDot { status: if png_data_url().is_some() { "ok".to_string() } else { "off".to_string() } }
-                            span { "SIREN texture" }
-                            Tag { text: "from /pipeline/png".to_string(), kind: "siren".to_string() }
+                        div { class: "card-title", "Coordinates" }
+                        div { class: "grid",
+                            NumberFieldF64 { label: "x_pc".to_string(), value: x, step: 0.1 }
+                            NumberFieldF64 { label: "y_pc".to_string(), value: y, step: 0.1 }
+                            NumberFieldF64 { label: "z_pc".to_string(), value: z, step: 1.0 }
+                            NumberFieldF64 { label: "bp_rp".to_string(), value: bp_rp, step: 0.05 }
+                            NumberFieldF64 { label: "g_mag".to_string(), value: g_mag, step: 0.1 }
+                            NumberFieldU32 { label: "texture_size".to_string(), value: texture_size }
                         }
-                        if let Some(url) = png_data_url() {
-                            img {
-                                src: "{url}",
-                                width: "{png_dims().0}",
-                                height: "{png_dims().1}",
-                                style: "image-rendering: pixelated; max-width: 100%; border-radius: 8px; border: 1px solid var(--border); background: #000;",
+                        if let Some(e) = error() {
+                            div { class: "status-banner status-err", "{e}" }
+                        }
+                        div { class: "section-title", "Pipeline steps" }
+                        div { class: "grid",
+                            button { class: "btn btn-primary",
+                                disabled: busy() != 0,
+                                onclick: run_pipeline,
+                                if busy() == 1 { span { class: "spinner" } }
+                                span { "Run /pipeline (JSON)" }
                             }
-                        } else {
-                            div { class: "empty", "Press /pipeline/png" }
+                            button { class: "btn",
+                                disabled: busy() != 0,
+                                onclick: run_png,
+                                if busy() == 2 { span { class: "spinner" } }
+                                span { "Run /pipeline/png" }
+                            }
+                            button { class: "btn",
+                                disabled: busy() != 0,
+                                onclick: run_random,
+                                if busy() == 3 { span { class: "spinner" } }
+                                span { "Random star (entropy=1.0)" }
+                            }
+                            button { class: "btn",
+                                disabled: busy() != 0,
+                                onclick: run_description,
+                                if busy() == 4 { span { class: "spinner" } }
+                                span { "Run /description" }
+                            }
                         }
                     }
-                    div { class: "card", style: "margin-top: 16px;",
-                        div { class: "card-title",
-                            StatusDot { status: if pipeline_result().is_some() { "ok".to_string() } else { "off".to_string() } }
-                            span { "Pipeline JSON" }
-                            Tag { text: "POST /pipeline".to_string(), kind: "pinn".to_string() }
+                    div {
+                        div { class: "card",
+                            div { class: "card-title",
+                                StatusDot { status: if png_data_url().is_some() { "ok".to_string() } else { "off".to_string() } }
+                                span { "SIREN texture" }
+                                Tag { text: "from /pipeline/png".to_string(), kind: "siren".to_string() }
+                            }
+                            if let Some(url) = png_data_url() {
+                                img {
+                                    src: "{url}",
+                                    width: "{png_dims().0}",
+                                    height: "{png_dims().1}",
+                                    style: "image-rendering: pixelated; max-width: 100%; border-radius: 8px; border: 1px solid var(--border); background: #000;",
+                                }
+                            } else {
+                                div { class: "empty", "Press /pipeline/png" }
+                            }
                         }
-                        if let Some(v) = pipeline_result() {
-                            div { class: "code-block", "{v}" }
-                        } else {
-                            div { class: "empty", "Press /pipeline" }
+                        div { class: "card", style: "margin-top: 16px;",
+                            div { class: "card-title",
+                                StatusDot { status: if pipeline_result().is_some() { "ok".to_string() } else { "off".to_string() } }
+                                span { "Pipeline JSON" }
+                                if pipeline_result_stale() || (error().is_some() && pipeline_result().is_some()) {
+                                    Tag { text: "STALE".to_string(), kind: "warn".to_string() }
+                                }
+                                Tag { text: "POST /pipeline".to_string(), kind: "pinn".to_string() }
+                            }
+                            if let Some(v) = pipeline_result() {
+                                div { class: "code-block", "{v}" }
+                            } else {
+                                div { class: "empty", "Press /pipeline" }
+                            }
                         }
-                    }
-                    div { class: "card", style: "margin-top: 16px;",
-                        div { class: "card-title",
-                            StatusDot { status: if random_result().is_some() { "ok".to_string() } else { "off".to_string() } }
-                            span { "Random star" }
-                            Tag { text: "POST /random_star".to_string(), kind: "gnn".to_string() }
+                        div { class: "card", style: "margin-top: 16px;",
+                            div { class: "card-title",
+                                StatusDot { status: if random_result().is_some() { "ok".to_string() } else { "off".to_string() } }
+                                span { "Random star" }
+                                Tag { text: "POST /random_star".to_string(), kind: "gnn".to_string() }
+                            }
+                            if let Some(v) = random_result() {
+                                div { class: "code-block", "{v}" }
+                            } else {
+                                div { class: "empty", "Press Random star" }
+                            }
                         }
-                        if let Some(v) = random_result() {
-                            div { class: "code-block", "{v}" }
-                        } else {
-                            div { class: "empty", "Press Random star" }
-                        }
-                    }
-                    div { class: "card", style: "margin-top: 16px;",
-                        div { class: "card-title",
-                            StatusDot { status: if description_result().is_some() { "ok".to_string() } else { "off".to_string() } }
-                            span { "Description" }
-                            Tag { text: "POST /description".to_string(), kind: "siren".to_string() }
-                        }
-                        if let Some(v) = description_result() {
-                            div { class: "code-block", "{v}" }
-                        } else {
-                            div { class: "empty", "Press /description" }
+                        div { class: "card", style: "margin-top: 16px;",
+                            div { class: "card-title",
+                                StatusDot { status: if description_result().is_some() { "ok".to_string() } else { "off".to_string() } }
+                                span { "Description" }
+                                Tag { text: "POST /description".to_string(), kind: "siren".to_string() }
+                            }
+                            if let Some(v) = description_result() {
+                                div { class: "code-block", "{v}" }
+                            } else {
+                                div { class: "empty", "Press /description" }
+                            }
                         }
                     }
                 }
             }
         }
-    }
 }

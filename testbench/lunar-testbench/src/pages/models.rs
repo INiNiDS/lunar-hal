@@ -39,11 +39,9 @@ pub fn Models() -> Element {
                     span { style: "margin-left: 8px;", "Texture synthesis" }
                 }
             }
-            match tab() {
-                Tab::Pinn => rsx! { PinnPanel {} },
-                Tab::Gnn => rsx! { GnnPanel {} },
-                Tab::Siren => rsx! { SirenPanel {} },
-            }
+            div { style: if tab() == Tab::Pinn { "display: block;" } else { "display: none;" }, PinnPanel {} }
+            div { style: if tab() == Tab::Gnn { "display: block;" } else { "display: none;" }, GnnPanel {} }
+            div { style: if tab() == Tab::Siren { "display: block;" } else { "display: none;" }, SirenPanel {} }
         }
     }
 }

@@ -1,29 +1,26 @@
 use dioxus::prelude::*;
 
-use crate::os::manifest::{AppIcon, app_content};
-use crate::os::{DragKind, OsState, WindowState, use_os_state, viewport_size};
+use crate::os::app_host::AppHost;
+use crate::os::manifest::AppIcon;
+use crate::os::{use_os_state, viewport_size, DragKind, WindowState, OsState};
 
-/// A single floating app window.
-///
-/// Chrome follows the Windows convention agreed for the WebOS shell: icon and
-/// title on the left, minimize / maximize / close as full-height buttons on the
-/// right, plus eight invisible edge and corner grips for resizing.
 #[component]
 pub fn Window(win: WindowState) -> Element {
     let mut os = use_os_state();
-    if win.minimized {
-        return rsx! {};
-    }
 
     let id = win.id;
-    let style = format!(
+    let mut style = format!(
         "left: {}px; top: {}px; width: {}px; height: {}px; z-index: {};",
         win.x, win.y, win.width, win.height, win.z
     );
+
+    if win.minimized {
+        style.push_str(" display: none; visibility: hidden; pointer-events: none;");
+    }
+
     let title = win.title.clone();
     let app_id = win.app_id.clone();
-    let icon_id = win.app_id.clone();
-    let dependencies_available = os.are_app_dependencies_running(&app_id);
+
     let radius = if win.maximized {
         "absolute pointer-events-auto glass-strong flex flex-col overflow-hidden animate-window-open"
     } else {
@@ -34,6 +31,7 @@ pub fn Window(win: WindowState) -> Element {
         div {
             class: "{radius}",
             style: "{style}",
+            aria_hidden: if win.minimized { "true" } else { "false" },
             onmousedown: move |_| os.focus_window(id),
 
             div {
@@ -48,7 +46,7 @@ pub fn Window(win: WindowState) -> Element {
                 },
 
                 div { class: "w-3.5 h-3.5 shrink-0 text-white/55",
-                    AppIcon { app_id: icon_id }
+                    AppIcon { app_id: app_id.clone() }
                 }
                 span { class: "flex-1 min-w-0 truncate font-grotesk text-[12px] tracking-wide text-white/80",
                     "{title}"
@@ -60,13 +58,7 @@ pub fn Window(win: WindowState) -> Element {
                         title: "Minimize",
                         onmousedown: move |e| e.stop_propagation(),
                         onclick: move |_| os.minimize_window(id),
-                        svg {
-                            class: "w-2.5 h-2.5",
-                            view_box: "0 0 10 10",
-                            stroke: "currentColor",
-                            stroke_width: "1",
-                            path { d: "M0 5h10" }
-                        }
+                        svg { class: "w-2.5 h-2.5", view_box: "0 0 10 10", stroke: "currentColor", stroke_width: "1", path { d: "M0 5h10" } }
                     }
                     button {
                         class: "w-11 grid place-items-center text-white/55 hover:text-white hover:bg-white/10 transition-colors",
@@ -76,42 +68,23 @@ pub fn Window(win: WindowState) -> Element {
                             let (vw, vh) = viewport_size();
                             os.toggle_maximize_window(id, vw, vh);
                         },
-                        svg {
-                            class: "w-2.5 h-2.5",
-                            view_box: "0 0 10 10",
-                            fill: "none",
-                            stroke: "currentColor",
-                            stroke_width: "1",
-                            rect { x: "0.5", y: "0.5", width: "9", height: "9" }
-                        }
+                        svg { class: "w-2.5 h-2.5", view_box: "0 0 10 10", fill: "none", stroke: "currentColor", stroke_width: "1", rect { x: "0.5", y: "0.5", width: "9", height: "9" } }
                     }
                     button {
                         class: "w-11 grid place-items-center rounded-tr-xl text-white/55 hover:text-white hover:bg-err transition-colors",
                         title: "Close",
                         onmousedown: move |e| e.stop_propagation(),
                         onclick: move |_| os.close_window(id),
-                        svg {
-                            class: "w-2.5 h-2.5",
-                            view_box: "0 0 10 10",
-                            stroke: "currentColor",
-                            stroke_width: "1",
-                            stroke_linecap: "round",
-                            path { d: "M0.5 0.5l9 9M9.5 0.5l-9 9" }
-                        }
+                        svg { class: "w-2.5 h-2.5", view_box: "0 0 10 10", stroke: "currentColor", stroke_width: "1", stroke_linecap: "round", path { d: "M0.5 0.5l9 9M9.5 0.5l-9 9" } }
                     }
                 }
             }
 
-            div { class: "flex-1 min-h-0 overflow-auto scrollbar-thin bg-bg-1/70",
-                if app_id == "sandbox" && !dependencies_available {
-                    div { class: "grid h-full min-h-64 place-items-center p-8 text-center",
-                        div { class: "max-w-sm",
-                            div { class: "mx-auto mb-4 h-10 w-10 text-white/20", AppIcon { app_id: "sandbox".to_string() } }
-                            h3 { class: "font-display text-sm tracking-[0.12em] text-white/70", "SANDBOX PAUSED" }
-                            p { class: "mt-3 text-xs leading-relaxed text-white/35", "Sandbox is available only while Backend and a web Frontend with a public URL are running." }
-                        }
-                    }
-                } else { {app_content(&app_id)} }
+            AppHost {
+                window_id: id,
+                app_id: app_id,
+                minimized: win.minimized,
+                title: title,
             }
 
             {resize_handle(os, id, "absolute right-0 top-1.5 bottom-1.5 w-1.5 cursor-ew-resize", DragKind::ResizeE)}

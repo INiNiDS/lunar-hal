@@ -4,7 +4,7 @@ use crate::components::editor::sidebar::StarSidebar;
 use crate::components::editor::star_map::StarMap;
 use crate::components::editor::scene_panel::{StarSceneCreator, StarScenePicker};
 use crate::stellar_state::{
-    hydrate_scene_camera_from_storage, use_stellar_scene, use_stellar_scene_snapshot, use_persist_scene_camera,
+    restore_camera, use_stellar_scene, use_stellar_scene_snapshot, use_persist_scene_camera,
     use_pipeline_snapshot, use_provide_scene_camera_persistence, use_scene_id_change,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -59,10 +59,7 @@ fn use_sync_scene_camera_loader(game: Signal<StellarScene>) {
     use_scene_id_change(move |_prev, current| {
         if let Some(id) = current {
             let g = game.read().clone();
-            hydrate_scene_camera_from_storage(&g, id);
-            if let Err(e) = g.apply_scene_camera(id) {
-                warn!(error = %e, "apply_scene_camera failed");
-            }
+            restore_camera(&g, id);
         }
     });
 }

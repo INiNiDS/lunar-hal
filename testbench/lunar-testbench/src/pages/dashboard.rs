@@ -1,10 +1,22 @@
 use crate::api::{SystemSnapshot, system_snapshot};
 use crate::components::ui::{PageHeader, StatusDot, Tag, bytes_human, fmt_age};
 use dioxus::prelude::*;
+use crate::os::state::use_window_lifecycle;
+use crate::os::WindowLifecycle;
 
 #[component]
 pub fn Dashboard() -> Element {
-    let snapshot = use_resource(|| async { system_snapshot().await.ok() });
+    let mut snapshot = use_resource(|| async { system_snapshot().await.ok() });
+    let lifecycle = use_window_lifecycle();
+
+    use_effect(move || {
+        if let Some(lifecycle) = lifecycle {
+            if *lifecycle.read() == WindowLifecycle::Visible {
+                snapshot.restart();
+            }
+        }
+    });
+
     rsx! {
         PageHeader {
             title: "Dashboard".to_string(),
