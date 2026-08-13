@@ -41,10 +41,25 @@ dx serve --platform web
 
 The managed frontend service supports `web`, `desktop`, and `android` platforms through its configuration schema. Web uses a public URL; desktop and Android run natively.
 
+## WebOS and documentation
+
+`lunar-testbench` is a floating-window WebOS for the technical tools. It starts applications from the desktop, keeps only opened windows in the Dock, and embeds the real web frontend in Sandbox. Window bodies use per-app `Scroll`/`Fill` modes and container queries, so page layout responds to the window client area rather than browser width.
+
+- [Architecture](docs/architecture.md)
+- [HTTP API](docs/api.md)
+- [Frontend platforms](docs/frontend-platforms.md)
+- [Gallery storage](docs/gallery-storage.md)
+- [WebOS lifecycle](docs/webos-lifecycle.md)
+- [Testing matrix](docs/testing.md)
+
 ## Development checks
 
 ```bash
-cargo test -p lunar-stellar-core --locked
-cargo test -p lunar-start --locked
-cargo test -p lunar-start-backend --locked
+cargo fmt --all -- --check
+cargo check -p lunar-utils -p lunar-structures -p lunar-stellar-core -p lunar-backend -p lunar-start -p lunar-start-backend
+cargo test -p lunar-stellar-core -p lunar-start -p lunar-start-backend
+cd testbench/lunar-testbench
+npm ci
+npm run build:css
+cargo test -p lunar-testbench --bin lunar-testbench
 ```
