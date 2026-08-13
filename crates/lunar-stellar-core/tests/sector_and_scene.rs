@@ -1,6 +1,7 @@
 use lunar_stellar_core::sector::{
-    CHUNK_SIZE_PC, INNER_EXCLUSION_PC, MAX_CACHED_CHUNKS, PX_PER_PC, chunk_center,
-    chunk_distance_sq, evict_excess_cache, sectors_to_fetch, visible_chunks,
+    CHUNK_SIZE_PC, INNER_EXCLUSION_PC, MAX_CACHED_CHUNKS, MAX_CONCURRENT_FETCHES,
+    PX_PER_PC, chunk_center, chunk_distance_sq, evict_excess_cache, sectors_to_fetch,
+    visible_chunks,
 };
 use lunar_stellar_core::{StellarScene, StellarSceneConfig};
 use lunar_structures::ResponseStar;
@@ -104,6 +105,55 @@ fn sectors_to_fetch_skips_cached_and_loading() {
 }
 
 #[test]
+fn sectors_to_fetch_respects_the_global_inflight_limit() {
+    let cache = HashMap::new();
+    let request = lunar_stellar_core::sector::SectorFetchRequest {
+        viewport: (4096.0, 4096.0),
+        cam_offset: (0.0, 0.0),
+        cam_zoom: 0.05,
+        scene_center: (0.0, 0.0, 0.0),
+    };
+
+    let first = sectors_to_fetch(request, &cache, &HashSet::new());
+    assert_eq!(first.len(), MAX_CONCURRENT_FETCHES);
+
+    let saturated: HashSet<_> = first.iter().map(|(chunk, _)| *chunk).collect();
+    assert!(sectors_to_fetch(request, &cache, &saturated).is_empty());
+
+    let partially_busy: HashSet<_> = first.iter().take(2).map(|(chunk, _)| *chunk).collect();
+    assert_eq!(
+        sectors_to_fetch(request, &cache, &partially_busy).len(),
+        MAX_CONCURRENT_FETCHES - partially_busy.len()
+    );
+}
+
+#[test]
+fn zoomed_out_streaming_converges_without_eviction_refetch_churn() {
+    let request = lunar_stellar_core::sector::SectorFetchRequest {
+        viewport: (4096.0, 4096.0),
+        cam_offset: (0.0, 0.0),
+        cam_zoom: 0.05,
+        scene_center: (0.0, 0.0, 0.0),
+    };
+    let mut cache = HashMap::new();
+    let loading = HashSet::new();
+
+    for _ in 0..MAX_CACHED_CHUNKS {
+        let pending = sectors_to_fetch(request, &cache, &loading);
+        if pending.is_empty() {
+            break;
+        }
+        for (chunk, center) in pending {
+            cache.insert(chunk, vec![star_at(center.0, center.1, center.2)]);
+        }
+        evict_excess_cache(&mut cache, (0.0, 0.0));
+    }
+
+    assert_eq!(cache.len(), MAX_CACHED_CHUNKS);
+    assert!(sectors_to_fetch(request, &cache, &loading).is_empty());
+}
+
+#[test]
 fn evict_excess_cache_keeps_only_closest_chunks() {
     let mut cache = HashMap::new();
     for i in 0..(MAX_CACHED_CHUNKS + 10) {
@@ -119,6 +169,15 @@ fn evict_excess_cache_keeps_only_closest_chunks() {
 #[test]
 fn px_per_pc_is_positive() {
     assert!(PX_PER_PC > 0.0);
+}
+
+#[test]
+fn scene_claim_reserves_one_atomic_batch() {
+    let scene = StellarScene::with_config(StellarSceneConfig::new("http://localhost:18080"));
+    let first = scene.claim_sectors_to_fetch((4096.0, 4096.0));
+    assert_eq!(first.len(), MAX_CONCURRENT_FETCHES);
+    assert_eq!(scene.snapshot().sector_loading.len(), MAX_CONCURRENT_FETCHES);
+    assert!(scene.claim_sectors_to_fetch((4096.0, 4096.0)).is_empty());
 }
 
 #[test]

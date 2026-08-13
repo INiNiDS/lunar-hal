@@ -116,24 +116,40 @@ pub fn visible_chunks(
 }
 
 /// Evict the farthest cached chunks until the cache is at or below
-/// [`MAX_CACHED_CHUNKS`]. Eviction is by squared distance from the
-/// camera's current scene position.
-pub fn evict_excess_cache(cache: &mut HashMap<SectorKey, Vec<ResponseStar>>, cam_pos: (f32, f32)) {
+/// [`MAX_CACHED_CHUNKS`]. Chunks in `protected` are never removed; callers use
+/// this to prevent a visible chunk from being evicted and immediately fetched
+/// again on the next reactive tick.
+pub fn evict_excess_cache_preserving(
+    cache: &mut HashMap<SectorKey, Vec<ResponseStar>>,
+    cam_pos: (f32, f32),
+    protected: &HashSet<SectorKey>,
+) {
     if cache.len() <= MAX_CACHED_CHUNKS {
         return;
     }
-    let mut keys: Vec<SectorKey> = cache.keys().copied().collect();
-    keys.sort_unstable_by(|&a, &b| {
+
+    let mut removable: Vec<SectorKey> = cache
+        .keys()
+        .copied()
+        .filter(|key| !protected.contains(key))
+        .collect();
+    removable.sort_unstable_by(|&a, &b| {
         let dist_a = chunk_distance_sq(a, cam_pos);
         let dist_b = chunk_distance_sq(b, cam_pos);
         dist_a
             .partial_cmp(&dist_b)
             .unwrap_or(std::cmp::Ordering::Equal)
     });
-    let to_remove = keys.len() - MAX_CACHED_CHUNKS;
-    for key in keys.iter().rev().take(to_remove) {
+
+    let to_remove = cache.len() - MAX_CACHED_CHUNKS;
+    for key in removable.iter().rev().take(to_remove) {
         cache.remove(key);
     }
+}
+
+/// Backwards-compatible helper for callers that have no protected viewport.
+pub fn evict_excess_cache(cache: &mut HashMap<SectorKey, Vec<ResponseStar>>, cam_pos: (f32, f32)) {
+    evict_excess_cache_preserving(cache, cam_pos, &HashSet::new());
 }
 
 /// Inputs for deciding which sectors to fetch this frame.
@@ -147,28 +163,43 @@ pub struct SectorFetchRequest {
     pub scene_center: (f32, f32, f32),
 }
 
-/// Decide which sectors are currently visible but neither cached
-/// nor in-flight. Returns at most `MAX_CONCURRENT_FETCHES` chunks to
-/// keep the request rate bounded.
+/// Return the bounded, distance-prioritized working set for this viewport.
+///
+/// A zoomed-out 4K viewport can geometrically cover hundreds of chunks. The
+/// renderer has no aggregate LOD yet, so streaming all of them would exceed the
+/// cache and create an endless fetch/evict/refetch loop. Until an aggregate LOD
+/// exists, keep the nearest `MAX_CACHED_CHUNKS` as the deterministic working set.
+pub fn streaming_chunks(req: SectorFetchRequest) -> Vec<SectorKey> {
+    let scene_center = (req.scene_center.0, req.scene_center.1);
+    let viewport_center = scene_point_under_center(req.cam_offset, req.cam_zoom, scene_center);
+    let mut visible = visible_chunks(req.cam_offset, req.cam_zoom, req.viewport, scene_center);
+    visible.retain(|&chunk| !is_excluded(chunk, scene_center));
+    visible.sort_unstable_by(|&a, &b| {
+        chunk_distance_sq(a, viewport_center)
+            .partial_cmp(&chunk_distance_sq(b, viewport_center))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    visible.truncate(MAX_CACHED_CHUNKS);
+    visible
+}
+
+/// Decide which sectors should be claimed next. The returned count is the
+/// remaining global capacity, not a fresh per-render allowance. This keeps the
+/// number of in-flight backend requests at or below
+/// [`MAX_CONCURRENT_FETCHES`] even when scene-version updates re-run the hook.
 pub fn sectors_to_fetch(
     req: SectorFetchRequest,
     cache: &HashMap<SectorKey, Vec<ResponseStar>>,
     loading: &HashSet<SectorKey>,
 ) -> Vec<(SectorKey, (f32, f32, f32))> {
-    let mut visible = visible_chunks(
-        req.cam_offset,
-        req.cam_zoom,
-        req.viewport,
-        (req.scene_center.0, req.scene_center.1),
-    );
+    let available_slots = MAX_CONCURRENT_FETCHES.saturating_sub(loading.len());
+    if available_slots == 0 {
+        return Vec::new();
+    }
 
-    visible.retain(|&chunk| {
-        !is_excluded(chunk, (req.scene_center.0, req.scene_center.1))
-            && !cache.contains_key(&chunk)
-            && !loading.contains(&chunk)
-    });
-
-    visible.truncate(MAX_CONCURRENT_FETCHES);
+    let mut visible = streaming_chunks(req);
+    visible.retain(|chunk| !cache.contains_key(chunk) && !loading.contains(chunk));
+    visible.truncate(available_slots);
 
     visible
         .into_iter()

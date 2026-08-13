@@ -58,6 +58,7 @@ struct StellarSceneState {
     active_scene: Option<StarScene>,
     sector_cache: HashMap<SectorKey, Vec<ResponseStar>>,
     sector_loading: HashSet<SectorKey>,
+    sector_failures: HashMap<SectorKey, u8>,
     camera: Camera,
     selected_star: Option<ResponseStar>,
     pregen: Option<GnnResponse>,
@@ -84,6 +85,22 @@ impl StellarSceneState {
             ..Self::default()
         }
     }
+}
+
+const SECTOR_RETRY_BASE_MS: u32 = 500;
+const SECTOR_RETRY_MAX_EXPONENT: u32 = 4;
+
+fn sector_retry_delay_ms(attempt: u8) -> u32 {
+    let exponent = u32::from(attempt.saturating_sub(1)).min(SECTOR_RETRY_MAX_EXPONENT);
+    SECTOR_RETRY_BASE_MS.saturating_mul(1_u32 << exponent)
+}
+
+async fn wait_for_sector_retry(attempt: u8) {
+    let delay_ms = sector_retry_delay_ms(attempt);
+    #[cfg(target_family = "wasm")]
+    gloo_timers::future::TimeoutFuture::new(delay_ms).await;
+    #[cfg(not(target_family = "wasm"))]
+    tokio::time::sleep(std::time::Duration::from_millis(delay_ms.into())).await;
 }
 
 type ChangeHandler = Box<dyn Fn(u64) + Send + Sync + 'static>;
@@ -277,6 +294,7 @@ impl StellarScene {
                 s.active_scene = None;
                 s.sector_cache.clear();
                 s.sector_loading.clear();
+                s.sector_failures.clear();
                 s.sector_center = None;
             }
             s.version += 1;
@@ -304,6 +322,7 @@ impl StellarScene {
             s.active_scene = scene.clone();
             s.sector_cache.clear();
             s.sector_loading.clear();
+            s.sector_failures.clear();
             s.sector_center = scene.as_ref().map(|w| (w.center_x, w.center_y, w.center_z));
             if let Some(w) = &scene {
                 if let Some(wc) = s.scene_cameras.get(&w.id).copied() {
@@ -661,15 +680,11 @@ impl StellarScene {
     }
 
     /// Which sectors should the renderer request from the AI backend
-    /// right now, given the current viewport and camera?
+    /// right now, given the current viewport and camera? This is a read-only
+    /// preview; renderers should normally call [`Self::claim_sectors_to_fetch`].
     pub fn sectors_to_fetch(&self, viewport: (f32, f32)) -> Vec<(SectorKey, (f32, f32, f32))> {
         let s = self.state.read();
-        let center = s
-            .active_scene
-            .as_ref()
-            .map(|w| (w.center_x, w.center_y, w.center_z))
-            .or(s.sector_center)
-            .unwrap_or((0.0, 0.0, 0.0));
+        let center = get_scene_center(&s);
         let req = SectorFetchRequest {
             viewport,
             cam_offset: s.camera.offset,
@@ -679,8 +694,40 @@ impl StellarScene {
         crate::sector::sectors_to_fetch(req, &s.sector_cache, &s.sector_loading)
     }
 
-    /// Mark a chunk as in-flight. Returns `false` if the chunk is
-    /// already cached or loading, or if the key is out of range.
+    /// Atomically reserve the next bounded batch before any async request is
+    /// spawned. Reserving under one write lock prevents Dioxus version updates
+    /// from treating each render as a fresh three-request allowance.
+    pub fn claim_sectors_to_fetch(
+        &self,
+        viewport: (f32, f32),
+    ) -> Vec<(SectorKey, (f32, f32, f32))> {
+        let pending = {
+            let mut s = self.state.write();
+            let center = get_scene_center(&s);
+            let req = SectorFetchRequest {
+                viewport,
+                cam_offset: s.camera.offset,
+                cam_zoom: s.camera.zoom,
+                scene_center: center,
+            };
+            let pending = crate::sector::sectors_to_fetch(req, &s.sector_cache, &s.sector_loading);
+            if !pending.is_empty() {
+                for (chunk, _) in &pending {
+                    s.sector_loading.insert(*chunk);
+                }
+                s.version += 1;
+            }
+            pending
+        };
+        if !pending.is_empty() {
+            self.notify();
+        }
+        pending
+    }
+
+    /// Mark a chunk as in-flight. Returns `false` if the chunk is already cached
+    /// or loading, or if the key is out of range. Prefer the atomic batch claim
+    /// for UI streaming.
     pub fn mark_sector_loading(&self, chunk: SectorKey) -> bool {
         if validate_sector_key(chunk).is_err() {
             return false;
@@ -696,42 +743,126 @@ impl StellarScene {
         true
     }
 
-    /// Apply a fetched sector to the cache. The key and every star
-    /// are validated; invalid input is dropped on the floor (the
-    /// caller is expected to handle the error path).
+    /// Apply a fetched sector to the cache. The key and every star are
+    /// validated; invalid input is dropped on the floor.
     pub fn apply_sector(&self, chunk: SectorKey, stars: Vec<ResponseStar>) -> bool {
         if validate_sector_key(chunk).is_err() {
             return false;
         }
-        for s in &stars {
-            if validate_response_star(s).is_err() {
+        for star in &stars {
+            if validate_response_star(star).is_err() {
                 return false;
             }
         }
         {
-            let mut st = self.state.write();
-            st.sector_cache.insert(chunk, stars);
-            st.sector_loading.remove(&chunk);
-            st.version += 1;
+            let mut state = self.state.write();
+            state.sector_cache.insert(chunk, stars);
+            state.sector_loading.remove(&chunk);
+            state.sector_failures.remove(&chunk);
+            state.version += 1;
         }
         self.notify();
         true
     }
 
+    fn register_sector_failure(&self, chunk: SectorKey) -> u8 {
+        let mut state = self.state.write();
+        let failures = state.sector_failures.entry(chunk).or_default();
+        *failures = failures.saturating_add(1);
+        *failures
+    }
+
     pub fn fail_sector(&self, chunk: SectorKey) {
-        {
-            let mut s = self.state.write();
-            if s.sector_loading.remove(&chunk) {
-                s.version += 1;
-                drop(s);
-                self.notify();
+        let changed = {
+            let mut state = self.state.write();
+            if state.sector_loading.remove(&chunk) {
+                state.version += 1;
+                true
+            } else {
+                false
+            }
+        };
+        if changed {
+            self.notify();
+        }
+    }
+
+    async fn release_failed_sector_after_backoff(&self, chunk: SectorKey) {
+        let attempt = self.register_sector_failure(chunk);
+        wait_for_sector_retry(attempt).await;
+        self.fail_sector(chunk);
+    }
+
+    async fn fetch_claimed_sector_inner(
+        &self,
+        chunk: SectorKey,
+        center: (f32, f32, f32),
+        temperature: f32,
+        bp_rp: f32,
+        g_mag: f32,
+    ) -> Result<usize, StellarSceneError> {
+        let req = lunar_structures::SectorRequest {
+            sector_cx: center.0,
+            sector_cy: center.1,
+            sector_cz: center.2,
+            temperature,
+            bp_rp,
+            g_mag,
+            search_radius: Some(validate_search_radius(200.0)?),
+        };
+        match self.api.sector_stars(req).await {
+            Ok(resp) => {
+                if let Err(error) = validate_response_stars(&resp.stars) {
+                    self.release_failed_sector_after_backoff(chunk).await;
+                    return Err(error.into());
+                }
+                // A scene switch clears claims. Ignore a late response instead
+                // of inserting old-scene stars into the new scene cache.
+                if !self.state.read().sector_loading.contains(&chunk) {
+                    return Ok(0);
+                }
+                let count = resp.stars.len();
+                self.apply_sector(chunk, resp.stars);
+                Ok(count)
+            }
+            Err(error) => {
+                self.release_failed_sector_after_backoff(chunk).await;
+                Err(error.into())
             }
         }
     }
 
-    /// Fetch a single sector by chunk coordinate and apply it.
-    /// Every parameter is validated up-front, and the response is
-    /// validated before it lands in the cache.
+    /// Fetch a sector that was reserved by [`Self::claim_sectors_to_fetch`].
+    pub async fn fetch_claimed_sector(
+        &self,
+        chunk: SectorKey,
+        center: (f32, f32, f32),
+        temperature: f32,
+        bp_rp: f32,
+        g_mag: f32,
+    ) -> Result<usize, StellarSceneError> {
+        let validation = (|| -> Result<(), StellarSceneError> {
+            validate_sector_key(chunk)?;
+            validate_center_x(center.0)?;
+            validate_center_y(center.1)?;
+            validate_center_z(center.2)?;
+            validate_temperature(temperature)?;
+            validate_bp_rp(bp_rp)?;
+            validate_g_mag(g_mag)?;
+            Ok(())
+        })();
+        if let Err(error) = validation {
+            self.fail_sector(chunk);
+            return Err(error);
+        }
+        if !self.state.read().sector_loading.contains(&chunk) {
+            return Ok(0);
+        }
+        self.fetch_claimed_sector_inner(chunk, center, temperature, bp_rp, g_mag)
+            .await
+    }
+
+    /// Fetch a single sector for non-batched callers.
     pub async fn fetch_sector(
         &self,
         chunk: SectorKey,
@@ -747,45 +878,45 @@ impl StellarScene {
         validate_temperature(temperature)?;
         validate_bp_rp(bp_rp)?;
         validate_g_mag(g_mag)?;
-
         if !self.mark_sector_loading(chunk) {
             return Ok(0);
         }
-        let req = lunar_structures::SectorRequest {
-            sector_cx: center.0,
-            sector_cy: center.1,
-            sector_cz: center.2,
-            temperature,
-            bp_rp,
-            g_mag,
-            search_radius: Some(validate_search_radius(200.0)?),
-        };
-        match self.api.sector_stars(req).await {
-            Ok(resp) => {
-                validate_response_stars(&resp.stars)?;
-                let n = resp.stars.len();
-                self.apply_sector(chunk, resp.stars);
-                Ok(n)
-            }
-            Err(e) => {
-                self.fail_sector(chunk);
-                Err(e.into())
-            }
-        }
+        self.fetch_claimed_sector_inner(chunk, center, temperature, bp_rp, g_mag)
+            .await
     }
 
-    /// Evict farthest cached sectors. Should be called by the
-    /// frontend whenever the camera moves.
-    pub fn evict_excess_sectors(&self) {
+    /// Evict only chunks outside the current bounded viewport working set.
+    /// Visible chunks are protected so eviction cannot trigger a refetch loop.
+    pub fn evict_excess_sectors(&self, viewport: (f32, f32)) {
         let changed = {
-            let mut s = self.state.write();
-            let center = get_scene_center(&s);
-            let cam_pos = crate::sector::eviction_cam_pos(s.camera.offset, s.camera.zoom, center);
-            let before = s.sector_cache.len();
-            crate::sector::evict_excess_cache(&mut s.sector_cache, cam_pos);
-            let evicted = before != s.sector_cache.len();
+            let mut state = self.state.write();
+            let center = get_scene_center(&state);
+            let request = SectorFetchRequest {
+                viewport,
+                cam_offset: state.camera.offset,
+                cam_zoom: state.camera.zoom,
+                scene_center: center,
+            };
+            let protected: HashSet<SectorKey> =
+                crate::sector::streaming_chunks(request).into_iter().collect();
+            let loading = state.sector_loading.clone();
+            state
+                .sector_failures
+                .retain(|chunk, _| protected.contains(chunk) || loading.contains(chunk));
+            let camera_position = crate::sector::eviction_cam_pos(
+                state.camera.offset,
+                state.camera.zoom,
+                (center.0, center.1),
+            );
+            let before = state.sector_cache.len();
+            crate::sector::evict_excess_cache_preserving(
+                &mut state.sector_cache,
+                camera_position,
+                &protected,
+            );
+            let evicted = before != state.sector_cache.len();
             if evicted {
-                s.version += 1;
+                state.version += 1;
             }
             evicted
         };
@@ -799,6 +930,7 @@ impl StellarScene {
             let mut s = self.state.write();
             s.sector_cache.clear();
             s.sector_loading.clear();
+            s.sector_failures.clear();
             s.version += 1;
         }
         self.notify();
@@ -875,10 +1007,10 @@ impl StellarScene {
     }
 }
 
-fn get_scene_center(s: &StellarSceneState) -> (f32, f32) {
+fn get_scene_center(s: &StellarSceneState) -> (f32, f32, f32) {
     s.active_scene
         .as_ref()
-        .map(|w| (w.center_x, w.center_y))
-        .or_else(|| s.sector_center.map(|c| (c.0, c.1)))
-        .unwrap_or((0.0, 0.0))
+        .map(|scene| (scene.center_x, scene.center_y, scene.center_z))
+        .or(s.sector_center)
+        .unwrap_or((0.0, 0.0, 0.0))
 }
