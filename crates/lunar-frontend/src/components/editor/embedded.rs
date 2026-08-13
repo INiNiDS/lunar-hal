@@ -1,8 +1,8 @@
 //! Embedded, backend-driven editor used inside the WebOS Sandbox iframe.
 //!
 //! This module owns only local camera/selection UI state. Scene mutations are
-//! received from the backend snapshot and SSE stream; it deliberately exposes
-//! no parent-to-iframe command receiver.
+//! received from the backend snapshot and SSE stream. The parent sends only a
+//! UI lifecycle hint; there is deliberately no parent-to-iframe mutation protocol.
 
 use dioxus::prelude::*;
 use lunar_stellar_core::StellarScene;
@@ -15,6 +15,20 @@ use crate::stellar_state::{
     clear_selection,
     use_stellar_scene, use_stellar_scene_snapshot, use_stellar_scene_version,
 };
+
+const SANDBOX_LIFECYCLE_MESSAGE: &str = "lunar:sandbox-lifecycle";
+
+fn parse_parent_activity(raw: &str) -> Option<bool> {
+    let value: serde_json::Value = serde_json::from_str(raw).ok()?;
+    if value.get("type")?.as_str()? != SANDBOX_LIFECYCLE_MESSAGE {
+        return None;
+    }
+    match value.get("state")?.as_str()? {
+        "visible" => Some(true),
+        "minimized" | "blocked" => Some(false),
+        _ => None,
+    }
+}
 
 /// Returns a scene id only for `/editor?embedded=sandbox&scene_id=<id>`.
 /// Native targets never enter iframe composition mode.
@@ -64,6 +78,64 @@ impl Drop for SceneEventSubscriptionInner {
 }
 
 #[cfg(feature = "web")]
+#[derive(Clone)]
+struct ParentLifecycleSubscription {
+    inner: std::rc::Rc<ParentLifecycleSubscriptionInner>,
+}
+
+#[cfg(feature = "web")]
+struct ParentLifecycleSubscriptionInner {
+    window: web_sys::Window,
+    listener: wasm_bindgen::closure::Closure<dyn FnMut(web_sys::MessageEvent)>,
+}
+
+#[cfg(feature = "web")]
+impl Drop for ParentLifecycleSubscriptionInner {
+    fn drop(&mut self) {
+        use wasm_bindgen::JsCast;
+        let _ = self.window.remove_event_listener_with_callback(
+            "message",
+            self.listener.as_ref().unchecked_ref(),
+        );
+    }
+}
+
+#[cfg(feature = "web")]
+fn use_parent_activity() -> Signal<bool> {
+    use wasm_bindgen::JsCast;
+
+    let mut active = use_signal(|| true);
+    let _subscription = use_hook(move || {
+        let window = web_sys::window()?;
+        let listener = wasm_bindgen::closure::Closure::<dyn FnMut(web_sys::MessageEvent)>::new(
+            move |message: web_sys::MessageEvent| {
+                let Some(raw) = message.data().as_string() else {
+                    return;
+                };
+                let Some(next) = parse_parent_activity(&raw) else {
+                    return;
+                };
+                if *active.peek() != next {
+                    active.set(next);
+                }
+            },
+        );
+        window
+            .add_event_listener_with_callback("message", listener.as_ref().unchecked_ref())
+            .ok()?;
+        Some(ParentLifecycleSubscription {
+            inner: std::rc::Rc::new(ParentLifecycleSubscriptionInner { window, listener }),
+        })
+    });
+    active
+}
+
+#[cfg(not(feature = "web"))]
+fn use_parent_activity() -> Signal<bool> {
+    use_signal(|| true)
+}
+
+#[cfg(feature = "web")]
 fn use_scene_event_stream(scene_id: String, game: Signal<StellarScene>) {
     use wasm_bindgen::JsCast;
 
@@ -72,7 +144,7 @@ fn use_scene_event_stream(scene_id: String, game: Signal<StellarScene>) {
         let source = web_sys::EventSource::new(&url).ok()?;
         let stream_game = game;
         let listener = wasm_bindgen::closure::Closure::<dyn FnMut(web_sys::MessageEvent)>::new(
-            move |message| {
+            move |message: web_sys::MessageEvent| {
                 let Some(data) = message.data().as_string() else {
                     return;
                 };
@@ -101,6 +173,7 @@ fn use_scene_event_stream(_scene_id: String, _game: Signal<StellarScene>) {
 pub fn EmbeddedSandbox(scene_id: String) -> Element {
     let game = use_stellar_scene();
     let _version = use_stellar_scene_version();
+    let map_active = use_parent_activity();
     let load_scene_id = scene_id.clone();
     use_resource(move || {
         let game = game;
@@ -131,14 +204,21 @@ pub fn EmbeddedSandbox(scene_id: String) -> Element {
     };
     let clear_selection = move |_| clear_selection(&game.read().clone());
 
+    let root_class = if map_active() {
+        "embedded-sandbox h-screen w-screen overflow-hidden bg-[#050505] relative select-none"
+    } else {
+        "embedded-sandbox embedded-sandbox--suspended h-screen w-screen overflow-hidden bg-[#050505] relative select-none"
+    };
+
     rsx! {
-        div { class: "h-screen w-screen overflow-hidden bg-[#050505] relative select-none",
+        div { class: "{root_class}",
             StarMap {
                 game,
                 scene_stars,
                 center_x,
                 center_y,
                 selected_id,
+                active: map_active,
                 on_select,
             }
             if let Some(scene) = active {
@@ -157,5 +237,24 @@ pub fn EmbeddedSandbox(scene_id: String) -> Element {
                 }
             }
         }
+    }
+}
+
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::parse_parent_activity;
+
+    #[test]
+    fn parses_only_the_sandbox_lifecycle_protocol() {
+        assert_eq!(
+            parse_parent_activity(r#"{"type":"lunar:sandbox-lifecycle","state":"visible"}"#),
+            Some(true)
+        );
+        assert_eq!(
+            parse_parent_activity(r#"{"type":"lunar:sandbox-lifecycle","state":"minimized"}"#),
+            Some(false)
+        );
+        assert_eq!(parse_parent_activity(r#"{"type":"other","state":"visible"}"#), None);
     }
 }

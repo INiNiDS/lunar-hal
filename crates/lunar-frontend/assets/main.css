@@ -87,3 +87,16 @@ body {
 .is-diving .white-flash {
     animation: final-whiteout 0.4s forwards 0.9s;
 }
+
+/* The WebOS host keeps the iframe mounted to preserve camera/selection state.
+   Pause paint-heavy work when the parent marks the embedded editor inactive. */
+.embedded-sandbox {
+    contain: layout paint size style;
+}
+
+.embedded-sandbox--suspended *,
+.embedded-sandbox--suspended *::before,
+.embedded-sandbox--suspended *::after {
+    animation-play-state: paused !important;
+    transition: none !important;
+}

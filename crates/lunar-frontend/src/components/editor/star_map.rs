@@ -1,5 +1,6 @@
 use crate::stellar_state::use_stellar_scene_version;
 use dioxus::prelude::*;
+use lunar_stellar_core::sector::FETCH_COOLDOWN_MS;
 use lunar_stellar_core::{CHUNK_SIZE_PC, PX_PER_PC, SectorKey, StellarScene, chunk_center};
 use lunar_structures::ResponseStar;
 use std::collections::HashSet;
@@ -40,6 +41,7 @@ fn render_star(
     center_x: f32,
     center_y: f32,
     is_selected: bool,
+    animate: bool,
     on_select: EventHandler<ResponseStar>,
 ) -> Element {
     let px = (star.x - center_x) * PX_PER_PC;
@@ -56,6 +58,11 @@ fn render_star(
     };
 
     let delay = (star.id as f32 * 1.7).fract() * 5.0;
+    let animation_style = if animate {
+        format!("animation: star-twinkle 4s ease-in-out {delay}s infinite;")
+    } else {
+        String::new()
+    };
     let star_cloned = star.clone();
 
     rsx! {
@@ -74,7 +81,7 @@ fn render_star(
                 class: "absolute inset-0 rounded-full pointer-events-auto cursor-pointer",
                 style: "
                     background: radial-gradient(circle, {inner} 0%, {mid} 40%, transparent 80%);
-                    animation: star-twinkle 4s ease-in-out {delay}s infinite;
+                    {animation_style}
                     {border_style}
                 ",
                 onclick: move |e| {
@@ -110,96 +117,113 @@ fn render_loading_chunk(chunk: SectorKey, center_x: f32, center_y: f32) -> Eleme
     }
 }
 
-#[cfg(feature = "web")]
-fn measure_viewport_size() -> Option<(f32, f32)> {
-    let window = web_sys::window();
-    let document = window.as_ref().and_then(|w| w.document());
-    let el = document.and_then(|d| d.query_selector(".starmap-root").ok().flatten());
-    el.map(|el| {
-        let rect = el.get_bounding_client_rect();
-        let w = (rect.width() as f32).clamp(100.0, 4000.0);
-        let h = (rect.height() as f32).clamp(100.0, 4000.0);
-        (w, h)
-    })
-}
+/// A long-lived `ResizeObserver` reports the size of the actual map container.
+/// It works in browser, desktop WebView and Android WebView renderers through
+/// Dioxus' supported `document::eval` bridge, instead of guessing from the
+/// browser viewport or returning a native `1280x800` fallback.
+const ELEMENT_SIZE_OBSERVER: &str = r#"
+(() => {
+  const element = document.querySelector('.starmap-root');
+  if (!element || typeof ResizeObserver === 'undefined') return;
 
-async fn delay_tick() {
-    #[cfg(feature = "web")]
-    {
-        use gloo_timers::future::TimeoutFuture;
-        TimeoutFuture::new(80).await;
+  let frame = 0;
+  let lastWidth = 0;
+  let lastHeight = 0;
+  const publish = () => {
+    frame = 0;
+    const rect = element.getBoundingClientRect();
+    // Sub-pixel changes can otherwise feed a ResizeObserver/render loop in
+    // Firefox. The map does not need a backing extent larger than this.
+    const width = Math.max(1, Math.min(4096, Math.round(rect.width)));
+    const height = Math.max(1, Math.min(4096, Math.round(rect.height)));
+    if (width === lastWidth && height === lastHeight) return;
+    lastWidth = width;
+    lastHeight = height;
+    dioxus.send([width, height]);
+  };
+  const schedule = () => {
+    if (!frame) frame = requestAnimationFrame(publish);
+  };
+  const observer = new ResizeObserver(schedule);
+  observer.observe(element);
+  schedule();
+  // Keep the evaluator alive while the component is mounted. When its task is
+  // cancelled by Dioxus, the bridge closes and this loop disconnects observer.
+  (async () => {
+    try { await dioxus.recv(); }
+    finally {
+      observer.disconnect();
+      if (frame) cancelAnimationFrame(frame);
     }
-    #[cfg(not(feature = "web"))]
-    {
-        tokio::time::sleep(std::time::Duration::from_millis(80)).await;
-    }
-}
-
-fn get_viewport_dimensions() -> Option<(f32, f32)> {
-    #[cfg(feature = "web")]
-    {
-        measure_viewport_size()
-    }
-    #[cfg(not(feature = "web"))]
-    {
-        Some((1280.0_f32, 800.0_f32))
-    }
-}
+  })();
+})();
+"#;
 
 fn use_viewport_measurement() -> Signal<(f32, f32)> {
-    let mut viewport = use_signal(|| (0.0_f32, 0.0_f32));
+    let viewport = use_signal(|| (0.0_f32, 0.0_f32));
 
-    use_future(move || async move {
-        let mut last = (0.0_f32, 0.0_f32);
-
-        for _ in 0..6 {
-            delay_tick().await;
-
-            let Some((w, h)) = get_viewport_dimensions() else {
-                continue;
-            };
-
-            if w <= 0.0 || h <= 0.0 {
-                continue;
+    use_effect(move || {
+        let mut viewport = viewport;
+        spawn(async move {
+            let mut eval = dioxus::document::eval(ELEMENT_SIZE_OBSERVER);
+            while let Ok((width, height)) = eval.recv::<(f64, f64)>().await {
+                let width = (width as f32).clamp(1.0, 4_096.0);
+                let height = (height as f32).clamp(1.0, 4_096.0);
+                let previous = *viewport.read();
+                if (previous.0 - width).abs() >= 1.0 || (previous.1 - height).abs() >= 1.0 {
+                    viewport.set((width, height));
+                }
             }
-
-            if (w, h) != last {
-                last = (w, h);
-                viewport.set((w, h));
-            }
-
-            if w >= 800.0 && h >= 400.0 {
-                break;
-            }
-        }
+        });
     });
 
     viewport
+}
+
+async fn delay_sector_dispatch(batch_index: usize) {
+    let delay_ms = FETCH_COOLDOWN_MS.saturating_mul(batch_index as u32);
+    if delay_ms == 0 {
+        return;
+    }
+    #[cfg(feature = "web")]
+    gloo_timers::future::TimeoutFuture::new(delay_ms).await;
+    #[cfg(not(feature = "web"))]
+    tokio::time::sleep(std::time::Duration::from_millis(delay_ms.into())).await;
 }
 
 fn use_sync_sector_loading(
     game: Signal<StellarScene>,
     version: Signal<u64>,
     viewport: Signal<(f32, f32)>,
+    active: Signal<bool>,
 ) {
     use_resource(move || async move {
         let _ = version();
+        let is_active = active();
         let vp = *viewport.read();
-        if vp.0 <= 0.0 || vp.1 <= 0.0 {
+        if !is_active || vp.0 <= 0.0 || vp.1 <= 0.0 {
             return;
         }
-        let pending = game.read().sectors_to_fetch(vp);
+
+        // Claim the full batch synchronously before spawning requests. This is
+        // what makes MAX_CONCURRENT_FETCHES a real global cap across renders.
+        let pending = game.read().claim_sectors_to_fetch(vp);
         if pending.is_empty() {
             return;
         }
         let temperature = game.read().temperature();
         let bp_rp = game.read().bp_rp();
         let g_mag = game.read().g_mag();
-        for (chunk, center) in pending {
+        for (batch_index, (chunk, center)) in pending.into_iter().enumerate() {
             spawn(async move {
-                let g: StellarScene = game.read().clone();
-                let _ = g
-                    .fetch_sector(chunk, center, temperature, bp_rp, g_mag)
+                delay_sector_dispatch(batch_index).await;
+                let scene: StellarScene = game.read().clone();
+                if !*active.peek() {
+                    scene.fail_sector(chunk);
+                    return;
+                }
+                let _ = scene
+                    .fetch_claimed_sector(chunk, center, temperature, bp_rp, g_mag)
                     .await;
             });
         }
@@ -210,14 +234,16 @@ fn use_sync_sector_eviction(
     game: Signal<StellarScene>,
     version: Signal<u64>,
     viewport: Signal<(f32, f32)>,
+    active: Signal<bool>,
 ) {
     use_resource(move || async move {
         let _ = version();
+        let is_active = active();
         let vp = *viewport.read();
-        if vp.0 <= 0.0 || vp.1 <= 0.0 {
+        if !is_active || vp.0 <= 0.0 || vp.1 <= 0.0 {
             return;
         }
-        game.read().evict_excess_sectors();
+        game.read().evict_excess_sectors(vp);
     });
 }
 
@@ -252,16 +278,18 @@ pub fn StarMap(
     center_x: f32,
     center_y: f32,
     selected_id: Option<u32>,
+    active: Signal<bool>,
     on_select: EventHandler<ResponseStar>,
 ) -> Element {
     let viewport = use_viewport_measurement();
     let version = use_stellar_scene_version();
 
-    use_sync_sector_loading(game, version, viewport);
-    use_sync_sector_eviction(game, version, viewport);
+    use_sync_sector_loading(game, version, viewport, active);
+    use_sync_sector_eviction(game, version, viewport, active);
 
     let mut interact = use_star_map_interactions();
 
+    let is_active = active();
     let snap = game.read().snapshot();
     let offset = snap.camera.offset;
     let zoom = snap.camera.zoom;
@@ -279,7 +307,7 @@ pub fn StarMap(
 
     rsx! {
         div {
-            class: "starmap-root absolute inset-0 cursor-grab active:cursor-grabbing",
+            class: if is_active { "starmap-root absolute inset-0 cursor-grab active:cursor-grabbing" } else { "starmap-root absolute inset-0 pointer-events-none" },
             onpointerdown: move |e| {
                 let g = game.read().clone();
                 g.set_dragging(true);
@@ -370,14 +398,14 @@ pub fn StarMap(
                 for star in sector_stars {
                     {
                         let is_sel = selected_id.map(|id| id == star.id).unwrap_or(false);
-                        render_star("sector", &star, center_x, center_y, is_sel, on_select)
+                        render_star("sector", &star, center_x, center_y, is_sel, zoom >= 0.35, on_select)
                     }
                 }
 
                 for star in scene_stars {
                     {
                         let is_sel = selected_id.map(|id| id == star.id).unwrap_or(false);
-                        render_star("scene", &star, center_x, center_y, is_sel, on_select)
+                        render_star("scene", &star, center_x, center_y, is_sel, true, on_select)
                     }
                 }
 

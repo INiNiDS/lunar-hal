@@ -305,6 +305,7 @@ pub fn Editor() -> Element {
 
     let game = use_stellar_scene();
     let version = use_context::<Signal<u64>>();
+    let map_active = use_signal(|| true);
 
     let mut sidebar_open = use_signal(|| false);
     let show_picker = use_signal(|| true);
@@ -373,6 +374,7 @@ pub fn Editor() -> Element {
                 center_x,
                 center_y,
                 selected_id,
+                active: map_active,
                 on_select: on_select_star,
             }
 
