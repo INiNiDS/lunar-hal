@@ -18,6 +18,7 @@ pub mod state;
 pub mod window;
 pub mod window_manager;
 pub mod app_host;
+pub mod viewport;
 
 pub use room::Room;
 pub use state::{BootPhase, DragKind, OsState, WindowState, use_os_state, WindowRuntimeContext, WindowLifecycle};
@@ -27,6 +28,13 @@ pub use state::{BootPhase, DragKind, OsState, WindowState, use_os_state, WindowR
 pub fn viewport_size() -> (f64, f64) {
     match web_sys::window() {
         Some(w) => {
+            if let Some(viewport) = w.visual_viewport() {
+                let width = viewport.width();
+                let height = viewport.height();
+                if width.is_finite() && height.is_finite() && width > 0.0 && height > 0.0 {
+                    return (width, height);
+                }
+            }
             let width = w
                 .inner_width()
                 .ok()

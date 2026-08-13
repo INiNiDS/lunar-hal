@@ -211,7 +211,7 @@ pub fn LossChart(
                     span { class: "mono", style: "color: var(--text-3); margin-left: 8px;", "{last_phys_str}" }
                 }
             }
-            svg { width: "{width}", height: "{height}", view_box: "0 0 {width} {height}",
+            svg { class: "loss-chart", width: "{width}", height: "{height}", view_box: "0 0 {width} {height}",
                 for t in y_ticks.clone() {
                     {
                         let y_norm = if y_max > y_min { (t - y_min) / (y_max - y_min) } else { 0.5 };

@@ -196,7 +196,8 @@ pub fn Pipeline() -> Element {
                                     src: "{url}",
                                     width: "{png_dims().0}",
                                     height: "{png_dims().1}",
-                                    style: "image-rendering: pixelated; max-width: 100%; border-radius: 8px; border: 1px solid var(--border); background: #000;",
+                                    class: "aspect-preview-image",
+                                    style: "image-rendering: pixelated;",
                                 }
                             } else {
                                 div { class: "empty", "Press /pipeline/png" }

@@ -11,11 +11,48 @@ use crate::api::{
     GallerySource, GenerateSceneStarsRequest, ResponseStar, StarModelInputs,
     UpdateSceneStarRequest,
 };
-use crate::os::state::{is_window_lifecycle_visible, use_window_lifecycle};
+use crate::os::state::{
+    is_window_lifecycle_visible, managed_web_frontend_url, use_window_lifecycle,
+};
 use crate::os::{use_os_state, WindowLifecycle};
 
 fn request_id(prefix: &str) -> String {
     format!("{prefix}-{}", js_sys::Date::now())
+}
+
+fn lifecycle_name(lifecycle: WindowLifecycle) -> &'static str {
+    match lifecycle {
+        WindowLifecycle::Visible => "visible",
+        WindowLifecycle::Minimized => "minimized",
+        WindowLifecycle::Blocked => "blocked",
+    }
+}
+
+fn should_refresh_after_lifecycle_transition(
+    previous: WindowLifecycle,
+    current: WindowLifecycle,
+) -> bool {
+    previous != current && current == WindowLifecycle::Visible
+}
+
+fn post_iframe_lifecycle(lifecycle: WindowLifecycle) {
+    let payload = serde_json::json!({
+        "type": "lunar:sandbox-lifecycle",
+        "state": lifecycle_name(lifecycle),
+    })
+    .to_string();
+    let Ok(payload_literal) = serde_json::to_string(&payload) else {
+        return;
+    };
+    let script = format!(
+        r#"(() => {{
+            const frame = document.querySelector('iframe[data-lunar-sandbox-frame="true"]');
+            if (frame && frame.contentWindow) {{
+                frame.contentWindow.postMessage({payload_literal}, '*');
+            }}
+        }})()"#
+    );
+    let _ = dioxus::document::eval(&script);
 }
 
 /// Keep the exact iframe URL while dependencies are temporarily unavailable.
@@ -26,7 +63,28 @@ fn retain_iframe_src(previous: Option<String>, candidate: Option<String>) -> Opt
 
 #[cfg(test)]
 mod tests {
-    use super::retain_iframe_src;
+    use super::{retain_iframe_src, should_refresh_after_lifecycle_transition};
+    use crate::os::WindowLifecycle;
+
+    #[test]
+    fn lifecycle_refresh_runs_only_when_the_window_becomes_visible() {
+        assert!(should_refresh_after_lifecycle_transition(
+            WindowLifecycle::Minimized,
+            WindowLifecycle::Visible,
+        ));
+        assert!(should_refresh_after_lifecycle_transition(
+            WindowLifecycle::Blocked,
+            WindowLifecycle::Visible,
+        ));
+        assert!(!should_refresh_after_lifecycle_transition(
+            WindowLifecycle::Visible,
+            WindowLifecycle::Visible,
+        ));
+        assert!(!should_refresh_after_lifecycle_transition(
+            WindowLifecycle::Visible,
+            WindowLifecycle::Minimized,
+        ));
+    }
 
     #[test]
     fn temporary_dependency_loss_keeps_the_existing_iframe_url() {
@@ -45,16 +103,7 @@ mod tests {
 #[component]
 pub fn Sandbox() -> Element {
     let os = use_os_state();
-    let frontend_url = os
-        .services
-        .read()
-        .iter()
-        .find(|service| {
-            service.name == "frontend"
-                && service.status.is_running()
-                && service.platform.as_deref() == Some("web")
-        })
-        .and_then(|service| service.public_url.clone());
+    let frontend_url = managed_web_frontend_url(&os.services.read());
     let lifecycle = use_window_lifecycle();
     let is_blocked = lifecycle
         .map(|signal| *signal.read() == WindowLifecycle::Blocked)
@@ -69,6 +118,10 @@ pub fn Sandbox() -> Element {
     let mut snapshot = use_signal(|| None::<api::LiveSceneSnapshot>);
     let mut selected_star = use_signal(|| None::<u32>);
     let mut refresh_tick = use_signal(|| 0_u32);
+    let initial_lifecycle = lifecycle
+        .map(|signal| *signal.peek())
+        .unwrap_or(WindowLifecycle::Visible);
+    let mut previous_lifecycle = use_signal(|| initial_lifecycle);
     let mut status = use_signal(|| None::<String>);
     let mut busy = use_signal(|| false);
 
@@ -133,11 +186,28 @@ pub fn Sandbox() -> Element {
     });
 
     use_effect(move || {
-        if let Some(lifecycle) = lifecycle {
-            if *lifecycle.read() == WindowLifecycle::Visible {
-                refresh_tick.set(refresh_tick().wrapping_add(1));
-            }
+        let current = lifecycle
+            .map(|signal| *signal.read())
+            .unwrap_or(WindowLifecycle::Visible);
+        let previous = *previous_lifecycle.peek();
+        if current == previous {
+            return;
         }
+        previous_lifecycle.set(current);
+        if should_refresh_after_lifecycle_transition(previous, current) {
+            // `peek` is deliberate: subscribing this effect to refresh_tick and
+            // then writing it creates an unbounded render/effect loop.
+            let next_tick = (*refresh_tick.peek()).wrapping_add(1);
+            refresh_tick.set(next_tick);
+        }
+    });
+
+    let iframe_lifecycle = lifecycle;
+    use_effect(move || {
+        let current = iframe_lifecycle
+            .map(|signal| *signal.read())
+            .unwrap_or(WindowLifecycle::Visible);
+        post_iframe_lifecycle(current);
     });
 
     let control_disabled = is_blocked || busy();
@@ -162,6 +232,7 @@ pub fn Sandbox() -> Element {
         }
     });
     let iframe_src = retained_iframe_src();
+    let lifecycle_for_iframe_load = lifecycle;
 
     let create_scene = move |_| {
         busy.set(true);
@@ -340,15 +411,22 @@ pub fn Sandbox() -> Element {
         .unwrap_or_default();
 
     rsx! {
-        div { class: "relative h-full min-h-[420px] overflow-hidden bg-black",
+        div { class: "sandbox-app",
             if let Some(src) = iframe_src {
                 iframe {
-                    class: "absolute inset-0 h-full w-full border-0 bg-black",
+                    class: "sandbox-frame",
+                    "data-lunar-sandbox-frame": "true",
                     src: "{src}",
                     title: "Embedded lunar frontend editor",
+                    onload: move |_| {
+                        let current = lifecycle_for_iframe_load
+                            .map(|signal| *signal.read())
+                            .unwrap_or(WindowLifecycle::Visible);
+                        post_iframe_lifecycle(current);
+                    },
                 }
             } else {
-                div { class: "absolute inset-0 grid place-items-center text-center text-sm text-white/55",
+                div { class: "sandbox-empty",
                     div { class: "rounded-2xl border border-white/10 bg-black/60 p-6 backdrop-blur-xl",
                         p { "A running web frontend with a public URL is required." }
                     }
@@ -357,7 +435,7 @@ pub fn Sandbox() -> Element {
 
             // This is the second independent layer: it never imports or mutates
             // iframe state. It only talks to `lunar-backend` through api.rs.
-            aside { class: "absolute left-3 top-3 bottom-3 z-10 flex w-[min(22rem,calc(100%-1.5rem))] flex-col gap-3 overflow-y-auto rounded-2xl border border-white/10 bg-black/75 p-3 text-white/80 shadow-2xl backdrop-blur-xl",
+            aside { class: "sandbox-admin-overlay",
                 div { class: "flex items-center justify-between gap-2",
                     div { h1 { class: "text-sm font-semibold", "Scene administration" } p { class: "text-[10px] uppercase tracking-widest text-white/40", "Backend-owned overlay" } }
                     if busy() { span { class: "text-xs text-amber-300", "Working…" } }

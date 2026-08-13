@@ -33,12 +33,49 @@ impl AppCategory {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WindowContentMode {
+    /// Document-like page with internal vertical scroll.
+    Scroll,
+    /// iframe/canvas occupies all available area, scroll forbidden.
+    Fill,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WindowSizeSpec {
+    pub preferred_width: f64,
+    pub preferred_height: f64,
+    pub min_width: f64,
+    pub min_height: f64,
+}
+
+impl WindowSizeSpec {
+    /// Fit an initial window rect into the usable client area. When the client
+    /// area is smaller than the app minimum, the viewport wins so the window
+    /// stays reachable instead of overflowing beyond the screen.
+    pub fn fit_to_available_space(self, available_width: f64, available_height: f64) -> (f64, f64) {
+        let available_width = available_width.max(0.0);
+        let available_height = available_height.max(0.0);
+        let width = self
+            .preferred_width
+            .min(available_width)
+            .max(self.min_width.min(available_width));
+        let height = self
+            .preferred_height
+            .min(available_height)
+            .max(self.min_height.min(available_height));
+        (width, height)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AppDef {
     pub id: &'static str,
     pub title: &'static str,
     pub category: AppCategory,
     pub desktop_order: u8,
     pub required_services: &'static [&'static str],
+    pub content_mode: WindowContentMode,
+    pub size: WindowSizeSpec,
 }
 
 const BACKEND: &[&str] = &["backend"];
@@ -52,6 +89,13 @@ pub const ALL_APPS: &[AppDef] = &[
         category: AppCategory::Backend,
         desktop_order: 10,
         required_services: BACKEND,
+        content_mode: WindowContentMode::Scroll,
+        size: WindowSizeSpec {
+            preferred_width: 980.0,
+            preferred_height: 680.0,
+            min_width: 480.0,
+            min_height: 360.0,
+        },
     },
     AppDef {
         id: "pipeline",
@@ -59,6 +103,13 @@ pub const ALL_APPS: &[AppDef] = &[
         category: AppCategory::Backend,
         desktop_order: 20,
         required_services: BACKEND,
+        content_mode: WindowContentMode::Scroll,
+        size: WindowSizeSpec {
+            preferred_width: 1040.0,
+            preferred_height: 720.0,
+            min_width: 520.0,
+            min_height: 400.0,
+        },
     },
     AppDef {
         id: "siren_gallery",
@@ -66,6 +117,13 @@ pub const ALL_APPS: &[AppDef] = &[
         category: AppCategory::Backend,
         desktop_order: 30,
         required_services: BACKEND,
+        content_mode: WindowContentMode::Scroll,
+        size: WindowSizeSpec {
+            preferred_width: 1040.0,
+            preferred_height: 720.0,
+            min_width: 360.0,
+            min_height: 300.0,
+        },
     },
     AppDef {
         id: "backend_api",
@@ -73,6 +131,13 @@ pub const ALL_APPS: &[AppDef] = &[
         category: AppCategory::Backend,
         desktop_order: 40,
         required_services: BACKEND,
+        content_mode: WindowContentMode::Scroll,
+        size: WindowSizeSpec {
+            preferred_width: 1000.0,
+            preferred_height: 680.0,
+            min_width: 480.0,
+            min_height: 360.0,
+        },
     },
     AppDef {
         id: "dashboard",
@@ -80,6 +145,13 @@ pub const ALL_APPS: &[AppDef] = &[
         category: AppCategory::TestbenchBackend,
         desktop_order: 10,
         required_services: TESTBENCH_BACKEND,
+        content_mode: WindowContentMode::Scroll,
+        size: WindowSizeSpec {
+            preferred_width: 1020.0,
+            preferred_height: 680.0,
+            min_width: 520.0,
+            min_height: 420.0,
+        },
     },
     AppDef {
         id: "training",
@@ -87,6 +159,13 @@ pub const ALL_APPS: &[AppDef] = &[
         category: AppCategory::TestbenchBackend,
         desktop_order: 20,
         required_services: TESTBENCH_BACKEND,
+        content_mode: WindowContentMode::Scroll,
+        size: WindowSizeSpec {
+            preferred_width: 1080.0,
+            preferred_height: 720.0,
+            min_width: 560.0,
+            min_height: 440.0,
+        },
     },
     AppDef {
         id: "validation",
@@ -94,6 +173,13 @@ pub const ALL_APPS: &[AppDef] = &[
         category: AppCategory::TestbenchBackend,
         desktop_order: 30,
         required_services: TESTBENCH_BACKEND,
+        content_mode: WindowContentMode::Scroll,
+        size: WindowSizeSpec {
+            preferred_width: 1020.0,
+            preferred_height: 680.0,
+            min_width: 520.0,
+            min_height: 420.0,
+        },
     },
     AppDef {
         id: "datasets",
@@ -101,6 +187,13 @@ pub const ALL_APPS: &[AppDef] = &[
         category: AppCategory::TestbenchBackend,
         desktop_order: 40,
         required_services: TESTBENCH_BACKEND,
+        content_mode: WindowContentMode::Scroll,
+        size: WindowSizeSpec {
+            preferred_width: 960.0,
+            preferred_height: 640.0,
+            min_width: 480.0,
+            min_height: 360.0,
+        },
     },
     AppDef {
         id: "sandbox",
@@ -108,6 +201,13 @@ pub const ALL_APPS: &[AppDef] = &[
         category: AppCategory::Frontend,
         desktop_order: 10,
         required_services: SANDBOX_SERVICES,
+        content_mode: WindowContentMode::Fill,
+        size: WindowSizeSpec {
+            preferred_width: 1180.0,
+            preferred_height: 760.0,
+            min_width: 480.0,
+            min_height: 320.0,
+        },
     },
 ];
 
@@ -123,8 +223,6 @@ pub fn apps_for_category(category: AppCategory) -> Vec<&'static AppDef> {
     apps
 }
 
-/// Line-art glyph for an app, drawn as inline SVG so icons stay crisp at any
-/// dock size and inherit `currentColor` from their container.
 #[component]
 pub fn AppIcon(app_id: String) -> Element {
     let body = match app_id.as_str() {
@@ -194,8 +292,6 @@ pub fn AppIcon(app_id: String) -> Element {
     }
 }
 
-/// Renders the body content for a window, dispatching by `app_id`. Service
-/// log windows use the synthetic id `"log:<service-name>"`.
 pub fn app_content(app_id: &str) -> Element {
     if let Some(service) = app_id.strip_prefix("log:") {
         return rsx! { LogWindow { service: service.to_string() } };
@@ -235,5 +331,33 @@ mod tests {
                     .all(|pair| pair[0].desktop_order <= pair[1].desktop_order)
             );
         }
+    }
+
+    #[test]
+    fn app_dimensions_are_valid() {
+        for app in ALL_APPS {
+            assert!(app.size.preferred_width > 0.0);
+            assert!(app.size.preferred_height > 0.0);
+            assert!(app.size.min_width > 0.0);
+            assert!(app.size.min_height > 0.0);
+            assert!(app.size.preferred_width >= app.size.min_width);
+            assert!(app.size.preferred_height >= app.size.min_height);
+        }
+    }
+
+    #[test]
+    fn small_client_area_overrides_declared_minimum() {
+        let sandbox = app_by_id("sandbox").unwrap();
+        assert_eq!(sandbox.size.fit_to_available_space(320.0, 240.0), (320.0, 240.0));
+        assert_eq!(sandbox.size.fit_to_available_space(1_920.0, 1_080.0), (1_180.0, 760.0));
+    }
+
+    #[test]
+    fn sandbox_is_the_only_fill_mode_app() {
+        assert_eq!(app_by_id("sandbox").unwrap().content_mode, WindowContentMode::Fill);
+        assert!(ALL_APPS
+            .iter()
+            .filter(|app| app.id != "sandbox")
+            .all(|app| app.content_mode == WindowContentMode::Scroll));
     }
 }

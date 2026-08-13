@@ -1,8 +1,8 @@
 use dioxus::prelude::*;
 
-use crate::os::manifest::{AppIcon, app_content};
-use crate::os::{WindowRuntimeContext, use_os_state};
+use crate::os::manifest::{AppIcon, WindowContentMode, app_by_id, app_content};
 use crate::os::state::window_lifecycle_for;
+use crate::os::{WindowRuntimeContext, use_os_state};
 
 #[component]
 pub fn AppHost(window_id: u64, app_id: String, minimized: bool, title: String) -> Element {
@@ -10,12 +10,31 @@ pub fn AppHost(window_id: u64, app_id: String, minimized: bool, title: String) -
     let missing_deps = os.missing_app_dependencies(&app_id);
 
     let current_lifecycle = window_lifecycle_for(minimized, &missing_deps);
+    let body_class = match app_by_id(&app_id).map(|app| app.content_mode) {
+        Some(WindowContentMode::Fill) => "app-window-body--fill",
+        _ => "app-window-body--scroll scrollbar-thin",
+    };
 
     let mut lifecycle = use_signal(|| current_lifecycle);
-
-    if *lifecycle.read() != current_lifecycle {
-        lifecycle.set(current_lifecycle);
-    }
+    let lifecycle_app_id = app_id.clone();
+    let lifecycle_os = os;
+    use_effect(move || {
+        // Subscribe to the authoritative window and service signals, then
+        // publish the derived lifecycle after render. Mutating `lifecycle`
+        // directly during render panics when a minimized window is restored.
+        let minimized_now = lifecycle_os
+            .windows
+            .read()
+            .iter()
+            .find(|window| window.id == window_id)
+            .is_some_and(|window| window.minimized);
+        let missing_now = lifecycle_os.missing_app_dependencies(&lifecycle_app_id);
+        let next = window_lifecycle_for(minimized_now, &missing_now);
+        let previous = *lifecycle.peek();
+        if previous != next {
+            lifecycle.set(next);
+        }
+    });
 
     use_context_provider(|| WindowRuntimeContext {
         window_id,
@@ -24,7 +43,10 @@ pub fn AppHost(window_id: u64, app_id: String, minimized: bool, title: String) -
     });
 
     rsx! {
-        div { class: "relative flex-1 min-h-0 overflow-auto scrollbar-thin bg-bg-1/70",
+        div {
+            class: "app-window-body {body_class}",
+            "data-testid": "app-window-body",
+            "data-app-id": "{app_id}",
             { app_content(&app_id) }
 
             if !missing_deps.is_empty() {

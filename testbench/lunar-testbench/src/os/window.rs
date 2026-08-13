@@ -2,7 +2,7 @@ use dioxus::prelude::*;
 
 use crate::os::app_host::AppHost;
 use crate::os::manifest::AppIcon;
-use crate::os::{use_os_state, viewport_size, DragKind, WindowState, OsState};
+use crate::os::{DragKind, OsState, WindowState, use_os_state, viewport_size};
 
 #[component]
 pub fn Window(win: WindowState) -> Element {
@@ -31,11 +31,14 @@ pub fn Window(win: WindowState) -> Element {
         div {
             class: "{radius}",
             style: "{style}",
+            "data-app-id": "{app_id}",
+            "data-testid": "webos-window",
             aria_hidden: if win.minimized { "true" } else { "false" },
             onmousedown: move |_| os.focus_window(id),
 
             div {
                 class: "flex items-center h-9 pl-3 gap-2.5 shrink-0 border-b border-white/[0.08] bg-gradient-to-b from-white/[0.09] to-white/[0.02] cursor-grab active:cursor-grabbing",
+                "data-testid": "window-titlebar",
                 onmousedown: move |e| {
                     let p = e.client_coordinates();
                     os.begin_drag(id, DragKind::Move, p.x, p.y);
@@ -82,7 +85,7 @@ pub fn Window(win: WindowState) -> Element {
 
             AppHost {
                 window_id: id,
-                app_id: app_id,
+                app_id: app_id.clone(),
                 minimized: win.minimized,
                 title: title,
             }

@@ -204,9 +204,9 @@ pub fn SirenGallery() -> Element {
             }
             if let Some(message) = status() { p { class: "rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/70", "{message}" } }
 
-            div { class: "grid gap-4 xl:grid-cols-[19rem_minmax(0,1fr)_20rem]",
+            div { class: "gallery-layout",
                 // Generation panel: a real POST /gallery/stars flow, not a temporary PNG.
-                section { class: "card space-y-3",
+                section { class: "card gallery-builder space-y-3",
                     h2 { class: "card-title", "Generate & save" }
                     label { class: "block text-xs text-white/55", "Name" input { class: "mt-1 w-full rounded-lg bg-black/35 px-2 py-1.5 text-sm", value: "{name()}", oninput: move |event| name.set(event.value()) } }
                     div { class: "grid grid-cols-2 gap-2",
@@ -219,7 +219,7 @@ pub fn SirenGallery() -> Element {
                     p { class: "text-[11px] leading-relaxed text-white/40", "The backend produces the SIREN PNG, writes metadata atomically, and returns a durable Gallery URL." }
                 }
 
-                section { class: "min-w-0 space-y-3",
+                section { class: "gallery-content",
                     div { class: "flex flex-wrap items-center gap-2",
                         input { class: "min-w-40 flex-1 rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm", placeholder: "Search name, tag, or id", value: "{query()}", oninput: move |event| query.set(event.value()) }
                         select { class: "rounded-lg border border-white/10 bg-black/35 px-2 py-2 text-xs", value: "{sort()}", onchange: move |event| sort.set(event.value()),
@@ -231,7 +231,7 @@ pub fn SirenGallery() -> Element {
                     if records().is_empty() {
                         div { class: "rounded-2xl border border-dashed border-white/15 p-10 text-center text-sm text-white/45", "No saved stars match this view." }
                     } else {
-                        div { class: "grid grid-cols-2 gap-3 sm:grid-cols-3 2xl:grid-cols-4",
+                        div { class: "gallery-grid",
                             for record in records() {
                                 {
                                     let label = display_name(&record);
@@ -252,7 +252,7 @@ pub fn SirenGallery() -> Element {
                     }
                 }
 
-                aside { class: "card min-h-64 space-y-3",
+                aside { class: "card gallery-detail min-h-64 space-y-3",
                     h2 { class: "card-title", "Details" }
                     if let Some(record) = selected() {
                         if let Some(src) = selected_thumbnail { img { class: "aspect-square w-full rounded-xl border border-white/10 object-cover", src: "{src}", alt: "Selected texture preview" } }

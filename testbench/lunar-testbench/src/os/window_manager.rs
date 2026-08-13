@@ -20,6 +20,7 @@ pub fn WindowManager() -> Element {
         if dragging {
             div {
                 class: "fixed inset-0 z-[999] cursor-move",
+                "data-testid": "window-drag-overlay",
                 onmousemove: move |e| {
                     let p = e.client_coordinates();
                     os.update_drag(p.x, p.y);

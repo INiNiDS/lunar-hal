@@ -983,3 +983,235 @@ table.tbl {
     .split { grid-template-columns: 1fr; }
     .grid-2-eq { grid-template-columns: 1fr; }
 }
+
+/* WebOS window container queries */
+.app-window-body {
+    position: relative;
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: 0;
+    isolation: isolate;
+    background: color-mix(in srgb, var(--bg-1) 70%, transparent);
+    container-name: app-window;
+    container-type: inline-size;
+}
+
+.app-window-body--scroll {
+    overflow: auto;
+    overscroll-behavior: contain;
+}
+
+.app-window-body--fill {
+    overflow: hidden;
+}
+
+.app-window-body--fill > * {
+    width: 100%;
+    height: 100%;
+    min-width: 0;
+    min-height: 0;
+}
+
+.app-window-body .page,
+.app-window-body .page-header {
+    min-width: 0;
+}
+
+.app-window-body .page {
+    max-width: none;
+    padding: clamp(14px, 3cqw, 28px);
+}
+
+.app-window-body :is(.grid, .split, .grid-2-eq, .row, .toolbar, .page-header) > * {
+    min-width: 0;
+}
+
+.app-window-body .row,
+.app-window-body .toolbar,
+.app-window-body .page-header {
+    flex-wrap: wrap;
+}
+
+.app-window-body :is(input, select, textarea) {
+    max-width: 100%;
+}
+
+.app-window-body .tabs {
+    overflow-x: auto;
+    overscroll-behavior-inline: contain;
+}
+
+.app-window-body .tab {
+    flex: 0 0 auto;
+    white-space: nowrap;
+}
+
+.app-window-body .card {
+    min-width: 0;
+}
+
+.app-window-body .code-block,
+.app-window-body .json-editor,
+.app-window-body .table-scroll {
+    max-width: 100%;
+    overflow: auto;
+}
+
+.app-window-body .tbl {
+    min-width: max-content;
+}
+
+.loss-chart {
+    display: block;
+    width: 100%;
+    max-width: 100%;
+    height: auto;
+}
+
+.aspect-preview-image {
+    display: block;
+    width: min(100%, 40rem);
+    max-width: 100%;
+    height: auto;
+    aspect-ratio: 1;
+    object-fit: contain;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: #000;
+}
+
+.gallery-layout {
+    display: grid;
+    grid-template-columns: minmax(14rem, 19rem) minmax(0, 1fr) minmax(16rem, 20rem);
+    gap: 1rem;
+    align-items: start;
+}
+
+.gallery-content { min-width: 0; }
+
+.gallery-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 10rem), 1fr));
+    gap: .75rem;
+}
+
+.sandbox-app {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+    background: #000;
+}
+
+.sandbox-frame {
+    position: absolute;
+    inset: 0;
+    display: block;
+    width: 100%;
+    height: 100%;
+    min-width: 0;
+    min-height: 0;
+    border: 0;
+    background: #000;
+}
+
+.sandbox-empty {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    padding: 1rem;
+    text-align: center;
+    color: rgba(255, 255, 255, .55);
+}
+
+.sandbox-admin-overlay {
+    position: absolute;
+    z-index: 10;
+    top: .75rem;
+    bottom: .75rem;
+    left: .75rem;
+    display: flex;
+    width: min(22rem, calc(100% - 1.5rem));
+    min-width: 0;
+    flex-direction: column;
+    gap: .75rem;
+    overflow: auto;
+    padding: .75rem;
+    border: 1px solid rgba(255, 255, 255, .10);
+    border-radius: 1rem;
+    background: rgba(0, 0, 0, .75);
+    color: rgba(255, 255, 255, .8);
+    box-shadow: 0 1.5rem 3rem rgba(0, 0, 0, .45);
+    backdrop-filter: blur(1rem);
+    pointer-events: auto;
+}
+
+@container app-window (max-width: 899px) {
+    .app-window-body .split,
+    .app-window-body .grid-2-eq {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .gallery-layout {
+        grid-template-columns: minmax(13rem, 18rem) minmax(0, 1fr);
+    }
+
+    .gallery-detail {
+        grid-column: 1 / -1;
+    }
+}
+
+@container app-window (max-width: 599px) {
+    .app-window-body .page {
+        padding: 12px;
+    }
+
+    .app-window-body .page-header {
+        gap: .5rem;
+    }
+
+    .app-window-body .page-title {
+        font-size: 18px;
+    }
+
+    .app-window-body .grid-3,
+    .app-window-body .grid-2 {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .gallery-layout {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .gallery-builder,
+    .gallery-detail {
+        grid-column: auto;
+    }
+
+    .gallery-grid {
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 8.5rem), 1fr));
+    }
+
+    .sandbox-admin-overlay {
+        top: auto;
+        right: .5rem;
+        bottom: .5rem;
+        left: .5rem;
+        width: auto;
+        max-height: 52%;
+        border-radius: 1rem;
+    }
+}
+
+@container app-window (max-width: 419px) {
+    .app-window-body .card {
+        padding: 12px;
+    }
+
+    .app-window-body .btn {
+        min-height: 2.25rem;
+    }
+}

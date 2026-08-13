@@ -9,7 +9,15 @@ use crate::api::{
     ServiceInfo, ServiceLogEvent, ServiceMeta, ServiceStatus, StartServiceRequest,
 };
 use crate::components::ui::tokio_time_sleep;
-use crate::os::manifest::app_by_id;
+use crate::os::manifest::{WindowSizeSpec, app_by_id};
+
+/// Reserve space at the bottom for the Dock / safe-area.
+const DOCK_HEIGHT: f64 = 96.0;
+/// Distance from a screen edge (in px) that triggers Windows-style snapping.
+const SNAP_EDGE_PX: f64 = 16.0;
+/// Max log lines retained client-side per service (older lines are dropped;
+/// the server keeps its own ring buffer, re-fetchable via `/services/{name}/logs`).
+const MAX_CLIENT_LOGS_PER_SERVICE: usize = 500;
 
 /// Coarse boot sequence for the "black room" intro: everything starts dark,
 /// then the overhead lamp ignites once `lunar-start-backend` answers
@@ -40,6 +48,30 @@ pub fn window_lifecycle_for(minimized: bool, missing_dependencies: &[String]) ->
     } else {
         WindowLifecycle::Blocked
     }
+}
+
+/// Resolve the browser-addressable managed frontend once, so desktop gating and
+/// the Sandbox iframe cannot disagree about which service is usable.
+pub fn managed_web_frontend_url(services: &[ServiceInfo]) -> Option<String> {
+    services
+        .iter()
+        .find(|service| service.name == "frontend" && service.status.is_running())
+        .filter(|service| {
+            service
+                .platform
+                .as_deref()
+                .is_some_and(|platform| platform.trim().eq_ignore_ascii_case("web"))
+        })
+        .and_then(|service| service.public_url.as_deref())
+        .map(str::trim)
+        .filter(|url| !url.is_empty())
+        .map(|url| url.trim_end_matches('/').to_string())
+}
+
+fn restore_existing_window(windows: &mut [WindowState], app_id: &str) -> Option<u64> {
+    let window = windows.iter_mut().find(|window| window.app_id == app_id)?;
+    window.minimized = false;
+    Some(window.id)
 }
 
 /// Safe to call from a spawned task because it reads a captured signal rather
@@ -75,6 +107,7 @@ pub struct ServiceSettingsState {
     pub saving: bool,
     pub starting: bool,
 }
+
 impl ServiceSettingsState {
     fn loading(service: &str) -> Self {
         Self {
@@ -96,26 +129,21 @@ impl ServiceSettingsState {
     }
 }
 
-/// Max log lines retained client-side per service (older lines are dropped;
-/// the server keeps its own ring buffer, re-fetchable via `/services/{name}/logs`).
-const MAX_CLIENT_LOGS_PER_SERVICE: usize = 500;
-
 /// A single open (or minimized) OS window hosting one app/page.
 #[derive(Clone, Debug, PartialEq)]
 pub struct WindowState {
     pub id: u64,
-    /// Identifies which app/page is hosted in this window (e.g. "dashboard").
-    /// Windows are singleton per `app_id`, like reopening a macOS app.
     pub app_id: String,
     pub title: String,
     pub x: f64,
     pub y: f64,
     pub width: f64,
     pub height: f64,
+    pub min_width: f64,
+    pub min_height: f64,
     pub z: i32,
     pub minimized: bool,
     pub maximized: bool,
-    /// Rect saved from before maximizing/snapping, restored when un-maximized.
     pub restore_rect: Option<(f64, f64, f64, f64)>,
 }
 
@@ -145,29 +173,18 @@ pub struct DragOp {
     pub start_y: f64,
     pub start_w: f64,
     pub start_h: f64,
+    pub min_width: f64,
+    pub min_height: f64,
 }
-
-const MIN_WINDOW_W: f64 = 280.0;
-const MIN_WINDOW_H: f64 = 160.0;
-/// Distance from a screen edge (in px) that triggers Windows-style snapping
-/// when a window drag is released there.
-const SNAP_EDGE_PX: f64 = 16.0;
 
 /// Global reactive state for the WebOS shell, installed into context once by
 /// [`provide_os_state`] and read anywhere via [`use_os_state`].
-///
-/// All fields are Signals. `OsState` itself is a cheap `Copy` handle; reading
-/// only needs `&self`, but Dioxus's `Signal::set`/`with_mut` require `&mut
-/// self`, so mutating methods below take `&mut self` and callers keep their
-/// local `os` binding as `let mut os = use_os_state();`.
 #[derive(Clone, Copy)]
 pub struct OsState {
-    /// Whether `lunar-start-backend` answered `/health` on the last poll.
     pub backend_online: Signal<bool>,
     pub boot_phase: Signal<BootPhase>,
     pub services: Signal<Vec<ServiceInfo>>,
     pub meta: Signal<Vec<ServiceMeta>>,
-    /// Buffered log lines per service name, newest last.
     pub logs: Signal<HashMap<String, Vec<ServiceLogEvent>>>,
     pub health: Signal<Option<HealthResponse>>,
     pub windows: Signal<Vec<WindowState>>,
@@ -228,16 +245,9 @@ impl OsState {
 
             let frontend = services.iter().find(|s| s.name == "frontend");
             let frontend_running = frontend.as_ref().is_some_and(|s| s.status.is_running());
-            let frontend_is_web =
-                frontend.as_ref().and_then(|s| s.platform.as_deref()) == Some("web");
-            let frontend_has_url = frontend
-                .as_ref()
-                .and_then(|s| s.public_url.as_deref())
-                .is_some_and(|url| !url.is_empty());
-
             if !frontend_running {
                 missing.push("frontend".to_string());
-            } else if !frontend_is_web || !frontend_has_url {
+            } else if managed_web_frontend_url(&services).is_none() {
                 missing.push("frontend (web platform with public URL required)".to_string());
             }
             return missing;
@@ -258,15 +268,7 @@ impl OsState {
     }
 
     fn sandbox_has_web_frontend(services: &[ServiceInfo]) -> bool {
-        services.iter().any(|service| {
-            service.name == "frontend"
-                && service.status.is_running()
-                && service.platform.as_deref() == Some("web")
-                && service
-                    .public_url
-                    .as_deref()
-                    .is_some_and(|url| !url.is_empty())
-        })
+        managed_web_frontend_url(services).is_some()
     }
 
     fn sandbox_is_available(services: &[ServiceInfo]) -> bool {
@@ -276,24 +278,6 @@ impl OsState {
             && Self::sandbox_has_web_frontend(services)
     }
 
-    /// A deliberate frontend platform switch makes the existing iframe invalid.
-    /// A stopped/restarting service does not: its window stays mounted and is
-    /// covered by the normal Blocked lifecycle overlay.
-    fn sandbox_should_close_for_platform_switch(
-        previous: &[ServiceInfo],
-        next: &[ServiceInfo],
-    ) -> bool {
-        if !Self::sandbox_has_web_frontend(previous) {
-            return false;
-        }
-        next.iter().find(|service| service.name == "frontend").is_some_and(|frontend| {
-            frontend.status.is_running()
-                && matches!(frontend.platform.as_deref(), Some("desktop" | "android"))
-        })
-    }
-
-    /// Sandbox is an iframe host rather than a generic frontend app. It is
-    /// hidden unless both backend and an addressable web frontend are running.
     pub fn is_app_visible(&self, app_id: &str) -> bool {
         app_id != "sandbox" || Self::sandbox_is_available(&self.services.read())
     }
@@ -301,6 +285,15 @@ impl OsState {
     pub fn is_app_available(&self, app_id: &str) -> bool {
         self.is_app_visible(app_id) && self.are_app_dependencies_running(app_id)
     }
+
+    /// Existing windows stay reachable even when launch dependencies go down.
+    pub fn has_window(&self, app_id: &str) -> bool {
+        self.windows
+            .read()
+            .iter()
+            .any(|window| window.app_id == app_id)
+    }
+
     pub fn service_reveal_epoch(&self, service: &str) -> u64 {
         *self.service_reveal_epochs.read().get(service).unwrap_or(&0)
     }
@@ -321,13 +314,8 @@ impl OsState {
                 self.service_action_errors.write().remove(&service.name);
             }
         }
-        if Self::sandbox_should_close_for_platform_switch(&previous, &next) {
-            // Desktop/Android cannot be embedded in an iframe. This is a
-            // deliberate platform change, unlike a temporary service outage.
-            self.windows.with_mut(|windows| {
-                windows.retain(|window| window.app_id != "sandbox");
-            });
-        }
+        // Service/platform changes alter the window lifecycle to `Blocked`;
+        // they must never destroy an already-open (possibly minimized) window.
         self.services.set(next);
     }
 
@@ -343,25 +331,17 @@ impl OsState {
         self.meta.read().iter().find(|m| m.name == name).cloned()
     }
 
-    /// Opens a new window for `app_id`, or un-minimizes and focuses the
-    /// existing one if it's already open.
     pub fn open_window(&mut self, app_id: &str, title: &str) {
-        if !self.is_app_available(app_id) {
-            return;
-        }
+        // Restore before checking launch prerequisites. A mounted window may be
+        // blocked by a temporarily missing service, but it must remain reachable.
         let existing_id = self
             .windows
-            .read()
-            .iter()
-            .find(|w| w.app_id == app_id)
-            .map(|w| w.id);
+            .with_mut(|windows| restore_existing_window(windows, app_id));
         if let Some(id) = existing_id {
-            self.windows.with_mut(|ws| {
-                if let Some(w) = ws.iter_mut().find(|w| w.id == id) {
-                    w.minimized = false;
-                }
-            });
             self.focus_window(id);
+            return;
+        }
+        if !self.is_app_available(app_id) {
             return;
         }
 
@@ -370,19 +350,58 @@ impl OsState {
         let z = *self.next_z.read();
         self.next_z.set(z + 1);
 
-        // Cascade new windows slightly so they don't perfectly overlap.
+        let spec: WindowSizeSpec = if let Some(app) = app_by_id(app_id) {
+            app.size
+        } else if app_id.starts_with("log:") {
+            WindowSizeSpec {
+                preferred_width: 800.0,
+                preferred_height: 520.0,
+                min_width: 320.0,
+                min_height: 240.0,
+            }
+        } else {
+            WindowSizeSpec {
+                preferred_width: 860.0,
+                preferred_height: 600.0,
+                min_width: 280.0,
+                min_height: 160.0,
+            }
+        };
+
+        let (viewport_w, viewport_h) = crate::os::viewport_size();
+        let available_w = viewport_w;
+        let available_h = (viewport_h - DOCK_HEIGHT).max(0.0);
+
+        let (width, height) = spec.fit_to_available_space(available_w, available_h);
+
         let count = self.windows.read().len() as f64;
         let offset = (count % 8.0) * 28.0;
+        let mut x = 120.0 + offset;
+        let mut y = 80.0 + offset;
+
+        if count == 0.0 {
+            x = (available_w - width) / 2.0;
+            y = (available_h - height) / 2.0;
+        }
+
+        if x + width > available_w {
+            x = (available_w - width).max(0.0);
+        }
+        if y + height > available_h {
+            y = (available_h - height).max(0.0);
+        }
 
         self.windows.with_mut(|ws| {
             ws.push(WindowState {
                 id,
                 app_id: app_id.to_string(),
                 title: title.to_string(),
-                x: 120.0 + offset,
-                y: 90.0 + offset,
-                width: 860.0,
-                height: 600.0,
+                x,
+                y,
+                width,
+                height,
+                min_width: spec.min_width,
+                min_height: spec.min_height,
                 z,
                 minimized: false,
                 maximized: false,
@@ -392,19 +411,10 @@ impl OsState {
     }
 
     pub fn activate_app(&mut self, app_id: &str) {
-        let id = {
-            self.windows
-                .read()
-                .iter()
-                .find(|window| window.app_id == app_id)
-                .map(|window| window.id)
-        };
+        let id = self
+            .windows
+            .with_mut(|windows| restore_existing_window(windows, app_id));
         if let Some(id) = id {
-            self.windows.with_mut(|windows| {
-                if let Some(window) = windows.iter_mut().find(|window| window.id == id) {
-                    window.minimized = false;
-                }
-            });
             self.focus_window(id);
         }
     }
@@ -478,9 +488,11 @@ impl OsState {
             }
         });
     }
+
     pub fn close_service_settings(&mut self) {
         self.service_settings.set(None);
     }
+
     pub fn update_service_setting(&mut self, key: &str, value: String) {
         let mut draft = None;
         if let Some(state) = self.service_settings.write().as_mut() {
@@ -614,12 +626,15 @@ impl OsState {
             }
         });
     }
+
     pub fn restart_managed_service(&mut self, service: &str) {
         self.run_service_action(service, true);
     }
+
     pub fn stop_managed_service(&mut self, service: &str) {
         self.run_service_action(service, false);
     }
+
     fn run_service_action(&mut self, service: &str, restart: bool) {
         let service = service.to_string();
         let mut os = *self;
@@ -641,11 +656,24 @@ impl OsState {
         });
     }
 
+    fn cancel_drag_for_window(&mut self, id: u64) {
+        let dragging_window = self.drag.read().as_ref().map(|drag| drag.window_id);
+        if dragging_window == Some(id) {
+            self.cancel_drag();
+        }
+    }
+
+    pub fn cancel_drag(&mut self) {
+        self.drag.set(None);
+    }
+
     pub fn close_window(&mut self, id: u64) {
+        self.cancel_drag_for_window(id);
         self.windows.with_mut(|ws| ws.retain(|w| w.id != id));
     }
 
     pub fn minimize_window(&mut self, id: u64) {
+        self.cancel_drag_for_window(id);
         self.windows.with_mut(|ws| {
             if let Some(w) = ws.iter_mut().find(|w| w.id == id) {
                 w.minimized = true;
@@ -653,17 +681,18 @@ impl OsState {
         });
     }
 
-    /// Toggles between the window's free-floating rect and a full-viewport
-    /// rect, remembering the previous rect so it can be restored.
     pub fn toggle_maximize_window(&mut self, id: u64, viewport_w: f64, viewport_h: f64) {
         self.windows.with_mut(|ws| {
             if let Some(w) = ws.iter_mut().find(|w| w.id == id) {
+                let avail_h = (viewport_h - DOCK_HEIGHT).max(0.0);
                 if w.maximized {
                     if let Some((x, y, width, height)) = w.restore_rect.take() {
-                        w.x = x;
-                        w.y = y;
-                        w.width = width;
-                        w.height = height;
+                        let clamped_w = width.min(viewport_w).max(w.min_width.min(viewport_w));
+                        let clamped_h = height.min(avail_h).max(w.min_height.min(avail_h));
+                        w.x = x.min(viewport_w - clamped_w).max(0.0);
+                        w.y = y.min(avail_h - clamped_h).max(0.0);
+                        w.width = clamped_w;
+                        w.height = clamped_h;
                     }
                     w.maximized = false;
                 } else {
@@ -671,7 +700,7 @@ impl OsState {
                     w.x = 0.0;
                     w.y = 0.0;
                     w.width = viewport_w;
-                    w.height = viewport_h;
+                    w.height = avail_h;
                     w.maximized = true;
                 }
             }
@@ -688,16 +717,16 @@ impl OsState {
         });
     }
 
-    /// Starts a move/resize gesture from a window's current rect; the actual
-    /// rect updates happen in [`OsState::update_drag`] as the mouse moves.
     pub fn begin_drag(&mut self, window_id: u64, kind: DragKind, mouse_x: f64, mouse_y: f64) {
         let rect = self
             .windows
             .read()
             .iter()
             .find(|w| w.id == window_id)
-            .map(|w| (w.x, w.y, w.width, w.height));
-        let Some((x, y, w, h)) = rect else { return };
+            .map(|w| (w.x, w.y, w.width, w.height, w.min_width, w.min_height));
+        let Some((x, y, w, h, min_w, min_h)) = rect else {
+            return;
+        };
         self.focus_window(window_id);
         self.drag.set(Some(DragOp {
             window_id,
@@ -708,50 +737,53 @@ impl OsState {
             start_y: y,
             start_w: w,
             start_h: h,
+            min_width: min_w,
+            min_height: min_h,
         }));
     }
 
-    /// Applies the in-flight drag/resize gesture (if any) for the current
-    /// mouse position.
     pub fn update_drag(&mut self, mouse_x: f64, mouse_y: f64) {
         let Some(op) = *self.drag.read() else { return };
         let dx = mouse_x - op.start_mouse_x;
         let dy = mouse_y - op.start_mouse_y;
 
         let (mut x, mut y, mut w, mut h) = (op.start_x, op.start_y, op.start_w, op.start_h);
+        let min_w = op.min_width;
+        let min_h = op.min_height;
+
         match op.kind {
             DragKind::Move => {
                 x += dx;
                 y += dy;
             }
-            DragKind::ResizeE => w = (op.start_w + dx).max(MIN_WINDOW_W),
+            DragKind::ResizeE => w = (op.start_w + dx).max(min_w),
             DragKind::ResizeW => {
-                w = (op.start_w - dx).max(MIN_WINDOW_W);
+                w = (op.start_w - dx).max(min_w);
                 x = op.start_x + (op.start_w - w);
             }
-            DragKind::ResizeS => h = (op.start_h + dy).max(MIN_WINDOW_H),
+            DragKind::ResizeS => h = (op.start_h + dy).max(min_h),
             DragKind::ResizeN => {
-                h = (op.start_h - dy).max(MIN_WINDOW_H);
+                h = (op.start_h - dy).max(min_h);
                 y = op.start_y + (op.start_h - h);
             }
             DragKind::ResizeSE => {
-                w = (op.start_w + dx).max(MIN_WINDOW_W);
-                h = (op.start_h + dy).max(MIN_WINDOW_H);
+                w = (op.start_w + dx).max(min_w);
+                h = (op.start_h + dy).max(min_h);
             }
             DragKind::ResizeSW => {
-                w = (op.start_w - dx).max(MIN_WINDOW_W);
+                w = (op.start_w - dx).max(min_w);
                 x = op.start_x + (op.start_w - w);
-                h = (op.start_h + dy).max(MIN_WINDOW_H);
+                h = (op.start_h + dy).max(min_h);
             }
             DragKind::ResizeNE => {
-                w = (op.start_w + dx).max(MIN_WINDOW_W);
-                h = (op.start_h - dy).max(MIN_WINDOW_H);
+                w = (op.start_w + dx).max(min_w);
+                h = (op.start_h - dy).max(min_h);
                 y = op.start_y + (op.start_h - h);
             }
             DragKind::ResizeNW => {
-                w = (op.start_w - dx).max(MIN_WINDOW_W);
+                w = (op.start_w - dx).max(min_w);
                 x = op.start_x + (op.start_w - w);
-                h = (op.start_h - dy).max(MIN_WINDOW_H);
+                h = (op.start_h - dy).max(min_h);
                 y = op.start_y + (op.start_h - h);
             }
         }
@@ -762,15 +794,11 @@ impl OsState {
                 win.y = y;
                 win.width = w;
                 win.height = h;
-                // A move/resize away from the maximized rect effectively
-                // "un-maximizes" the window.
                 win.maximized = false;
             }
         });
     }
 
-    /// Ends the in-flight drag/resize gesture, applying Windows-style edge
-    /// snapping for plain window moves released near a screen edge.
     pub fn end_drag(&mut self, viewport_w: f64, viewport_h: f64, mouse_x: f64, mouse_y: f64) {
         let Some(op) = *self.drag.read() else { return };
         self.drag.set(None);
@@ -779,12 +807,32 @@ impl OsState {
         }
 
         let win_id = op.window_id;
+        let avail_h = (viewport_h - DOCK_HEIGHT).max(0.0);
+        let min_w = op.min_width;
+
         if mouse_y <= SNAP_EDGE_PX {
-            self.snap_rect(win_id, 0.0, 0.0, viewport_w, viewport_h);
+            self.snap_rect(win_id, 0.0, 0.0, viewport_w, avail_h);
         } else if mouse_x <= SNAP_EDGE_PX {
-            self.snap_rect(win_id, 0.0, 0.0, viewport_w / 2.0, viewport_h);
+            let half_w = (viewport_w / 2.0).max(min_w);
+            let snap_w = if half_w > viewport_w {
+                viewport_w
+            } else {
+                half_w
+            };
+            self.snap_rect(win_id, 0.0, 0.0, snap_w, avail_h);
         } else if mouse_x >= viewport_w - SNAP_EDGE_PX {
-            self.snap_rect(win_id, viewport_w / 2.0, 0.0, viewport_w / 2.0, viewport_h);
+            let half_w = (viewport_w / 2.0).max(min_w);
+            let snap_w = if half_w > viewport_w {
+                viewport_w
+            } else {
+                half_w
+            };
+            let snap_x = if snap_w >= viewport_w {
+                0.0
+            } else {
+                viewport_w - snap_w
+            };
+            self.snap_rect(win_id, snap_x, 0.0, snap_w, avail_h);
         }
     }
 
@@ -799,6 +847,39 @@ impl OsState {
                 w.width = width;
                 w.height = height;
                 w.maximized = true;
+            }
+        });
+    }
+
+    pub fn reflow_windows(&mut self, viewport_w: f64, viewport_h: f64) {
+        let avail_h = (viewport_h - DOCK_HEIGHT).max(0.0);
+        self.windows.with_mut(|ws| {
+            for w in ws.iter_mut() {
+                if w.maximized {
+                    w.width = viewport_w;
+                    w.height = avail_h;
+                    w.x = 0.0;
+                    w.y = 0.0;
+                } else {
+                    if w.width > viewport_w {
+                        w.width = viewport_w.max(w.min_width.min(viewport_w));
+                    }
+                    if w.height > avail_h {
+                        w.height = avail_h.max(w.min_height.min(avail_h));
+                    }
+                    if w.x + w.width > viewport_w {
+                        w.x = (viewport_w - w.width).max(0.0);
+                    }
+                    if w.x < 0.0 {
+                        w.x = 0.0;
+                    }
+                    if w.y > avail_h - 40.0 {
+                        w.y = (avail_h - 40.0).max(0.0);
+                    }
+                    if w.y < 0.0 {
+                        w.y = 0.0;
+                    }
+                }
             }
         });
     }
@@ -817,6 +898,7 @@ fn apply_service_error(
         state.error = Some(error.message);
     }
 }
+
 fn split_lines(value: &str) -> Vec<String> {
     value
         .lines()
@@ -825,6 +907,7 @@ fn split_lines(value: &str) -> Vec<String> {
         .map(str::to_string)
         .collect()
 }
+
 fn custom_build_args(values: &ServiceConfigValues) -> Vec<String> {
     let mut out = Vec::new();
     let mut i = 0;
@@ -840,6 +923,7 @@ fn custom_build_args(values: &ServiceConfigValues) -> Vec<String> {
     }
     out
 }
+
 fn compute_features(values: &ServiceConfigValues) -> (String, bool) {
     if let Some(i) = values.build_args.iter().position(|a| a == "--features") {
         if let Some(value) = values.build_args.get(i + 1) {
@@ -890,6 +974,7 @@ pub fn form_values_from_config(
         })
         .collect()
 }
+
 pub fn config_from_form(
     service: &str,
     schema: &ServiceConfigSchema,
@@ -965,6 +1050,7 @@ pub fn config_from_form(
     }
     result
 }
+
 fn configured_port(service: &str, values: &ServiceConfigValues) -> Option<u16> {
     match service {
         "backend" => values.env.get("LUNAR_BACKEND_PORT")?.parse().ok(),
@@ -984,6 +1070,7 @@ fn configured_port(service: &str, values: &ServiceConfigValues) -> Option<u16> {
         _ => None,
     }
 }
+
 fn port_field(service: &str) -> &'static str {
     match service {
         "backend" => "LUNAR_BACKEND_PORT",
@@ -992,6 +1079,7 @@ fn port_field(service: &str) -> &'static str {
         _ => "port",
     }
 }
+
 fn known_port_conflict(
     service: &str,
     configs: &HashMap<String, ServiceConfigValues>,
@@ -1008,6 +1096,7 @@ fn known_port_conflict(
         }
     })
 }
+
 pub fn validate_form(
     schema: &ServiceConfigSchema,
     form: &HashMap<String, String>,
@@ -1050,24 +1139,32 @@ pub fn use_os_state() -> OsState {
 pub fn use_os_runtime() {
     let mut os = use_os_state();
 
-    // Health polling -> boot phase state machine.
+    // Health polling -> one-way boot sequence. Once the desktop has reached
+    // Ready, a transient backend outage may mark it offline but must not unmount
+    // WindowManager/AppHost and destroy the sessions kept by minimized windows.
     use_future(move || async move {
+        let mut boot_completed = matches!(*os.boot_phase.read(), BootPhase::Ready);
         loop {
             match api::health().await {
                 Ok(h) => {
                     os.health.set(Some(h));
-                    if !*os.backend_online.read() {
-                        os.backend_online.set(true);
+                    os.backend_online.set(true);
+                    if !boot_completed {
                         os.boot_phase.set(BootPhase::LampIgnite);
                         tokio_time_sleep(1200).await;
                         os.boot_phase.set(BootPhase::DesktopReveal);
                         tokio_time_sleep(1400).await;
                         os.boot_phase.set(BootPhase::Ready);
+                        boot_completed = true;
+                    } else if !matches!(*os.boot_phase.read(), BootPhase::Ready) {
+                        os.boot_phase.set(BootPhase::Ready);
                     }
                 }
                 Err(_) => {
                     os.backend_online.set(false);
-                    os.boot_phase.set(BootPhase::Dark);
+                    if !boot_completed {
+                        os.boot_phase.set(BootPhase::Dark);
+                    }
                 }
             }
             tokio_time_sleep(2000).await;
@@ -1148,6 +1245,40 @@ mod settings_tests {
     }
 
     #[test]
+    fn frontend_url_is_shared_and_normalized() {
+        let services = vec![running_service(
+            "frontend",
+            Some(" WEB "),
+            Some("  http://127.0.0.1:8080/  "),
+        )];
+        assert_eq!(
+            managed_web_frontend_url(&services).as_deref(),
+            Some("http://127.0.0.1:8080")
+        );
+    }
+
+    #[test]
+    fn an_existing_minimized_window_can_always_be_restored() {
+        let mut windows = vec![WindowState {
+            id: 7,
+            app_id: "sandbox".into(),
+            title: "Sandbox".into(),
+            x: 0.0,
+            y: 0.0,
+            width: 800.0,
+            height: 600.0,
+            min_width: 480.0,
+            min_height: 320.0,
+            z: 1,
+            minimized: true,
+            maximized: false,
+            restore_rect: None,
+        }];
+        assert_eq!(restore_existing_window(&mut windows, "sandbox"), Some(7));
+        assert!(!windows[0].minimized);
+    }
+
+    #[test]
     fn sandbox_requires_backend_and_addressable_web_frontend() {
         let web = vec![
             running_service("backend", None, None),
@@ -1167,36 +1298,6 @@ mod settings_tests {
             running_service("frontend", Some("desktop"), None),
         ];
         assert!(!OsState::sandbox_is_available(&desktop));
-    }
-
-    #[test]
-    fn temporary_dependency_loss_blocks_but_does_not_close_sandbox() {
-        let web = vec![
-            running_service("backend", None, None),
-            running_service("frontend", Some("web"), Some("http://127.0.0.1:8080")),
-        ];
-        let backend_stopped = vec![
-            ServiceInfo {
-                name: "backend".into(),
-                status: ServiceStatus::Stopped {
-                    reason: "restart".into(),
-                },
-                pid: None,
-                platform: None,
-                public_url: None,
-            },
-            running_service("frontend", Some("web"), Some("http://127.0.0.1:8080")),
-        ];
-        assert!(!OsState::sandbox_should_close_for_platform_switch(
-            &web,
-            &backend_stopped
-        ));
-
-        let desktop = vec![
-            running_service("backend", None, None),
-            running_service("frontend", Some("desktop"), None),
-        ];
-        assert!(OsState::sandbox_should_close_for_platform_switch(&web, &desktop));
     }
 
     #[test]
@@ -1244,6 +1345,7 @@ mod settings_tests {
         assert_eq!(round_trip.env["LUNAR_FRONTEND_PORT"], "9090");
         assert_eq!(round_trip.extra_args, ["--hot-reload"]);
     }
+
     #[test]
     fn invalid_and_conflicting_web_ports_are_blocked_client_side() {
         let schema = ServiceConfigSchema {
