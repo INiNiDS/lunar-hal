@@ -15,6 +15,14 @@ fn parse_port(value: Option<&str>, default: u16) -> u16 {
         .unwrap_or(default)
 }
 
+fn http_url(host: &str, port: u16) -> String {
+    let mut url = String::from("http://");
+    url.push_str(host);
+    url.push(':');
+    url.push_str(&port.to_string());
+    url
+}
+
 /// Resolves a CLI `--port`/`-p` value before ordered environment fallbacks.
 pub fn resolve_port(args: &[String], env_values: &[Option<&str>], default: u16) -> u16 {
     let cli_port = args
@@ -56,7 +64,7 @@ pub fn get_testbench_port() -> u16 {
 }
 
 pub fn get_url() -> String {
-    format!("http://{}:{}", get_host(), get_port())
+    http_url(&get_host(), get_port())
 }
 
 /// Resolves the backend URL supplied to a frontend runtime. Platform-specific
@@ -67,7 +75,7 @@ pub fn get_frontend_backend_url(default_url: &str) -> String {
 }
 
 pub fn get_testbench_url() -> String {
-    format!("http://{}:{}", get_testbench_host(), get_testbench_port())
+    http_url(&get_testbench_host(), get_testbench_port())
 }
 
 /// Host for the `lunar-start-backend` service manager (see `crates/lunar-start-backend`).
@@ -85,11 +93,7 @@ pub fn get_start_backend_port() -> u16 {
 
 /// Base URL for the `lunar-start-backend` service manager REST + SSE API.
 pub fn get_start_backend_url() -> String {
-    format!(
-        "http://{}:{}",
-        get_start_backend_host(),
-        get_start_backend_port()
-    )
+    http_url(&get_start_backend_host(), get_start_backend_port())
 }
 
 pub fn get_lunar_models_dir() -> PathBuf {
@@ -158,6 +162,17 @@ mod tests {
             parse_port(Some("70000"), DEFAULT_START_BACKEND_PORT),
             DEFAULT_START_BACKEND_PORT
         );
+    }
+
+    #[test]
+    fn url_builder_has_exact_http_shape() {
+        assert_eq!(
+            http_url(DEFAULT_BACKEND_HOST, DEFAULT_BACKEND_PORT),
+            DEFAULT_BACKEND_URL
+        );
+        assert_eq!(http_url("lunar.local", 8080), "http://lunar.local:8080");
+        assert!(!http_url("lunar.local", 8080).contains('{'));
+        assert!(!http_url("lunar.local", 8080).contains('}'));
     }
 
     #[test]
