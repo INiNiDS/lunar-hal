@@ -1285,7 +1285,7 @@ dependencies = [
  "ratatui",
  "rstest",
  "serde",
- "sysinfo 0.38.4",
+ "sysinfo",
  "systemstat",
  "thiserror 2.0.18",
  "tracing-appender",
@@ -2389,7 +2389,7 @@ dependencies = [
  "log",
  "paste",
  "serde",
- "sysinfo 0.38.4",
+ "sysinfo",
  "tracel-llvm",
  "tracel-llvm-bundler",
 ]
@@ -4856,7 +4856,7 @@ dependencies = [
  "log",
  "presser",
  "thiserror 2.0.18",
- "windows 0.62.2",
+ "windows 0.61.3",
 ]
 
 [[package]]
@@ -5271,7 +5271,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.62.2",
+ "windows-core 0.61.2",
 ]
 
 [[package]]
@@ -6154,6 +6154,7 @@ name = "lunar-stellar-core"
 version = "0.1.0"
 dependencies = [
  "getrandom 0.4.3",
+ "gloo-timers 0.4.0",
  "instant",
  "lunar-structures",
  "lunar-utils",
@@ -6220,7 +6221,7 @@ dependencies = [
  "reqwest 0.12.28",
  "serde",
  "serde_json",
- "sysinfo 0.39.6",
+ "sysinfo",
  "thiserror 2.0.18",
  "tokio",
  "tokio-util",
@@ -7142,17 +7143,6 @@ dependencies = [
  "bitflags 2.13.0",
  "block2",
  "objc2",
- "objc2-foundation",
-]
-
-[[package]]
-name = "objc2-open-directory"
-version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bb82bed227edf5201dfedf072bba4015a33d3d4a98519837295a90f0a23f676d"
-dependencies = [
- "objc2",
- "objc2-core-foundation",
  "objc2-foundation",
 ]
 
@@ -10295,21 +10285,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "sysinfo"
-version = "0.39.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d2071df9448915b71c4fe6d25deaf1c22f12bd234f01540b77312bb8e41361e6"
-dependencies = [
- "libc",
- "memchr",
- "ntapi",
- "objc2-core-foundation",
- "objc2-io-kit",
- "objc2-open-directory",
- "windows 0.62.2",
-]
-
-[[package]]
 name = "system-configuration"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10450,7 +10425,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",

@@ -134,27 +134,54 @@ impl JobRegistry {
         ));
 
         tokio::spawn(async move {
-            let _ = stdout_task.await;
-            let _ = stderr_task.await;
+            let child_exit = tokio::select! {
+                result = child.wait() => Some(result),
+                _ = cancel_for_task.cancelled() => None,
+            };
 
-            let cancelled = cancel_for_task.is_cancelled();
-            let status = match child.wait().await {
-                Ok(s) => {
-                    let code = s.code();
-                    job_arc_for_task.write().exit_code = code;
-                    if cancelled {
-                        JobStatus::Cancelled
-                    } else if s.success() {
+            let status = match child_exit {
+                Some(Ok(exit_status)) => {
+                    job_arc_for_task.write().exit_code = exit_status.code();
+                    if exit_status.success() {
                         JobStatus::Completed
                     } else {
                         JobStatus::Failed
                     }
                 }
-                Err(e) => {
-                    job_arc_for_task.write().error_summary = Some(e.to_string());
+                Some(Err(error)) => {
+                    job_arc_for_task.write().error_summary = Some(error.to_string());
                     JobStatus::Failed
                 }
+                None => {
+                    let kill_error = child
+                        .kill()
+                        .await
+                        .err()
+                        .filter(|error| error.kind() != std::io::ErrorKind::InvalidInput);
+                    match child.wait().await {
+                        Ok(exit_status) => {
+                            let mut job = job_arc_for_task.write();
+                            job.exit_code = exit_status.code();
+                            if let Some(error) = kill_error {
+                                job.error_summary =
+                                    Some(format!("failed to terminate cancelled job: {error}"));
+                                JobStatus::Failed
+                            } else {
+                                JobStatus::Cancelled
+                            }
+                        }
+                        Err(error) => {
+                            job_arc_for_task.write().error_summary = Some(format!(
+                                "failed to reap cancelled job: {error}"
+                            ));
+                            JobStatus::Failed
+                        }
+                    }
+                }
             };
+
+            let _ = stdout_task.await;
+            let _ = stderr_task.await;
 
             {
                 let mut j = job_arc_for_task.write();
@@ -357,15 +384,12 @@ fn build_train_command(workspace_root: &Path, spec: &TrainSpec) -> Command {
     );
     cmd.arg("--data").arg(&spec.data_path);
     cmd.arg("--epochs").arg(spec.epochs.to_string());
-    cmd.arg("--batch-size").arg(spec.batch_size.to_string());
-    cmd.arg("--lr").arg(format!("{}", spec.lr));
-    cmd.arg("--physics-weight")
-        .arg(format!("{}", spec.physics_weight));
-    cmd.arg("--val-frac").arg(format!("{}", spec.val_frac));
+    cmd.arg("--lr").arg(spec.lr.to_string());
+    cmd.arg("--val-frac").arg(spec.val_frac.to_string());
     cmd.arg("--gpu-index").arg(spec.gpu_index.to_string());
     cmd.arg("--patience").arg(spec.patience.to_string());
     cmd.arg("--clip-grad-norm")
-        .arg(format!("{}", spec.clip_grad_norm));
+        .arg(spec.clip_grad_norm.to_string());
     cmd.arg("--grad-accum").arg(spec.grad_accum.to_string());
     cmd.arg("--output-dir").arg(&spec.output_dir);
 
@@ -379,17 +403,33 @@ fn build_train_command(workspace_root: &Path, spec: &TrainSpec) -> Command {
     {
         cmd.arg("--holdout").arg(holdout);
     }
-    if let Some(k) = spec.knn_k {
-        cmd.arg("--knn-k").arg(k.to_string());
-    }
-    if let Some(h) = spec.hidden_dim {
-        cmd.arg("--hidden-dim").arg(h.to_string());
-    }
-    if let Some(t) = spec.texture_size {
-        cmd.arg("--texture-size").arg(t.to_string());
-    }
-    if let Some(m) = spec.max_stars {
-        cmd.arg("--max-stars").arg(m.to_string());
+
+    match &spec.model {
+        ModelKind::Pinn => {
+            cmd.arg("--batch-size").arg(spec.batch_size.to_string());
+            cmd.arg("--physics-weight")
+                .arg(spec.physics_weight.to_string());
+        }
+        ModelKind::Gnn => {
+            cmd.arg("--max-nodes").arg(spec.batch_size.to_string());
+            cmd.arg("--physics-weight")
+                .arg(spec.physics_weight.to_string());
+            if let Some(k) = spec.knn_k {
+                cmd.arg("--knn-k").arg(k.to_string());
+            }
+            if let Some(h) = spec.hidden_dim {
+                cmd.arg("--hidden-dim").arg(h.to_string());
+            }
+        }
+        ModelKind::Siren => {
+            cmd.arg("--batch-size").arg(spec.batch_size.to_string());
+            if let Some(t) = spec.texture_size {
+                cmd.arg("--texture-size").arg(t.to_string());
+            }
+            if let Some(m) = spec.max_stars {
+                cmd.arg("--max-stars").arg(m.to_string());
+            }
+        }
     }
     cmd
 }
@@ -403,21 +443,32 @@ fn build_validate_command(workspace_root: &Path, spec: &ValidateSpec) -> Command
     );
     cmd.arg("--data").arg(&spec.data_path);
     cmd.arg("--epochs").arg(spec.epochs.to_string());
-    cmd.arg("--batch-size").arg(spec.batch_size.to_string());
-    cmd.arg("--val-frac").arg(format!("{}", spec.val_frac));
+    cmd.arg("--val-frac").arg(spec.val_frac.to_string());
     cmd.arg("--output-dir").arg(&spec.output_dir);
     cmd.arg("--patience").arg("99999");
-    if let Some(h) = spec.hidden_dim {
-        cmd.arg("--hidden-dim").arg(h.to_string());
-    }
-    if let Some(k) = spec.knn_k {
-        cmd.arg("--knn-k").arg(k.to_string());
-    }
-    if let Some(t) = spec.texture_size {
-        cmd.arg("--texture-size").arg(t.to_string());
-    }
-    if let Some(m) = spec.max_stars {
-        cmd.arg("--max-stars").arg(m.to_string());
+
+    match &spec.model {
+        ModelKind::Pinn => {
+            cmd.arg("--batch-size").arg(spec.batch_size.to_string());
+        }
+        ModelKind::Gnn => {
+            cmd.arg("--max-nodes").arg(spec.batch_size.to_string());
+            if let Some(k) = spec.knn_k {
+                cmd.arg("--knn-k").arg(k.to_string());
+            }
+            if let Some(h) = spec.hidden_dim {
+                cmd.arg("--hidden-dim").arg(h.to_string());
+            }
+        }
+        ModelKind::Siren => {
+            cmd.arg("--batch-size").arg(spec.batch_size.to_string());
+            if let Some(t) = spec.texture_size {
+                cmd.arg("--texture-size").arg(t.to_string());
+            }
+            if let Some(m) = spec.max_stars {
+                cmd.arg("--max-stars").arg(m.to_string());
+            }
+        }
     }
     cmd
 }
@@ -509,4 +560,136 @@ pub async fn start_validate(
         .get(&id)
         .map(Json)
         .ok_or_else(|| "job not found after spawn".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+    use std::time::Duration;
+
+    fn train_spec(model: ModelKind) -> TrainSpec {
+        TrainSpec {
+            model,
+            epochs: 3,
+            batch_size: 64,
+            lr: 0.001,
+            physics_weight: 0.2,
+            val_frac: 0.15,
+            data_path: "fixture.parquet".into(),
+            output_dir: "out".into(),
+            resume_from: Some("resume".into()),
+            holdout: Some("holdout.parquet".into()),
+            gpu_index: 1,
+            knn_k: Some(7),
+            hidden_dim: Some(128),
+            texture_size: Some(96),
+            max_stars: Some(500),
+            patience: 12,
+            grad_accum: 4,
+            clip_grad_norm: 0.8,
+        }
+    }
+
+    fn validate_spec(model: ModelKind) -> ValidateSpec {
+        ValidateSpec {
+            model,
+            data_path: "fixture.parquet".into(),
+            epochs: 1,
+            batch_size: 64,
+            val_frac: 0.15,
+            output_dir: "out".into(),
+            hidden_dim: Some(128),
+            knn_k: Some(7),
+            texture_size: Some(96),
+            max_stars: Some(500),
+        }
+    }
+
+    fn command_args(command: &Command) -> Vec<String> {
+        command
+            .as_std()
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    fn has_flag_value(args: &[String], flag: &str, value: &str) -> bool {
+        args.windows(2)
+            .any(|pair| pair[0] == flag && pair[1] == value)
+    }
+
+    #[test]
+    fn train_commands_only_include_flags_supported_by_each_model() {
+        let root = Path::new("/workspace");
+
+        let pinn_args = command_args(&build_train_command(root, &train_spec(ModelKind::Pinn)));
+        assert!(has_flag_value(&pinn_args, "--batch-size", "64"));
+        assert!(has_flag_value(&pinn_args, "--physics-weight", "0.2"));
+        assert!(!pinn_args.iter().any(|arg| arg == "--max-nodes"));
+        assert!(!pinn_args.iter().any(|arg| arg == "--knn-k"));
+        assert!(!pinn_args.iter().any(|arg| arg == "--texture-size"));
+
+        let gnn_args = command_args(&build_train_command(root, &train_spec(ModelKind::Gnn)));
+        assert!(has_flag_value(&gnn_args, "--max-nodes", "64"));
+        assert!(has_flag_value(&gnn_args, "--physics-weight", "0.2"));
+        assert!(has_flag_value(&gnn_args, "--knn-k", "7"));
+        assert!(has_flag_value(&gnn_args, "--hidden-dim", "128"));
+        assert!(!gnn_args.iter().any(|arg| arg == "--batch-size"));
+        assert!(!gnn_args.iter().any(|arg| arg == "--texture-size"));
+
+        let siren_args = command_args(&build_train_command(root, &train_spec(ModelKind::Siren)));
+        assert!(has_flag_value(&siren_args, "--batch-size", "64"));
+        assert!(has_flag_value(&siren_args, "--texture-size", "96"));
+        assert!(has_flag_value(&siren_args, "--max-stars", "500"));
+        assert!(!siren_args.iter().any(|arg| arg == "--physics-weight"));
+        assert!(!siren_args.iter().any(|arg| arg == "--knn-k"));
+        assert!(!siren_args.iter().any(|arg| arg == "--hidden-dim"));
+    }
+
+    #[test]
+    fn validation_commands_use_model_specific_batch_flags() {
+        let root = Path::new("/workspace");
+        let pinn_args = command_args(&build_validate_command(root, &validate_spec(ModelKind::Pinn)));
+        assert!(has_flag_value(&pinn_args, "--batch-size", "64"));
+        assert!(!pinn_args.iter().any(|arg| arg == "--max-nodes"));
+
+        let gnn_args = command_args(&build_validate_command(root, &validate_spec(ModelKind::Gnn)));
+        assert!(has_flag_value(&gnn_args, "--max-nodes", "64"));
+        assert!(!gnn_args.iter().any(|arg| arg == "--batch-size"));
+        assert!(has_flag_value(&gnn_args, "--knn-k", "7"));
+        assert!(has_flag_value(&gnn_args, "--hidden-dim", "128"));
+
+        let siren_args = command_args(&build_validate_command(root, &validate_spec(ModelKind::Siren)));
+        assert!(has_flag_value(&siren_args, "--batch-size", "64"));
+        assert!(has_flag_value(&siren_args, "--texture-size", "96"));
+        assert!(has_flag_value(&siren_args, "--max-stars", "500"));
+        assert!(!siren_args.iter().any(|arg| arg == "--knn-k"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn cancellation_terminates_running_child() {
+        let registry = JobRegistry::new();
+        let mut command = Command::new("sleep");
+        command.arg("30");
+        let job = Job::new(JobKind::Custom("cancellation-test".into()), "test".into(), 1);
+        let id = registry.spawn(job, command).expect("spawn job");
+
+        registry.cancel(&id).expect("cancel job");
+        let completed = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let job = registry.get(&id).expect("job exists");
+                if matches!(job.status, JobStatus::Cancelled | JobStatus::Completed | JobStatus::Failed) {
+                    break job;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("cancelled child should terminate promptly");
+
+        assert_eq!(completed.status, JobStatus::Cancelled);
+        assert!(completed.finished_ms.is_some());
+    }
 }

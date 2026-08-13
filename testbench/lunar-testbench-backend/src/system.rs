@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::time::{Instant, SystemTime};
 
 use axum::Json;
 use axum::extract::Query;
@@ -213,14 +213,11 @@ pub fn collect_host_info(ws: &Path) -> HostInfo {
 }
 
 pub async fn ping_url(client: &Client, url: &str) -> BackendStatus {
-    let start = SystemTime::now();
+    let start = Instant::now();
     let resp = client.get(url).send().await;
     let (reachable, latency, hint) = match resp {
         Ok(r) => {
-            let latency = start
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis() as u64;
+            let latency = start.elapsed().as_millis() as u64;
             let hint = if r.status().is_success() {
                 "HTTP 200"
             } else {
@@ -300,4 +297,33 @@ pub async fn system_snapshot(Query(q): Query<SnapshotQuery>) -> Json<SystemSnaps
         norms,
         host: collect_host_info(&ws),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{Router, routing::get};
+
+    #[tokio::test]
+    async fn ping_url_reports_elapsed_latency_not_epoch_time() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test server");
+        let address = listener.local_addr().expect("test server address");
+        let server = tokio::spawn(async move {
+            let app = Router::new().route("/", get(|| async { "ok" }));
+            axum::serve(listener, app).await.expect("serve test server");
+        });
+
+        let url = ["http://", &address.to_string(), "/"].concat();
+        let status = ping_url(&Client::new(), &url).await;
+        server.abort();
+
+        assert!(status.reachable);
+        assert!(status.latency_ms.is_some());
+        assert!(
+            status.latency_ms.expect("latency") < 10_000,
+            "latency must be elapsed milliseconds, not an epoch timestamp"
+        );
+    }
 }
