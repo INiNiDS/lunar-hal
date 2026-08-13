@@ -24,6 +24,16 @@ void main() {
     gl_Position = vec4(aPos, 0.0, 1.0);
 }"#;
 
+// Preview shaders must never allocate an unbounded backing store on a
+// fractional/high-DPI browser layout. This upper bound is about 8 MiB of RGBA
+// pixels at the largest supported preview size.
+#[cfg(all(feature = "web", target_family = "wasm"))]
+const MAX_BACKING_DIMENSION: f64 = 2_048.0;
+#[cfg(all(feature = "web", target_family = "wasm"))]
+const MAX_BACKING_PIXELS: f64 = 2_097_152.0;
+#[cfg(all(feature = "web", target_family = "wasm"))]
+const PREVIEW_FRAME_INTERVAL_MS: f64 = 1_000.0 / 30.0;
+
 const FRAG_SRC: &str = r#"#version 300 es
 precision highp float;
 in vec2 vUv;
@@ -140,20 +150,55 @@ const DESKTOP_JS: &str = r#"
         state.scale = scale; state.speed = speed; state.contrast = contrast;
     };
 
-    const w = canvas.width, h = canvas.height;
-    gl.viewport(0, 0, w, h);
+    const maxDimension = 2048;
+    const maxPixels = 2097152;
+    const resize = () => {
+        const rect = canvas.getBoundingClientRect();
+        const dpr = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
+        let width = Math.max(1, Math.min(maxDimension, Math.round(rect.width * dpr)));
+        let height = Math.max(1, Math.min(maxDimension, Math.round(rect.height * dpr)));
+        const pixels = width * height;
+        if (pixels > maxPixels) {
+            const scale = Math.sqrt(maxPixels / pixels);
+            width = Math.max(1, Math.floor(width * scale));
+            height = Math.max(1, Math.floor(height * scale));
+        }
+        if (canvas.width !== width) canvas.width = width;
+        if (canvas.height !== height) canvas.height = height;
+        gl.viewport(0, 0, width, height);
+    };
+    const resizeObserver = typeof ResizeObserver === 'undefined'
+        ? null
+        : new ResizeObserver(resize);
+    if (resizeObserver) resizeObserver.observe(canvas);
+    else window.addEventListener('resize', resize);
+    resize();
+    canvas.__starResizeCleanup = () => {
+        if (resizeObserver) resizeObserver.disconnect();
+        else window.removeEventListener('resize', resize);
+        if (canvas.__starRaf) cancelAnimationFrame(canvas.__starRaf);
+    };
     gl.clearColor(0.02, 0.02, 0.04, 1.0);
 
-    const tick = () => {
-        state.t += 1/60;
-        gl.uniform1f(uTime, state.t);
-        gl.uniform1f(uTeff, state.teff);
-        gl.uniform1f(uBpRp, state.bp_rp);
-        gl.uniform1f(uScale, state.scale);
-        gl.uniform1f(uSpeed, state.speed);
-        gl.uniform1f(uContrast, state.contrast);
-        gl.clear(gl.COLOR_BUFFER_BIT);
-        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    let lastFrame = 0;
+    const tick = (now) => {
+        if (!canvas.isConnected) {
+            canvas.__starResizeCleanup();
+            return;
+        }
+        if (!document.hidden && now - lastFrame >= 1000 / 30) {
+            const elapsed = lastFrame ? Math.min(0.1, (now - lastFrame) / 1000) : 1 / 30;
+            lastFrame = now;
+            state.t += elapsed;
+            gl.uniform1f(uTime, state.t);
+            gl.uniform1f(uTeff, state.teff);
+            gl.uniform1f(uBpRp, state.bp_rp);
+            gl.uniform1f(uScale, state.scale);
+            gl.uniform1f(uSpeed, state.speed);
+            gl.uniform1f(uContrast, state.contrast);
+            gl.clear(gl.COLOR_BUFFER_BIT);
+            gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+        }
         canvas.__starRaf = requestAnimationFrame(tick);
     };
     canvas.__starRaf = requestAnimationFrame(tick);
@@ -201,6 +246,8 @@ struct StarProps {
 #[cfg(all(feature = "web", target_family = "wasm"))]
 struct GlState {
     _slot: Rc<RefCell<Option<Closure<dyn FnMut(f64)>>>>,
+    _resize_observer: web_sys::ResizeObserver,
+    _resize_callback: Closure<dyn FnMut()>,
     _ctx: Gl2,
     _u_teff: web_sys::WebGlUniformLocation,
     _u_bp_rp: web_sys::WebGlUniformLocation,
@@ -212,6 +259,32 @@ struct GlState {
 #[cfg(all(feature = "web", target_family = "wasm"))]
 thread_local! {
     static GL_STATE: RefCell<Option<GlState>> = const { RefCell::new(None) };
+}
+
+#[cfg(all(feature = "web", target_family = "wasm"))]
+fn resize_canvas_backing(canvas: &web_sys::HtmlCanvasElement, ctx: &Gl2) {
+    let rect = canvas.get_bounding_client_rect();
+    let dpr = web_sys::window()
+        .map(|window| window.device_pixel_ratio().clamp(1.0, 2.0))
+        .unwrap_or(1.0);
+    let mut width = (rect.width() * dpr).round().clamp(1.0, MAX_BACKING_DIMENSION);
+    let mut height = (rect.height() * dpr).round().clamp(1.0, MAX_BACKING_DIMENSION);
+    let pixels = width * height;
+    if pixels > MAX_BACKING_PIXELS {
+        let scale = (MAX_BACKING_PIXELS / pixels).sqrt();
+        width = (width * scale).floor().max(1.0);
+        height = (height * scale).floor().max(1.0);
+    }
+    let width = width as u32;
+    let height = height as u32;
+
+    if canvas.width() != width {
+        canvas.set_width(width);
+    }
+    if canvas.height() != height {
+        canvas.set_height(height);
+    }
+    ctx.viewport(0, 0, width as i32, height as i32);
 }
 
 #[component]
@@ -270,8 +343,6 @@ pub fn StarShaderCanvas(
     {
         let id = canvas_id.read().clone();
         let p2 = props.clone();
-        let w = width;
-        let h = height;
         use_effect(move || {
             let window = match web_sys::window() {
                 Some(w) => w,
@@ -300,9 +371,6 @@ pub fn StarShaderCanvas(
                     return;
                 }
             };
-            canvas.set_width(w);
-            canvas.set_height(h);
-
             let ctx = match canvas.get_context("webgl2") {
                 Ok(Some(c)) => match c.dyn_into::<Gl2>() {
                     Ok(gl) => gl,
@@ -402,7 +470,22 @@ pub fn StarShaderCanvas(
             ctx.enable_vertex_attrib_array(a_pos);
             ctx.vertex_attrib_pointer_with_i32(a_pos, 2, Gl2::FLOAT, false, 0, 0);
 
-            ctx.viewport(0, 0, w as i32, h as i32);
+            resize_canvas_backing(&canvas, &ctx);
+            let resize_canvas = canvas.clone();
+            let resize_context = ctx.clone();
+            let resize_callback = Closure::<dyn FnMut()>::new(move || {
+                resize_canvas_backing(&resize_canvas, &resize_context);
+            });
+            let resize_observer = match web_sys::ResizeObserver::new(
+                resize_callback.as_ref().unchecked_ref(),
+            ) {
+                Ok(observer) => observer,
+                Err(error) => {
+                    gl_err!("StarShader: ResizeObserver {:?}", error);
+                    return;
+                }
+            };
+            resize_observer.observe(canvas.as_ref());
             ctx.clear_color(0.02, 0.02, 0.04, 1.0);
 
             let (
@@ -430,27 +513,49 @@ pub fn StarShaderCanvas(
             let w2 = window.clone();
             let ctx2 = ctx.clone();
             let p3 = p2.clone();
+            let document_for_frame = doc.clone();
+            let canvas_id_for_frame = id.clone();
             let mut time = 0.0f32;
+            let mut last_frame = 0.0f64;
 
             let u_teff_c = u_teff.clone();
             let u_bp_rp_c = u_bp_rp.clone();
             let u_scale_c = u_scale.clone();
             let u_speed_c = u_speed.clone();
             let u_contrast_c = u_contrast.clone();
-            *slot.borrow_mut() = Some(Closure::new(move |_ts: f64| {
-                time += 1.0 / 60.0;
-                let Ok(pr) = p3.try_read() else {
+            *slot.borrow_mut() = Some(Closure::new(move |timestamp: f64| {
+                // Stop the self-scheduling loop when Dioxus has removed this
+                // component. This is essential for browser tabs and minimized
+                // WebOS windows, where an orphaned canvas otherwise burns CPU.
+                if document_for_frame
+                    .get_element_by_id(&canvas_id_for_frame)
+                    .is_none()
+                {
                     return;
-                };
-                let sp = pr.borrow();
-                ctx2.uniform1f(Some(&u_teff_c), sp.teff);
-                ctx2.uniform1f(Some(&u_bp_rp_c), sp.bp_rp);
-                ctx2.uniform1f(Some(&u_scale_c), sp.scale);
-                ctx2.uniform1f(Some(&u_speed_c), sp.speed);
-                ctx2.uniform1f(Some(&u_contrast_c), sp.contrast);
-                ctx2.uniform1f(Some(&u_time), time);
-                ctx2.clear(Gl2::COLOR_BUFFER_BIT);
-                ctx2.draw_arrays(Gl2::TRIANGLE_STRIP, 0, 4);
+                }
+
+                if !document_for_frame.hidden()
+                    && timestamp - last_frame >= PREVIEW_FRAME_INTERVAL_MS
+                {
+                    let elapsed = if last_frame > 0.0 {
+                        ((timestamp - last_frame) / 1_000.0).min(0.1)
+                    } else {
+                        1.0 / 30.0
+                    };
+                    last_frame = timestamp;
+                    time += elapsed as f32;
+                    if let Ok(pr) = p3.try_read() {
+                        let sp = pr.borrow();
+                        ctx2.uniform1f(Some(&u_teff_c), sp.teff);
+                        ctx2.uniform1f(Some(&u_bp_rp_c), sp.bp_rp);
+                        ctx2.uniform1f(Some(&u_scale_c), sp.scale);
+                        ctx2.uniform1f(Some(&u_speed_c), sp.speed);
+                        ctx2.uniform1f(Some(&u_contrast_c), sp.contrast);
+                        ctx2.uniform1f(Some(&u_time), time);
+                        ctx2.clear(Gl2::COLOR_BUFFER_BIT);
+                        ctx2.draw_arrays(Gl2::TRIANGLE_STRIP, 0, 4);
+                    }
+                }
                 if let Some(c) = &*slot2.borrow() {
                     let f: &js_sys::Function = c.as_ref().unchecked_ref();
                     let _ = w2.request_animation_frame(f);
@@ -468,6 +573,8 @@ pub fn StarShaderCanvas(
             GL_STATE.with(|s| {
                 *s.borrow_mut() = Some(GlState {
                     _slot: slot,
+                    _resize_observer: resize_observer,
+                    _resize_callback: resize_callback,
                     _ctx: ctx,
                     _u_teff: u_teff,
                     _u_bp_rp: u_bp_rp,
