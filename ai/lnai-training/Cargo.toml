@@ -1,0 +1,15 @@
+[package]
+name = "lnai-training"
+version.workspace = true
+license.workspace = true
+readme.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+serde = { version = "1.0.229", features = ["derive"] }
+lunar-utils = { path = "../../crates/lunar-utils" }
+serde_json = "1.0.151"
+
+[lints]
+workspace = true

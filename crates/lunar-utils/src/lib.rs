@@ -1,4 +1,5 @@
 pub mod env;
+pub mod time;
 
 pub fn encode_rgb_png(rgb: &[u8], width: u32, height: u32) -> Vec<u8> {
     let w = width as usize;

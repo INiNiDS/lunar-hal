@@ -70,6 +70,76 @@ pub const GNN_INPUT_DIM: usize = 8;
 pub const GNN_OUTPUT_DIM: usize = 3;
 pub const GNN_VARIATIONAL_DIM: usize = 6;
 
+/// Frozen output contract of the GNN-Kinematics model.
+/// Per contract v1 the readout head must produce Cartesian velocity
+/// components `vx/vy/vz` in km/s (Galactic frame) for every star node.
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
+pub struct KinematicsOutput {
+    /// Cartesian velocity X in km/s (Galactic)
+    pub vx: f32,
+    /// Cartesian velocity Y in km/s (Galactic)
+    pub vy: f32,
+    /// Cartesian velocity Z in km/s (Galactic)
+    pub vz: f32,
+}
+
+impl KinematicsOutput {
+    /// Builds the contract from a raw `[N, 3]` readout slice for a single star.
+    /// Returns `None` when the row does not contain exactly three components.
+    pub fn from_row(row: &[f32]) -> Option<Self> {
+        match row {
+            [vx, vy, vz] => Some(Self {
+                vx: *vx,
+                vy: *vy,
+                vz: *vz,
+            }),
+            _ => None,
+        }
+    }
+
+    /// Component accessor matching schema column order (`vx_kms`, `vy_kms`, `vz_kms`).
+    pub fn as_components(&self) -> [f32; 3] {
+        [self.vx, self.vy, self.vz]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn kinematics_output_round_trips_through_json() {
+        let output = KinematicsOutput {
+            vx: 12.5,
+            vy: -3.25,
+            vz: 40.0,
+        };
+        let json = serde_json::to_string(&output).expect("serialize KinematicsOutput");
+        let back: KinematicsOutput = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back, output);
+    }
+
+    #[test]
+    fn kinematics_contract_fields_are_vx_vy_vz() {
+        let value = serde_json::to_value(KinematicsOutput {
+            vx: 1.0,
+            vy: 2.0,
+            vz: 3.0,
+        })
+        .unwrap();
+        let keys: Vec<&str> = value.as_object().unwrap().keys().map(String::as_str).collect();
+        assert_eq!(keys, vec!["vx", "vy", "vz"]);
+    }
+
+    #[test]
+    fn from_row_rejects_wrong_widths_and_maps_components() {
+        assert!(KinematicsOutput::from_row(&[1.0]).is_none());
+        assert!(KinematicsOutput::from_row(&[1.0, 2.0, 3.0, 4.0]).is_none());
+        let output = KinematicsOutput::from_row(&[9.0, 8.0, 7.0]).unwrap();
+        assert_eq!(output.as_components(), [9.0, 8.0, 7.0]);
+    }
+}
+
 pub fn compute_adjacency_matrix(coords: &[[f32; 3]]) -> Vec<Vec<f32>> {
     let n = coords.len();
     let mut adj = vec![vec![0.0; n]; n];

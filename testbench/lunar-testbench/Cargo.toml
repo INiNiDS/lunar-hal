@@ -48,3 +48,4 @@ web-sys = { version = "0.3", features = [
     "console",
 ] }
 nah = "0.1.2"
+sha2 = "0.11"

@@ -18,7 +18,12 @@ pub mod state;
 pub mod window;
 pub mod window_manager;
 pub mod app_host;
+pub mod ram;
+pub mod state_inventory;
 pub mod viewport;
+pub mod snapshot;
+
+pub use ram::{LunarOsRamEntryV1, RamEntryState};
 
 pub use room::Room;
 pub use state::{BootPhase, DragKind, OsState, WindowState, use_os_state, WindowRuntimeContext, WindowLifecycle};

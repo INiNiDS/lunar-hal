@@ -1,0 +1,17 @@
+[package]
+name = "lnai-data"
+version.workspace = true
+license.workspace = true
+readme.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+lunar-utils = { path = "../../crates/lunar-utils" }
+
+[dev-dependencies]
+serde_json = "1"
+
+[lints]
+workspace = true
