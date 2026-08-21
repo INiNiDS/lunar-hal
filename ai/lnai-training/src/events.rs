@@ -10,10 +10,7 @@ pub enum JobEvent {
     /// Worker has started executing the job
     Started,
     /// Periodic progress update
-    Progress {
-        epoch: u32,
-        total_epochs: u32,
-    },
+    Progress { epoch: u32, total_epochs: u32 },
     /// Typed metric for a completed epoch
     Metric(EpochMetric),
     /// Model checkpoint saved
@@ -23,9 +20,7 @@ pub enum JobEvent {
         hash: String,
     },
     /// Job finished successfully
-    Completed {
-        exit_code: i32,
-    },
+    Completed { exit_code: i32 },
     /// Job failed
     Failed {
         error_summary: String,
@@ -167,7 +162,10 @@ mod tests {
             .to_status(),
             JobStatus::Running
         );
-        assert_eq!(JobEvent::Completed { exit_code: 0 }.to_status(), JobStatus::Completed);
+        assert_eq!(
+            JobEvent::Completed { exit_code: 0 }.to_status(),
+            JobStatus::Completed
+        );
         assert_eq!(
             JobEvent::Failed {
                 error_summary: "e".into(),

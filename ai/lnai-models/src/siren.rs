@@ -17,7 +17,7 @@ pub struct StellarSiren<B: Backend> {
 #[derive(Config, Debug)]
 pub struct StellarSirenConfig {
     #[config(default = 64)]
-    hidden: usize,
+    pub hidden: usize,
 }
 
 impl StellarSirenConfig {

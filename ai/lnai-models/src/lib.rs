@@ -18,7 +18,6 @@ pub use siren::{
     SIREN_HIDDEN_DIM, SIREN_INPUT_DIM, SIREN_OUTPUT_DIM, SIREN_W0, StellarSiren, StellarSirenConfig,
 };
 
-
 #[cfg(feature = "localization")]
 pub mod localization;
 #[cfg(feature = "localization")]

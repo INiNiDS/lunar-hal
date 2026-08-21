@@ -54,6 +54,27 @@ jobs:
           key: frontend-native-${{ hashFiles('Cargo.lock') }}
       - run: cargo check -p lunar-frontend --no-default-features --features desktop
 
+  ai-cpu-smoke:
+    name: AI E2E and contracts (CPU)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ai-cpu-${{ hashFiles('Cargo.lock') }}
+      # One command regenerates the frozen fixture, proves leakage-free
+      # integrity and runs all correctness suites with JSON reports.
+      - run: scripts/e2e-ai.sh
+      - run: cargo clippy -p lnai-data -p lnai-training --all-targets
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ai-cpu-reports
+          path: target/ai-reports
+
   webos-check:
     name: WebOS CSS and state tests
     runs-on: ubuntu-latest

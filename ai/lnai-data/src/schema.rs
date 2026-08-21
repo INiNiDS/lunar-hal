@@ -91,7 +91,6 @@ pub fn canonical_columns() -> Vec<ColumnSchema> {
             units: Some("milliarcseconds"),
             description: "Parallax",
         },
-
         // --- Kinematics (Optional velocity fields) ---
         ColumnSchema {
             name: "pm_ra_mas_yr",
@@ -135,7 +134,6 @@ pub fn canonical_columns() -> Vec<ColumnSchema> {
             units: Some("km/s"),
             description: "Cartesian velocity Z (Galactic)",
         },
-
         // --- Photometry ---
         ColumnSchema {
             name: "mag_g",
@@ -158,7 +156,6 @@ pub fn canonical_columns() -> Vec<ColumnSchema> {
             units: Some("mag"),
             description: "Stellar magnitude in RP-band",
         },
-
         // --- Quality Flags ---
         ColumnSchema {
             name: "ruwe",
@@ -181,7 +178,6 @@ pub fn canonical_columns() -> Vec<ColumnSchema> {
             units: None,
             description: "Boolean flag: whether the object passed basic quality filtering",
         },
-
         // --- Fields for GNN-Localization (Anchor/Neighbor IDs and relative coordinates) ---
         // These fields do not exist in the raw canonical schema (they are generated in
         // the View), but we describe them here for validation of the assembled view.
@@ -230,24 +226,45 @@ pub fn required_columns_for_view(view: &SchemaView) -> Vec<&'static str> {
         SchemaView::Base => vec!["source_id", "ra_deg", "dec_deg", "epoch_year", "is_valid"],
 
         SchemaView::Pinn => vec![
-            "source_id", "ra_deg", "dec_deg", "parallax_mas",
-            "vx_kms", "vy_kms", "vz_kms", "is_valid"
+            "source_id",
+            "ra_deg",
+            "dec_deg",
+            "parallax_mas",
+            "vx_kms",
+            "vy_kms",
+            "vz_kms",
+            "is_valid",
         ],
 
         SchemaView::GnnKinematics => vec![
-            "source_id", "ra_deg", "dec_deg", "parallax_mas",
-            "pm_ra_mas_yr", "pm_dec_mas_yr", "radial_velocity_kms", "is_valid"
+            "source_id",
+            "ra_deg",
+            "dec_deg",
+            "parallax_mas",
+            "pm_ra_mas_yr",
+            "pm_dec_mas_yr",
+            "radial_velocity_kms",
+            "is_valid",
         ],
 
         SchemaView::GnnLocalization => vec![
-            "source_id", "ra_deg", "dec_deg", "parallax_mas",
-            "mag_g", "mag_bp", "mag_rp", "ruwe", "is_valid",
-            "neighbor_source_id", "rel_x", "rel_y", "rel_z", "is_visible"
+            "source_id",
+            "ra_deg",
+            "dec_deg",
+            "parallax_mas",
+            "mag_g",
+            "mag_bp",
+            "mag_rp",
+            "ruwe",
+            "is_valid",
+            "neighbor_source_id",
+            "rel_x",
+            "rel_y",
+            "rel_z",
+            "is_visible",
         ],
 
-        SchemaView::Siren => vec![
-            "source_id", "ra_deg", "dec_deg", "mag_g", "is_valid"
-        ],
+        SchemaView::Siren => vec!["source_id", "ra_deg", "dec_deg", "mag_g", "is_valid"],
     }
 }
 
@@ -330,7 +347,12 @@ mod tests {
             let first = serde_json::to_value(&column).expect("serialize column");
             let second = serde_json::to_value(&column).expect("re-serialize column");
             assert_eq!(first, second, "serialization must be deterministic");
-            let mut keys: Vec<&str> = first.as_object().expect("object").keys().map(String::as_str).collect();
+            let mut keys: Vec<&str> = first
+                .as_object()
+                .expect("object")
+                .keys()
+                .map(String::as_str)
+                .collect();
             keys.sort_unstable();
             assert_eq!(
                 keys,

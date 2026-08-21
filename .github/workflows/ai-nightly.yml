@@ -1,0 +1,53 @@
+name: AI nightly
+
+on:
+  schedule:
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  gpu-report-only:
+    name: GPU synchronized harness (report-only)
+    # Manual/nightly GPU runner, opt-in via repository variable.
+    if: ${{ vars.LUNAR_ENABLE_GPU_NIGHTLY == 'true' }}
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ai-gpu-${{ hashFiles('Cargo.lock') }}
+      # Report-only by design: performance numbers are collected but never
+      # fail the job until a regression budget is frozen (Stage 7+).
+      - run: nvidia-smi || true
+      - run: scripts/bench-ai.sh --runs 3 --gpu
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ai-nightly-reports
+          path: |
+            target/ai-reports
+            target/criterion
+
+  cpu-baseline:
+    name: CPU baseline drift tracking (report-only)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ai-cpu-${{ hashFiles('Cargo.lock') }}
+      - run: scripts/bench-ai.sh --runs 3
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ai-nightly-reports
+          path: |
+            target/ai-reports
+            target/criterion

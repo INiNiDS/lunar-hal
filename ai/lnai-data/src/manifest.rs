@@ -1,6 +1,6 @@
+use lunar_utils::time::current_time_ms;
 use serde::{Deserialize, Serialize};
 use std::fmt;
-use lunar_utils::time::current_time_ms;
 
 /// Version of the manifest structure itself.
 /// Tracks changes to how metadata is stored, independent of the data schema.
@@ -108,7 +108,10 @@ impl ShardState {
         }
 
         // Update timestamp if entering an active state
-        if matches!(new_status, ShardStatus::Downloading | ShardStatus::Verifying) {
+        if matches!(
+            new_status,
+            ShardStatus::Downloading | ShardStatus::Verifying
+        ) {
             self.last_attempt_ms = Some(current_time_ms());
         }
 
@@ -185,7 +188,8 @@ mod tests {
 
     fn sample_manifest() -> DatasetManifestV1 {
         let mut manifest = DatasetManifestV1::new("gaia_dr3", "query-hash", "schema-hash");
-        let mut shard = ShardState::new("ra_000_010_dec_-90_-80".into(), (0.0, 10.0), (-90.0, -80.0));
+        let mut shard =
+            ShardState::new("ra_000_010_dec_-90_-80".into(), (0.0, 10.0), (-90.0, -80.0));
         shard.transition_to(ShardStatus::Downloading).unwrap();
         shard.transition_to(ShardStatus::Downloaded).unwrap();
         shard.transition_to(ShardStatus::Verifying).unwrap();
@@ -214,8 +218,11 @@ mod tests {
     #[test]
     fn finalize_aggregates_rows_and_checksum() {
         let mut manifest = sample_manifest();
-        let mut second =
-            ShardState::new("ra_010_020_dec_-90_-80".into(), (10.0, 20.0), (-90.0, -80.0));
+        let mut second = ShardState::new(
+            "ra_010_020_dec_-90_-80".into(),
+            (10.0, 20.0),
+            (-90.0, -80.0),
+        );
         second.row_count = 8;
         manifest.shards.push(second);
         manifest.finalize("global-2");
@@ -260,4 +267,3 @@ mod tests {
         assert!(shard.transition_to(ShardStatus::Pending).is_err());
     }
 }
-

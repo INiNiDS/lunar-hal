@@ -127,7 +127,12 @@ mod tests {
             vz: 3.0,
         })
         .unwrap();
-        let keys: Vec<&str> = value.as_object().unwrap().keys().map(String::as_str).collect();
+        let keys: Vec<&str> = value
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
         assert_eq!(keys, vec!["vx", "vy", "vz"]);
     }
 

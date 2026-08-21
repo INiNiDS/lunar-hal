@@ -1,6 +1,6 @@
-use serde::{Deserialize, Serialize};
-use lunar_utils::time::current_time_ms;
 use crate::spec::ModelKind;
+use lunar_utils::time::current_time_ms;
+use serde::{Deserialize, Serialize};
 
 /// Version of the artifact manifest structure itself.
 pub const ARTIFACT_MANIFEST_VERSION: &str = "1.0.0";

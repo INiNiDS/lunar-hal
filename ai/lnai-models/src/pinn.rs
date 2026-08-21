@@ -49,13 +49,13 @@ pub struct StellarMlp<B: Backend> {
 #[derive(Config, Debug)]
 pub struct StellarMlpConfig {
     #[config(default = 512)]
-    hidden: usize,
+    pub hidden: usize,
     #[config(default = 256)]
-    hidden2: usize,
+    pub hidden2: usize,
     #[config(default = 128)]
-    hidden3: usize,
+    pub hidden3: usize,
     #[config(default = 1e-5)]
-    layer_norm_eps: f64,
+    pub layer_norm_eps: f64,
 }
 
 impl StellarMlpConfig {
