@@ -4,7 +4,12 @@ use std::fmt;
 
 /// Version of the manifest structure itself.
 /// Tracks changes to how metadata is stored, independent of the data schema.
-pub const MANIFEST_SCHEMA_VERSION: &str = "1.0.0";
+///
+/// Changelog:
+/// * 1.1.0 — additive: `ShardState::{subdivided_into, row_limit_hit}` so
+///   adaptive subdivision is explicitly reflected in the manifest
+///   (`#[serde(default)]` keeps 1.0.0 files loadable).
+pub const MANIFEST_SCHEMA_VERSION: &str = "1.1.0";
 
 /// Top-level manifest tracking the state of the entire dataset collection process.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -75,6 +80,13 @@ pub struct ShardState {
     pub last_attempt_ms: Option<u64>,
     /// Bytes downloaded so far (for resume after interrupted writes)
     pub bytes_downloaded: u64,
+    /// Child shard ids this shard was adaptively subdivided into.
+    #[serde(default)]
+    pub subdivided_into: Vec<String>,
+    /// Set when the source returned more rows than the shard row budget,
+    /// forcing subdivision.
+    #[serde(default)]
+    pub row_limit_hit: bool,
 }
 
 impl ShardState {
@@ -89,6 +101,8 @@ impl ShardState {
             retries: 0,
             last_attempt_ms: None,
             bytes_downloaded: 0,
+            subdivided_into: Vec::new(),
+            row_limit_hit: false,
         }
     }
 
@@ -209,9 +223,41 @@ mod tests {
         assert_eq!(back, manifest);
     }
 
+    /// Manifest 1.1.0 must still load manifests written under 1.0.0
+    /// (additive fields are `#[serde(default)]`).
+    #[test]
+    fn manifest_v1_0_0_json_still_loads_in_v1_1_0() {
+        const V100: &str = r#"{
+            "version": "1.0.0",
+            "schema_hash": "h",
+            "query_hash": "q",
+            "source_release": "gaia_dr3",
+            "total_rows": 2,
+            "checksum": "",
+            "shards": [
+                {
+                    "shard_id": "ra_000_001_dec-90.0_+90.0",
+                    "ra_range": [0.0, 1.0],
+                    "dec_range": [-90.0, 90.0],
+                    "row_count": 2,
+                    "checksum": "abc",
+                    "status": "verified",
+                    "retries": 0,
+                    "last_attempt_ms": null,
+                    "bytes_downloaded": 120
+                }
+            ],
+            "created_ms": 1,
+            "updated_ms": 2
+        }"#;
+        let manifest: DatasetManifestV1 = serde_json::from_str(V100).expect("load v1.0.0");
+        assert_eq!(manifest.shards[0].subdivided_into, Vec::<String>::new());
+        assert!(!manifest.shards[0].row_limit_hit);
+    }
+
     #[test]
     fn manifest_version_and_checksum_policy_are_frozen() {
-        assert_eq!(MANIFEST_SCHEMA_VERSION, "1.0.0");
+        assert_eq!(MANIFEST_SCHEMA_VERSION, "1.1.0");
         assert_eq!(CHECKSUM_ALGORITHM, "sha256");
     }
 

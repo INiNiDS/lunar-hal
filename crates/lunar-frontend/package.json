@@ -1,0 +1,13 @@
+{
+  "name": "lunar-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Tailwind pipeline for lunar-frontend. Run alongside `dx serve`.",
+  "scripts": {
+    "build:css": "tailwindcss -i tailwind.css -o assets/tailwind.css --minify",
+    "watch:css": "tailwindcss -i tailwind.css -o assets/tailwind.css --watch"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "^4.1.5"
+  }
+}

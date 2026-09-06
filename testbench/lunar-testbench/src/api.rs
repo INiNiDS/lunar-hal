@@ -873,3 +873,73 @@ mod config_api_tests {
         assert!(value["config"].is_null());
     }
 }
+
+// ------------------- Stage 4: canonical dataset coverage -------------------
+
+#[derive(serde::Deserialize, serde::Serialize, Debug, Clone, PartialEq)]
+pub struct DataCoverage {
+    pub dir: String,
+    pub manifest_found: bool,
+    pub schema_version: Option<String>,
+    pub source_release: Option<String>,
+    pub total_rows: u64,
+    pub shards_total: usize,
+    pub shards_verified: usize,
+    pub shards_failed: usize,
+    pub shards_pending: usize,
+    pub shards_active: usize,
+    pub subdivided_shards: usize,
+    pub verified_percent: f64,
+    pub gap_explanations: Vec<String>,
+    pub last_updated_ms: Option<u64>,
+}
+
+pub async fn data_status(dir: &str) -> Result<DataCoverage, String> {
+    get_json(
+        &get_testbench_url(),
+        &format!("/data/status?dir={}", urlencoding(dir)),
+    )
+    .await
+}
+
+pub async fn start_data_collect(
+    out_dir: &str,
+    ra_min: f64,
+    ra_max: f64,
+    mag_limit_g: f64,
+    concurrency: usize,
+    retry_failed: bool,
+) -> Result<Job, String> {
+    post_json(
+        &get_testbench_url(),
+        "/data/collect",
+        &serde_json::json!({
+            "out_dir": out_dir,
+            "ra_min": ra_min,
+            "ra_max": ra_max,
+            "mag_limit_g": mag_limit_g,
+            "target_rows_per_shard": 200_000,
+            "concurrency": concurrency,
+            "retry_failed": retry_failed,
+        }),
+    )
+    .await
+}
+
+pub async fn start_data_verify(out_dir: &str) -> Result<Job, String> {
+    post_json(
+        &get_testbench_url(),
+        "/data/verify",
+        &serde_json::json!({ "out_dir": out_dir }),
+    )
+    .await
+}
+
+pub async fn start_data_build(out_dir: &str) -> Result<Job, String> {
+    post_json(
+        &get_testbench_url(),
+        "/data/build",
+        &serde_json::json!({ "out_dir": out_dir }),
+    )
+    .await
+}

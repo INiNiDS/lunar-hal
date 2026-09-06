@@ -128,7 +128,9 @@ impl ApiClient {
     }
 
     pub async fn create_scene(&self, req: CreateStarSceneRequest) -> Result<StarScene, ApiError> {
-        self.post_json("/scenes/create", &req).await
+        // The backend wraps newly created scenes in a live-scene snapshot.
+        let snapshot: LiveSceneSnapshot = self.post_json("/scenes/create", &req).await?;
+        Ok(snapshot.scene)
     }
 
     pub async fn delete_scene(&self, id: &str) -> Result<(), ApiError> {

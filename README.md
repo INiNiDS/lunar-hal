@@ -51,6 +51,18 @@ The managed frontend service supports `web`, `desktop`, and `android` platforms 
 - [Gallery storage](docs/gallery-storage.md)
 - [WebOS lifecycle](docs/webos-lifecycle.md)
 - [Testing matrix](docs/testing.md)
+- [lnai-data pipeline (Stage 4)](docs/lnai-data-stage4.md)
+- [NASA/Stardance data (Stage 4A)](docs/nasa-stardance-data.md)
+
+## AI data & acknowledgements
+
+Canonical stellar datasets are collected from **ESA Gaia DR3** via TAP
+(anonymous access works; see `lnaicli collect-data`). NASA/Stardance
+enrichment uses the **NASA Exoplanet Archive** (IPAC/Caltech) `PSCompPars`
+table and records full provenance in every dataset directory. We gratefully
+acknowledge the ESA/Gaia DPAC and the NASA Exoplanet Archive teams. See
+[Stage 4A docs](docs/nasa-stardance-data.md) for source-specific notes;
+credentials are optional for all public endpoints.
 
 ## Development checks
 

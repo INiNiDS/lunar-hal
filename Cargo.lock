@@ -6004,14 +6004,8 @@ name = "lnai"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "burn",
- "burn-store",
  "clap",
- "ctrlc",
- "lnai-models",
- "polars",
- "rand 0.10.2",
- "rayon",
+ "lnai-training",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
@@ -6023,8 +6017,13 @@ name = "lnai-data"
 version = "0.1.0"
 dependencies = [
  "lunar-utils",
+ "polars",
+ "polars-buffer",
+ "reqwest 0.13.4",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
+ "tempfile",
 ]
 
 [[package]]
@@ -6032,15 +6031,8 @@ name = "lnai-gnn"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "burn",
- "burn-store",
  "clap",
- "ctrlc",
- "lnai-models",
- "polars",
- "rand 0.10.2",
- "rayon",
- "serde",
+ "lnai-training",
  "serde_json",
 ]
 
@@ -6058,15 +6050,8 @@ name = "lnai-siren"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "burn",
- "burn-store",
  "clap",
- "ctrlc",
- "lnai-models",
- "polars",
- "rand 0.10.2",
- "rayon",
- "serde",
+ "lnai-training",
  "serde_json",
 ]
 
@@ -6074,12 +6059,18 @@ dependencies = [
 name = "lnai-training"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "burn",
+ "burn-store",
+ "clap",
  "criterion",
+ "ctrlc",
  "lnai-data",
  "lnai-models",
  "lunar-utils",
  "polars",
+ "rand 0.10.2",
+ "rayon",
  "serde",
  "serde_json",
  "sha2 0.11.0",
@@ -6136,9 +6127,12 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "lnai-data",
+ "lnai-training",
  "polars",
  "rand 0.10.2",
  "reqwest 0.13.4",
+ "serde_json",
  "sha2 0.11.0",
 ]
 
@@ -6285,6 +6279,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
+ "lnai-data",
+ "lnai-training",
  "lunar-structures",
  "lunar-structures-testbench",
  "lunar-utils",

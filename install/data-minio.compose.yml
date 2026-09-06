@@ -1,0 +1,50 @@
+# Dedicated object-storage stack for `lnai-data` (stage 4A extension).
+#
+# Run this when you want dataset artifacts in an S3-compatible store without
+# starting the full pipeline simulation (install/podman-compose.yml):
+#
+#   podman-compose -f install/data-minio.compose.yml up -d
+#
+# What you get:
+#   - MinIO (any S3-compatible server works equally well) on :9000 / console :9001
+#   - bucket "lunar-hal-data" created once at startup
+#   - default credentials read from ../.env (SPACES_KEY/SPACES_SECRET),
+#     falling back to minioadmin/minioadmin like podman-compose.yml
+#
+# Client side (lnaicli) reads the very same .env: S3_ENDPOINT/S3_BUCKET or the
+# SPACES_* aliases, plus S3_ACCESS_KEY_ID/S3_SECRET_ACCESS_KEY (= SPACES_KEY /
+# SPACES_SECRET). Point the endpoint variables anywhere else — DigitalOcean
+# Spaces, AWS S3, R2 — and nothing about the tooling changes.
+#
+# Use 127.0.0.1 (not "minio:") when running lnaicli on the host directly.
+services:
+  minio:
+    image: docker.io/minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    ports:
+      - "127.0.0.1:9000:9000"   # S3 API
+      - "127.0.0.1:9001:9001"   # web console
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  init-bucket:
+    image: docker.io/minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 ${MINIO_ROOT_USER:-minioadmin} ${MINIO_ROOT_PASSWORD:-minioadmin} &&
+      mc mb -p local/lunar-hal-data || true &&
+      echo 'bucket ready: lunar-hal-data'"
+
+volumes:
+  minio-data:

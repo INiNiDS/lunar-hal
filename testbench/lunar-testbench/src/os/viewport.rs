@@ -51,39 +51,44 @@ impl Drop for ViewportListeners {
     }
 }
 
+/// Raw browser closures run outside the Dioxus runtime, so they must only
+/// touch signals here — calling `spawn` from them panics in
+/// `Runtime::current_scope_id`. The debounced reflow task is spawned by the
+/// effect watching `generation`, which always runs inside the component scope.
 #[cfg(target_arch = "wasm32")]
-fn schedule_reflow(
-    mut os: crate::os::OsState,
-    mut generation: Signal<u64>,
-    mut last_viewport: Signal<(f64, f64)>,
-) {
-    let ticket = *generation.read() + 1;
-    generation.set(ticket);
-    spawn(async move {
-        gloo_timers::future::TimeoutFuture::new(75).await;
-        if *generation.read() != ticket {
-            return;
-        }
-        let size = crate::os::viewport_size();
-        let previous = *last_viewport.read();
-        if (previous.0 - size.0).abs() < 1.0 && (previous.1 - size.1).abs() < 1.0 {
-            return;
-        }
-        last_viewport.set(size);
-        os.reflow_windows(size.0, size.1);
-    });
+fn resize_listener(mut generation: Signal<u64>) -> Closure<dyn FnMut(web_sys::Event)> {
+    Closure::wrap(Box::new(move |_event: web_sys::Event| {
+        generation.with_mut(|g| *g += 1);
+    }) as Box<dyn FnMut(web_sys::Event)>)
 }
 
+/// Debounces the raw resize events into a single reflow 75ms after the last one.
+/// Must run inside a component scope so `spawn` has a current scope.
 #[cfg(target_arch = "wasm32")]
-fn resize_listener(
-    os: crate::os::OsState,
+fn use_debounced_reflow(
+    mut os: crate::os::OsState,
     generation: Signal<u64>,
-    last_viewport: Signal<(f64, f64)>,
-) -> Closure<dyn FnMut(web_sys::Event)> {
-    let generation = generation;
-    Closure::wrap(Box::new(move |_event: web_sys::Event| {
-        schedule_reflow(os, generation, last_viewport);
-    }) as Box<dyn FnMut(web_sys::Event)>)
+    mut last_viewport: Signal<(f64, f64)>,
+) {
+    use_effect(move || {
+        let ticket = generation();
+        if ticket == 0 {
+            return;
+        }
+        spawn(async move {
+            gloo_timers::future::TimeoutFuture::new(75).await;
+            if *generation.peek() != ticket {
+                return;
+            }
+            let size = crate::os::viewport_size();
+            let previous = *last_viewport.peek();
+            if (previous.0 - size.0).abs() < 1.0 && (previous.1 - size.1).abs() < 1.0 {
+                return;
+            }
+            last_viewport.set(size);
+            os.reflow_windows(size.0, size.1);
+        });
+    });
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -97,15 +102,14 @@ fn cancel_drag_listener(mut os: crate::os::OsState) -> Closure<dyn FnMut(web_sys
 fn install_viewport_listeners(
     os: crate::os::OsState,
     generation: Signal<u64>,
-    last_viewport: Signal<(f64, f64)>,
 ) -> Rc<RefCell<Option<ViewportListeners>>> {
     let retained = Rc::new(RefCell::new(None));
     let Some(window) = web_sys::window() else {
         return retained;
     };
 
-    let window_resize = resize_listener(os, generation, last_viewport);
-    let orientation_change = resize_listener(os, generation, last_viewport);
+    let window_resize = resize_listener(generation);
+    let orientation_change = resize_listener(generation);
     let global_mouse_up = cancel_drag_listener(os);
     let window_blur = cancel_drag_listener(os);
     let pointer_cancel = cancel_drag_listener(os);
@@ -125,7 +129,7 @@ fn install_viewport_listeners(
     let visual_viewport = window.visual_viewport();
     let viewport_resize = visual_viewport
         .as_ref()
-        .map(|_| resize_listener(os, generation, last_viewport));
+        .map(|_| resize_listener(generation));
     if let (Some(viewport), Some(listener)) = (&visual_viewport, &viewport_resize) {
         let _ =
             viewport.add_event_listener_with_callback("resize", listener.as_ref().unchecked_ref());
@@ -160,8 +164,8 @@ pub fn use_viewport_resize() {
     {
         let generation = use_signal(|| 0_u64);
         let last_viewport = use_signal(crate::os::viewport_size);
-        let _listeners =
-            use_hook(move || install_viewport_listeners(os, generation, last_viewport));
+        use_debounced_reflow(os, generation, last_viewport);
+        let _listeners = use_hook(move || install_viewport_listeners(os, generation));
         let _ = _listeners;
     }
 }
