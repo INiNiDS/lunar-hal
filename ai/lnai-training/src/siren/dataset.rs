@@ -1,7 +1,8 @@
 use anyhow::{Context, Result};
 use burn::prelude::*;
 use polars::prelude::*;
-use rand::rng;
+use rand::SeedableRng;
+use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -50,7 +51,7 @@ impl SirenDataset {
         println!("Extracted {} valid star parameter sets", stars.len());
 
         let n_stars = max_stars.min(stars.len());
-        stars.shuffle(&mut rng());
+        stars.shuffle(&mut StdRng::seed_from_u64(seed));
         stars.truncate(n_stars);
         println!("Using {} stars (max_stars={})", n_stars, max_stars);
 
@@ -119,9 +120,9 @@ impl SirenDataset {
         let n_val = ((total_samples as f32) * val_frac) as usize;
         let n_train = total_samples - n_val;
 
-        let mut rng = rng();
+        let mut split_rng = StdRng::seed_from_u64(seed);
         let mut split_indices: Vec<usize> = (0..total_samples).collect();
-        split_indices.shuffle(&mut rng);
+        split_indices.shuffle(&mut split_rng);
 
         let train_idx: Vec<usize> = split_indices[..n_train].to_vec();
         let val_idx: Vec<usize> = split_indices[n_train..].to_vec();
@@ -150,14 +151,17 @@ impl SirenDataset {
     }
 
     pub fn shuffle(&mut self) {
-        use rand::seq::SliceRandom;
+        self.shuffle_with_seed(crate::runner::DEFAULT_TRAIN_SEED);
+    }
+
+    pub fn shuffle_with_seed(&mut self, seed: u64) {
         let n = self.n_samples;
         if n == 0 {
             return;
         }
-        let mut rng = rng();
+        let mut shuffle_rng = StdRng::seed_from_u64(seed);
         let mut perm: Vec<usize> = (0..n).collect();
-        perm.shuffle(&mut rng);
+        perm.shuffle(&mut shuffle_rng);
         let mut new_inputs = vec![0.0f32; n * SIREN_INPUT_DIM];
         let mut new_targets = vec![0.0f32; n * TARGET_DIM];
         for (new_i, &old_i) in perm.iter().enumerate() {

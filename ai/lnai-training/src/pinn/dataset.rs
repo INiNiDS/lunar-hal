@@ -1,13 +1,13 @@
 use anyhow::{Context, Result};
 use burn::prelude::*;
 use polars::prelude::*;
-use rand::rng;
+use rand::SeedableRng;
+use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::path::Path;
-use std::sync::mpsc;
 
 pub const INPUT_DIM: usize = 5;
 pub const TARGET_DIM: usize = 4;
@@ -33,14 +33,12 @@ pub struct NormParams {
     pub log_lum_mean: f32,
     pub log_lum_std: f32,
 }
-
 pub struct StellarDataset<B: Backend> {
-    pub inputs_cpu: Vec<f32>,
-    pub targets_cpu: Vec<f32>,
+    pub inputs: Tensor<B, 2>,
+    pub targets: Tensor<B, 2>,
     pub norm: NormParams,
     pub n_samples: usize,
     pub device: B::Device,
-    indices: Vec<usize>,
 }
 
 impl<B: Backend> StellarDataset<B> {
@@ -56,13 +54,16 @@ impl<B: Backend> StellarDataset<B> {
         let (inputs_cpu, targets_cpu) = raw.build_cpu(&norm);
         raw.print_norm(&norm);
 
+        let inputs = Tensor::<B, 2>::from_data(TensorData::new(inputs_cpu, [n, INPUT_DIM]), device);
+        let targets =
+            Tensor::<B, 2>::from_data(TensorData::new(targets_cpu, [n, TARGET_DIM]), device);
+
         Ok(Self {
-            inputs_cpu,
-            targets_cpu,
+            inputs,
+            targets,
             norm,
             n_samples: n,
             device: device.clone(),
-            indices: (0..n).collect(),
         })
     }
 
@@ -81,148 +82,107 @@ impl<B: Backend> StellarDataset<B> {
         let raw = RawColumns::extract(&df)?;
         let (inputs_cpu, targets_cpu) = raw.build_cpu(&norm);
 
+        let inputs = Tensor::<B, 2>::from_data(TensorData::new(inputs_cpu, [n, INPUT_DIM]), device);
+        let targets =
+            Tensor::<B, 2>::from_data(TensorData::new(targets_cpu, [n, TARGET_DIM]), device);
+
         Ok(Self {
-            inputs_cpu,
-            targets_cpu,
+            inputs,
+            targets,
             norm,
             n_samples: n,
             device: device.clone(),
-            indices: (0..n).collect(),
         })
     }
 
+    /// Deterministic split on `seed`: same seed + same data always yields
+    /// the same train/val partition (old/new trainer parity).
     pub fn split(self, val_frac: f32) -> (Self, Self) {
+        self.split_with_seed(val_frac, crate::runner::DEFAULT_TRAIN_SEED)
+    }
+
+    pub fn split_with_seed(self, val_frac: f32, seed: u64) -> (Self, Self) {
         let n = self.n_samples;
         let n_val = ((n as f32) * val_frac) as usize;
         let n_train = n - n_val;
 
         let mut split_indices: Vec<usize> = (0..n).collect();
-        split_indices.shuffle(&mut rng());
+        split_indices.shuffle(&mut StdRng::seed_from_u64(seed));
 
-        let train_idx = &split_indices[..n_train];
-        let val_idx = &split_indices[n_train..];
+        let (train_idx, val_idx) = split_indices.split_at(n_train);
 
-        let (train_inputs, train_targets) =
-            gather_rows(&self.inputs_cpu, &self.targets_cpu, train_idx);
-        let (val_inputs, val_targets) = gather_rows(&self.inputs_cpu, &self.targets_cpu, val_idx);
+        let to_idx_tensor = |ids: &[usize]| -> Tensor<B, 1, Int> {
+            let ids: Vec<u32> = ids.iter().map(|&i| i as u32).collect();
+            let len = ids.len();
+            Tensor::<B, 1, Int>::from_data(TensorData::new(ids, [len]), &self.device)
+        };
+
+        let train_inputs = self.inputs.clone().select(0, to_idx_tensor(train_idx));
+        let train_targets = self.targets.clone().select(0, to_idx_tensor(train_idx));
+        let val_inputs = self.inputs.select(0, to_idx_tensor(val_idx));
+        let val_targets = self.targets.select(0, to_idx_tensor(val_idx));
 
         let train = StellarDataset {
-            inputs_cpu: train_inputs,
-            targets_cpu: train_targets,
+            inputs: train_inputs,
+            targets: train_targets,
             norm: self.norm.clone(),
             n_samples: n_train,
             device: self.device.clone(),
-            indices: (0..n_train).collect(),
         };
         let val = StellarDataset {
-            inputs_cpu: val_inputs,
-            targets_cpu: val_targets,
+            inputs: val_inputs,
+            targets: val_targets,
             norm: self.norm,
             n_samples: n_val,
             device: self.device,
-            indices: (0..n_val).collect(),
         };
 
         println!("Train samples: {}, Validation samples: {}", n_train, n_val);
         (train, val)
     }
+}
 
-    pub fn shuffle(&mut self) {
-        self.indices.shuffle(&mut rng());
+/// GPU-resident batch iterator: shuffles rows once per epoch via a single
+/// gather on device, then serves batches as zero-copy row slices.
+pub struct GpuBatcher<B: Backend> {
+    inputs: Tensor<B, 2>,
+    targets: Tensor<B, 2>,
+    batch_size: usize,
+    n_samples: usize,
+    current: usize,
+}
+
+impl<B: Backend> GpuBatcher<B> {
+    pub fn new(dataset: &StellarDataset<B>, batch_size: usize) -> Self {
+        Self::new_with_seed(dataset, batch_size, crate::runner::DEFAULT_TRAIN_SEED)
     }
-}
 
-struct PrefetchBatch {
-    input_data: Vec<f32>,
-    target_data: Vec<f32>,
-    rows: usize,
-}
-
-pub struct PrefetchBatcher {
-    receiver: mpsc::Receiver<PrefetchBatch>,
-}
-
-impl PrefetchBatcher {
-    pub fn new<B: Backend>(dataset: &StellarDataset<B>, batch_size: usize) -> Self {
-        let inputs = dataset.inputs_cpu.clone();
-        let targets = dataset.targets_cpu.clone();
-        let indices = dataset.indices.clone();
+    pub fn new_with_seed(dataset: &StellarDataset<B>, batch_size: usize, seed: u64) -> Self {
         let n_samples = dataset.n_samples;
-
-        let (tx, rx) = mpsc::sync_channel(3);
-
-        std::thread::spawn(move || {
-            let mut current = 0;
-            while current < n_samples {
-                let end = (current + batch_size).min(n_samples);
-                let rows = end - current;
-
-                let mut inp_batch = Vec::with_capacity(rows * INPUT_DIM);
-                let mut tgt_batch = Vec::with_capacity(rows * TARGET_DIM);
-
-                for &idx in &indices[current..end] {
-                    let i = idx * INPUT_DIM;
-                    inp_batch.extend_from_slice(&inputs[i..i + INPUT_DIM]);
-                    let j = idx * TARGET_DIM;
-                    tgt_batch.extend_from_slice(&targets[j..j + TARGET_DIM]);
-                }
-
-                if tx
-                    .send(PrefetchBatch {
-                        input_data: inp_batch,
-                        target_data: tgt_batch,
-                        rows,
-                    })
-                    .is_err()
-                {
-                    break;
-                }
-                current = end;
-            }
-        });
-
-        PrefetchBatcher { receiver: rx }
+        let mut idx: Vec<u32> = (0..n_samples as u32).collect();
+        idx.shuffle(&mut StdRng::seed_from_u64(seed));
+        let idx_dev =
+            Tensor::<B, 1, Int>::from_data(TensorData::new(idx, [n_samples]), &dataset.device);
+        Self {
+            inputs: dataset.inputs.clone().select(0, idx_dev.clone()),
+            targets: dataset.targets.clone().select(0, idx_dev),
+            batch_size,
+            n_samples,
+            current: 0,
+        }
     }
 
-    pub fn next_batch<B: Backend>(
-        &mut self,
-        device: &B::Device,
-    ) -> Option<(Tensor<B, 2>, Tensor<B, 2>)> {
-        self.receiver.recv().ok().map(|batch| {
-            let inputs = Tensor::<B, 2>::from_data(
-                TensorData::new(batch.input_data, [batch.rows, INPUT_DIM]),
-                device,
-            );
-            let targets = Tensor::<B, 2>::from_data(
-                TensorData::new(batch.target_data, [batch.rows, TARGET_DIM]),
-                device,
-            );
-            (inputs, targets)
-        })
+    pub fn next_batch(&mut self) -> Option<(Tensor<B, 2>, Tensor<B, 2>)> {
+        if self.current >= self.n_samples {
+            return None;
+        }
+        let start = self.current;
+        let end = (start + self.batch_size).min(self.n_samples);
+        self.current = end;
+        let inputs = self.inputs.clone().slice([start..end, 0..INPUT_DIM]);
+        let targets = self.targets.clone().slice([start..end, 0..TARGET_DIM]);
+        Some((inputs, targets))
     }
-}
-
-fn gather_rows(inputs: &[f32], targets: &[f32], indices: &[usize]) -> (Vec<f32>, Vec<f32>) {
-    let n = indices.len();
-    let mut new_inputs = vec![0.0f32; n * INPUT_DIM];
-    let mut new_targets = vec![0.0f32; n * TARGET_DIM];
-
-    new_inputs
-        .par_chunks_mut(INPUT_DIM)
-        .zip(indices.par_iter())
-        .for_each(|(chunk, &src)| {
-            let s = src * INPUT_DIM;
-            chunk.copy_from_slice(&inputs[s..s + INPUT_DIM]);
-        });
-    new_targets
-        .par_chunks_mut(TARGET_DIM)
-        .zip(indices.par_iter())
-        .for_each(|(chunk, &src)| {
-            let s = src * TARGET_DIM;
-            chunk.copy_from_slice(&targets[s..s + TARGET_DIM]);
-        });
-
-    (new_inputs, new_targets)
 }
 
 fn read_filtered_parquet(parquet_path: &Path) -> Result<(DataFrame, usize)> {

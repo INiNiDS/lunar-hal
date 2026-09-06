@@ -171,9 +171,8 @@ impl JobRegistry {
                             }
                         }
                         Err(error) => {
-                            job_arc_for_task.write().error_summary = Some(format!(
-                                "failed to reap cancelled job: {error}"
-                            ));
+                            job_arc_for_task.write().error_summary =
+                                Some(format!("failed to reap cancelled job: {error}"));
                             JobStatus::Failed
                         }
                     }
@@ -376,101 +375,79 @@ pub fn workspace_root() -> PathBuf {
 }
 
 fn build_train_command(workspace_root: &Path, spec: &TrainSpec) -> Command {
-    let mut cmd = Command::new(
-        workspace_root
-            .join("target")
-            .join("release")
-            .join(spec.model.binary_name()),
-    );
-    cmd.arg("--data").arg(&spec.data_path);
-    cmd.arg("--epochs").arg(spec.epochs.to_string());
-    cmd.arg("--lr").arg(spec.lr.to_string());
-    cmd.arg("--val-frac").arg(spec.val_frac.to_string());
-    cmd.arg("--gpu-index").arg(spec.gpu_index.to_string());
-    cmd.arg("--patience").arg(spec.patience.to_string());
-    cmd.arg("--clip-grad-norm")
-        .arg(spec.clip_grad_norm.to_string());
-    cmd.arg("--grad-accum").arg(spec.grad_accum.to_string());
-    cmd.arg("--output-dir").arg(&spec.output_dir);
-
-    if let Some(resume) = &spec.resume_from
-        && !resume.is_empty()
-    {
-        cmd.arg("--resume-from").arg(resume);
-    }
-    if let Some(holdout) = &spec.holdout
-        && !holdout.is_empty()
-    {
-        cmd.arg("--holdout").arg(holdout);
-    }
-
-    match &spec.model {
-        ModelKind::Pinn => {
-            cmd.arg("--batch-size").arg(spec.batch_size.to_string());
-            cmd.arg("--physics-weight")
-                .arg(spec.physics_weight.to_string());
-        }
-        ModelKind::Gnn => {
-            cmd.arg("--max-nodes").arg(spec.batch_size.to_string());
-            cmd.arg("--physics-weight")
-                .arg(spec.physics_weight.to_string());
-            if let Some(k) = spec.knn_k {
-                cmd.arg("--knn-k").arg(k.to_string());
-            }
-            if let Some(h) = spec.hidden_dim {
-                cmd.arg("--hidden-dim").arg(h.to_string());
-            }
-        }
-        ModelKind::Siren => {
-            cmd.arg("--batch-size").arg(spec.batch_size.to_string());
-            if let Some(t) = spec.texture_size {
-                cmd.arg("--texture-size").arg(t.to_string());
-            }
-            if let Some(m) = spec.max_stars {
-                cmd.arg("--max-stars").arg(m.to_string());
-            }
-        }
-    }
-    cmd
+    // Compatibility alias (Stage 5): the old `TrainSpec` shape renders
+    // through the shared `worker_argv` builder — same flags the CLI emits.
+    // No separate implementation lives here anymore.
+    let _ = workspace_root;
+    use lunar_structures_testbench::typed::{ModelKindDto, TrainingRequest};
+    let model = match spec.model {
+        ModelKind::Pinn => ModelKindDto::Pinn,
+        ModelKind::Gnn => ModelKindDto::Gnn,
+        ModelKind::Siren => ModelKindDto::Siren,
+    };
+    let req = TrainingRequest {
+        model,
+        epochs: spec.epochs,
+        batch_size: spec.batch_size,
+        lr: spec.lr,
+        physics_weight: spec.physics_weight,
+        val_frac: spec.val_frac,
+        data_path: spec.data_path.clone(),
+        output_dir: spec.output_dir.clone(),
+        resume_from: spec.resume_from.clone(),
+        holdout: spec.holdout.clone(),
+        gpu_index: spec.gpu_index,
+        knn_k: spec.knn_k,
+        hidden_dim: spec.hidden_dim,
+        max_group_size: None,
+        radius_pc: None,
+        texture_size: spec.texture_size,
+        max_stars: spec.max_stars,
+        seed: None,
+        dataset_manifest_hash: None,
+        patience: spec.patience,
+        grad_accum: spec.grad_accum,
+        clip_grad_norm: spec.clip_grad_norm,
+    };
+    let shared =
+        crate::ai_jobs::training_spec_from_request(&req).expect("legacy train spec must convert");
+    crate::ai_jobs::train_command_from_spec(&shared)
 }
 
 fn build_validate_command(workspace_root: &Path, spec: &ValidateSpec) -> Command {
-    let mut cmd = Command::new(
-        workspace_root
-            .join("target")
-            .join("release")
-            .join(spec.model.binary_name()),
-    );
-    cmd.arg("--data").arg(&spec.data_path);
-    cmd.arg("--epochs").arg(spec.epochs.to_string());
-    cmd.arg("--val-frac").arg(spec.val_frac.to_string());
-    cmd.arg("--output-dir").arg(&spec.output_dir);
-    cmd.arg("--patience").arg("99999");
-
-    match &spec.model {
-        ModelKind::Pinn => {
-            cmd.arg("--batch-size").arg(spec.batch_size.to_string());
-        }
-        ModelKind::Gnn => {
-            cmd.arg("--max-nodes").arg(spec.batch_size.to_string());
-            if let Some(k) = spec.knn_k {
-                cmd.arg("--knn-k").arg(k.to_string());
-            }
-            if let Some(h) = spec.hidden_dim {
-                cmd.arg("--hidden-dim").arg(h.to_string());
-            }
-        }
-        ModelKind::Siren => {
-            cmd.arg("--batch-size").arg(spec.batch_size.to_string());
-            if let Some(t) = spec.texture_size {
-                cmd.arg("--texture-size").arg(t.to_string());
-            }
-            if let Some(m) = spec.max_stars {
-                cmd.arg("--max-stars").arg(m.to_string());
-            }
-        }
-    }
-    cmd
+    // Compatibility alias (Stage 5): the old `ValidateSpec` shape renders
+    // through the shared read-only evaluation builder — same binary, plus
+    // `--evaluate-only`, never an optimizer step. No separate implementation.
+    let _ = workspace_root;
+    use lunar_structures_testbench::typed::{EvaluationRequest, ModelKindDto};
+    let model = match spec.model {
+        ModelKind::Pinn => ModelKindDto::Pinn,
+        ModelKind::Gnn => ModelKindDto::Gnn,
+        ModelKind::Siren => ModelKindDto::Siren,
+    };
+    let req = EvaluationRequest {
+        model,
+        data_path: spec.data_path.clone(),
+        output_dir: spec.output_dir.clone(),
+        holdout: None,
+        batch_size: spec.batch_size,
+        seed: None,
+        artifact_hash: None,
+        dataset_manifest_hash: None,
+    };
+    let eval = crate::ai_jobs::evaluation_spec_from_request(&req)
+        .expect("legacy validate spec must convert");
+    let kind = match spec.model {
+        ModelKind::Pinn => "stellar_model.bpk",
+        ModelKind::Gnn => "stellar_gnn_model.bpk",
+        ModelKind::Siren => "stellar_siren_model.bpk",
+    };
+    let norm = match spec.model {
+        ModelKind::Pinn => "stellar_norm.json",
+        ModelKind::Gnn => "stellar_gnn_norm.json",
+        ModelKind::Siren => "stellar_siren_norm.json",
+    };
+    crate::ai_jobs::evaluate_command_from_spec(&eval, None, kind, norm)
 }
 
 pub async fn list_jobs(State(state): State<AppState>) -> Json<Vec<Job>> {
@@ -569,6 +546,11 @@ mod tests {
     use std::time::Duration;
 
     fn train_spec(model: ModelKind) -> TrainSpec {
+        let (knn_k, hidden_dim, texture_size, max_stars) = match model {
+            ModelKind::Pinn => (None, None, None, None),
+            ModelKind::Gnn => (Some(7), Some(128), None, None),
+            ModelKind::Siren => (None, None, Some(96), Some(500)),
+        };
         TrainSpec {
             model,
             epochs: 3,
@@ -581,10 +563,10 @@ mod tests {
             resume_from: Some("resume".into()),
             holdout: Some("holdout.parquet".into()),
             gpu_index: 1,
-            knn_k: Some(7),
-            hidden_dim: Some(128),
-            texture_size: Some(96),
-            max_stars: Some(500),
+            knn_k,
+            hidden_dim,
+            texture_size,
+            max_stars,
             patience: 12,
             grad_accum: 4,
             clip_grad_norm: 0.8,
@@ -592,6 +574,11 @@ mod tests {
     }
 
     fn validate_spec(model: ModelKind) -> ValidateSpec {
+        let (hidden_dim, knn_k, texture_size, max_stars) = match model {
+            ModelKind::Pinn => (None, None, None, None),
+            ModelKind::Gnn => (Some(128), Some(7), None, None),
+            ModelKind::Siren => (None, None, Some(96), Some(500)),
+        };
         ValidateSpec {
             model,
             data_path: "fixture.parquet".into(),
@@ -599,10 +586,10 @@ mod tests {
             batch_size: 64,
             val_frac: 0.15,
             output_dir: "out".into(),
-            hidden_dim: Some(128),
-            knn_k: Some(7),
-            texture_size: Some(96),
-            max_stars: Some(500),
+            hidden_dim,
+            knn_k,
+            texture_size,
+            max_stars,
         }
     }
 
@@ -621,6 +608,9 @@ mod tests {
 
     #[test]
     fn train_commands_only_include_flags_supported_by_each_model() {
+        // Compatibility-alias contract (Stage 5): legacy specs render through
+        // the shared worker_argv builder. Model-specific flags must appear
+        // only for their own kind; unrelated options are a conversion error.
         let root = Path::new("/workspace");
 
         let pinn_args = command_args(&build_train_command(root, &train_spec(ModelKind::Pinn)));
@@ -642,29 +632,45 @@ mod tests {
         assert!(has_flag_value(&siren_args, "--batch-size", "64"));
         assert!(has_flag_value(&siren_args, "--texture-size", "96"));
         assert!(has_flag_value(&siren_args, "--max-stars", "500"));
-        assert!(!siren_args.iter().any(|arg| arg == "--physics-weight"));
-        assert!(!siren_args.iter().any(|arg| arg == "--knn-k"));
-        assert!(!siren_args.iter().any(|arg| arg == "--hidden-dim"));
+        assert!(!siren_args.iter().any(|a| a == "--physics-weight"));
+        assert!(!siren_args.iter().any(|a| a == "--knn-k"));
+        assert!(!siren_args.iter().any(|a| a == "--hidden-dim"));
     }
 
     #[test]
-    fn validation_commands_use_model_specific_batch_flags() {
+    fn validation_alias_uses_read_only_evaluate_mode() {
+        // The old `/jobs/validate` route is now an alias for read-only
+        // evaluation: same binary, `--evaluate-only`, no training flags.
         let root = Path::new("/workspace");
-        let pinn_args = command_args(&build_validate_command(root, &validate_spec(ModelKind::Pinn)));
+        for model in [ModelKind::Pinn, ModelKind::Gnn, ModelKind::Siren] {
+            let args = command_args(&build_validate_command(root, &validate_spec(model)));
+            assert!(
+                args.contains(&"--evaluate-only".to_string()),
+                "validate alias must be read-only: {args:?}"
+            );
+            assert!(
+                !args.iter().any(|a| a == "--epochs"),
+                "evaluation must not train: {args:?}"
+            );
+        }
+
+        let pinn_args = command_args(&build_validate_command(
+            root,
+            &validate_spec(ModelKind::Pinn),
+        ));
         assert!(has_flag_value(&pinn_args, "--batch-size", "64"));
-        assert!(!pinn_args.iter().any(|arg| arg == "--max-nodes"));
 
-        let gnn_args = command_args(&build_validate_command(root, &validate_spec(ModelKind::Gnn)));
-        assert!(has_flag_value(&gnn_args, "--max-nodes", "64"));
-        assert!(!gnn_args.iter().any(|arg| arg == "--batch-size"));
-        assert!(has_flag_value(&gnn_args, "--knn-k", "7"));
-        assert!(has_flag_value(&gnn_args, "--hidden-dim", "128"));
+        let gnn_args = command_args(&build_validate_command(
+            root,
+            &validate_spec(ModelKind::Gnn),
+        ));
+        assert!(has_flag_value(&gnn_args, "--batch-size", "64"));
 
-        let siren_args = command_args(&build_validate_command(root, &validate_spec(ModelKind::Siren)));
+        let siren_args = command_args(&build_validate_command(
+            root,
+            &validate_spec(ModelKind::Siren),
+        ));
         assert!(has_flag_value(&siren_args, "--batch-size", "64"));
-        assert!(has_flag_value(&siren_args, "--texture-size", "96"));
-        assert!(has_flag_value(&siren_args, "--max-stars", "500"));
-        assert!(!siren_args.iter().any(|arg| arg == "--knn-k"));
     }
 
     #[cfg(unix)]
@@ -673,14 +679,21 @@ mod tests {
         let registry = JobRegistry::new();
         let mut command = Command::new("sleep");
         command.arg("30");
-        let job = Job::new(JobKind::Custom("cancellation-test".into()), "test".into(), 1);
+        let job = Job::new(
+            JobKind::Custom("cancellation-test".into()),
+            "test".into(),
+            1,
+        );
         let id = registry.spawn(job, command).expect("spawn job");
 
         registry.cancel(&id).expect("cancel job");
         let completed = tokio::time::timeout(Duration::from_secs(2), async {
             loop {
                 let job = registry.get(&id).expect("job exists");
-                if matches!(job.status, JobStatus::Cancelled | JobStatus::Completed | JobStatus::Failed) {
+                if matches!(
+                    job.status,
+                    JobStatus::Cancelled | JobStatus::Completed | JobStatus::Failed
+                ) {
                     break job;
                 }
                 tokio::time::sleep(Duration::from_millis(10)).await;

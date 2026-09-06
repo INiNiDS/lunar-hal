@@ -1,6 +1,11 @@
 pub mod artifacts;
 pub mod e2e;
+pub mod evaluation;
 pub mod events;
+pub mod gnn;
 pub mod metrics;
+pub mod pinn;
 pub mod report;
+pub mod runner;
+pub mod siren;
 pub mod spec;

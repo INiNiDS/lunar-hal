@@ -101,6 +101,45 @@ pub struct LogEntry {
     pub kind: LogLineKind,
 }
 
+/// Appends one NDJSON event line to `writer` (run folder `events.ndjson`,
+/// SSE payloads). Stdout keeps the human-readable `epoch` table; machines
+/// parse only this stream.
+pub fn write_event_line(writer: &mut dyn std::io::Write, event: &JobEvent) -> std::io::Result<()> {
+    let line = serde_json::to_string(event)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    writeln!(writer, "{line}")
+}
+
+/// Parses one NDJSON event line; returns `None` for blank lines so readers
+/// can skip trailing newlines without failing the whole stream.
+pub fn read_event_line(line: &str) -> Option<Result<JobEvent, String>> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(serde_json::from_str(trimmed).map_err(|e| e.to_string()))
+}
+
+/// Epoch table line format shared by every worker binary, so the legacy
+/// stdout scraper (`jobs.rs::parse_epoch_line`) keeps working while typed
+/// NDJSON becomes the primary protocol:
+/// `"{epoch:5} | {train:12.6} | {val:12.6} | {phys:12.6} | {lr:10.6e}"`
+/// (SIREN omits the phys column).
+pub fn format_epoch_line(
+    epoch: u32,
+    train_loss: f64,
+    val_loss: f64,
+    phys_loss: Option<f64>,
+    lr: f64,
+) -> String {
+    match phys_loss {
+        Some(phys) => {
+            format!("{epoch:5} | {train_loss:12.6} | {val_loss:12.6} | {phys:12.6} | {lr:10.6e}",)
+        }
+        None => format!("{epoch:5} | {train_loss:12.6} | {val_loss:12.6} | {lr:10.6e}",),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

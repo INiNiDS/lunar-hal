@@ -2,7 +2,8 @@ use anyhow::{Context, Result};
 use burn::prelude::*;
 use lnai_models::compute_knn_adjacency;
 use polars::prelude::*;
-use rand::rng;
+use rand::SeedableRng;
+use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -69,8 +70,24 @@ impl GnnDataset {
         max_group_size: usize,
         radius_pc: f32,
     ) -> Result<Self> {
+        Self::load_with_seed(
+            parquet_path,
+            knn_k,
+            max_group_size,
+            radius_pc,
+            crate::runner::DEFAULT_TRAIN_SEED,
+        )
+    }
+
+    pub fn load_with_seed(
+        parquet_path: &Path,
+        knn_k: usize,
+        max_group_size: usize,
+        radius_pc: f32,
+        seed: u64,
+    ) -> Result<Self> {
         let (groups, norm) =
-            build_groups_from_parquet(parquet_path, knn_k, max_group_size, radius_pc)?;
+            build_groups_from_parquet(parquet_path, knn_k, max_group_size, radius_pc, seed)?;
         let n = groups.len();
         println!("Built {} star groups from parquet", n);
 
@@ -88,12 +105,32 @@ impl GnnDataset {
         max_group_size: usize,
         radius_pc: f32,
     ) -> Result<Self> {
+        Self::load_with_norm_and_seed(
+            parquet_path,
+            norm,
+            knn_k,
+            max_group_size,
+            radius_pc,
+            crate::runner::DEFAULT_TRAIN_SEED,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn load_with_norm_and_seed(
+        parquet_path: &Path,
+        norm: GnnNormParams,
+        knn_k: usize,
+        max_group_size: usize,
+        radius_pc: f32,
+        seed: u64,
+    ) -> Result<Self> {
         let (groups, _) = build_groups_from_parquet_with_norm(
             parquet_path,
             &norm,
             knn_k,
             max_group_size,
             radius_pc,
+            seed,
         )?;
         let n = groups.len();
         println!("Built {} star groups (external norm)", n);
@@ -106,12 +143,16 @@ impl GnnDataset {
     }
 
     pub fn split(self, val_frac: f32) -> (Self, Self) {
+        self.split_with_seed(val_frac, crate::runner::DEFAULT_TRAIN_SEED)
+    }
+
+    pub fn split_with_seed(self, val_frac: f32, seed: u64) -> (Self, Self) {
         let n = self.groups.len();
         let n_val = ((n as f32) * val_frac) as usize;
         let n_train = n - n_val;
 
         let mut split_indices: Vec<usize> = (0..n).collect();
-        split_indices.shuffle(&mut rng());
+        split_indices.shuffle(&mut StdRng::seed_from_u64(seed));
 
         let train_idx = &split_indices[..n_train];
         let val_idx = &split_indices[n_train..];
@@ -137,7 +178,11 @@ impl GnnDataset {
     }
 
     pub fn shuffle(&mut self) {
-        self.indices.shuffle(&mut rng());
+        self.shuffle_with_seed(crate::runner::DEFAULT_TRAIN_SEED);
+    }
+
+    pub fn shuffle_with_seed(&mut self, seed: u64) {
+        self.indices.shuffle(&mut StdRng::seed_from_u64(seed));
     }
 }
 
@@ -254,6 +299,7 @@ fn build_groups_from_parquet(
     knn_k: usize,
     max_group_size: usize,
     radius_pc: f32,
+    seed: u64,
 ) -> Result<(Vec<StarGroup>, GnnNormParams)> {
     let df = read_gnn_parquet(path)?;
 
@@ -339,6 +385,7 @@ fn build_groups_from_parquet(
         knn_k,
         max_group_size,
         radius_pc,
+        seed,
     });
 
     Ok((groups, norm))
@@ -350,6 +397,7 @@ fn build_groups_from_parquet_with_norm(
     knn_k: usize,
     max_group_size: usize,
     radius_pc: f32,
+    seed: u64,
 ) -> Result<(Vec<StarGroup>, GnnNormParams)> {
     let df = read_gnn_parquet(path)?;
 
@@ -398,6 +446,7 @@ fn build_groups_from_parquet_with_norm(
         knn_k,
         max_group_size,
         radius_pc,
+        seed,
     });
 
     Ok((groups, norm.clone()))
@@ -423,6 +472,7 @@ struct GroupBuildConfig<'a> {
     knn_k: usize,
     max_group_size: usize,
     radius_pc: f32,
+    seed: u64,
 }
 
 fn build_star_groups(config: &GroupBuildConfig<'_>) -> Vec<StarGroup> {
@@ -448,7 +498,7 @@ fn build_star_groups(config: &GroupBuildConfig<'_>) -> Vec<StarGroup> {
     let mut groups = Vec::new();
 
     let mut order: Vec<usize> = (0..n).collect();
-    order.shuffle(&mut rng());
+    order.shuffle(&mut StdRng::seed_from_u64(config.seed));
 
     for &seed in &order {
         if assigned[seed] {

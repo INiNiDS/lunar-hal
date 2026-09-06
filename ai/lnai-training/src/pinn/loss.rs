@@ -1,6 +1,6 @@
 use burn::prelude::*;
 
-use crate::dataset::NormParams;
+use super::dataset::NormParams;
 
 const LOG_T_SUN: f64 = 3.5617974672827754;
 

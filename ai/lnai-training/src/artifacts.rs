@@ -154,6 +154,110 @@ pub enum ArtifactError {
     DeserializationError(String),
 }
 
+impl std::fmt::Display for ArtifactError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ArtifactError::IncompatibleDataset(m) => write!(f, "incompatible dataset: {m}"),
+            ArtifactError::IncompatibleSchema(m) => write!(f, "incompatible schema: {m}"),
+            ArtifactError::IncompatibleArchitecture(m) => {
+                write!(f, "incompatible architecture: {m}")
+            }
+            ArtifactError::ChecksumMismatch(m) => write!(f, "checksum mismatch: {m}"),
+            ArtifactError::FileNotFound(m) => write!(f, "file not found: {m}"),
+            ArtifactError::DeserializationError(m) => write!(f, "deserialization error: {m}"),
+        }
+    }
+}
+
+impl std::error::Error for ArtifactError {}
+
+/// Well-known weight/norm file names per model kind, shared by CLI workers,
+/// Testbench spawn code and parity tests so renames break in one place.
+pub fn weight_file_name(model: &ModelKind) -> &'static str {
+    match model {
+        ModelKind::Pinn => "stellar_model.bpk",
+        ModelKind::GnnKinematics => "stellar_gnn_model.bpk",
+        ModelKind::GnnLocalization => "stellar_gnn_loc_model.bpk",
+        ModelKind::Siren => "stellar_siren_model.bpk",
+    }
+}
+
+/// Well-known normalization file names per model kind.
+pub fn norm_file_name(model: &ModelKind) -> &'static str {
+    match model {
+        ModelKind::Pinn => "stellar_norm.json",
+        ModelKind::GnnKinematics => "stellar_gnn_norm.json",
+        ModelKind::GnnLocalization => "stellar_gnn_loc_norm.json",
+        ModelKind::Siren => "stellar_siren_norm.json",
+    }
+}
+
+/// Architecture versions frozen with contracts v1 (Stage 2).
+pub fn architecture_version(model: &ModelKind) -> &'static str {
+    match model {
+        ModelKind::Pinn => "pinn-v1",
+        ModelKind::GnnKinematics => "gnn-kinematics-v1",
+        ModelKind::GnnLocalization => "gnn-loc-v1",
+        ModelKind::Siren => "siren-v1",
+    }
+}
+
+/// SHA-256 of a file's bytes as lowercase hex.
+pub fn sha256_file_hex(path: &std::path::Path) -> Result<String, ArtifactError> {
+    let bytes = std::fs::read(path)
+        .map_err(|_| ArtifactError::FileNotFound(format!("missing file: {}", path.display())))?;
+    Ok(crate::e2e::sha256_hex(&bytes))
+}
+
+/// Atomically writes `artifact.json` next to the weights (temp + rename).
+/// Stage 5 (task 8): every training run leaves a versioned bundle whose
+/// manifest validation gates resume/serve paths.
+pub fn write_artifact_bundle(
+    output_dir: &std::path::Path,
+    manifest: &ArtifactManifestV1,
+) -> Result<std::path::PathBuf, ArtifactError> {
+    let json = serde_json::to_string_pretty(manifest)
+        .map_err(|e| ArtifactError::DeserializationError(e.to_string()))?;
+    crate::runner::write_checkpoint_sidecar(output_dir, "artifact.json", &json)
+        .map_err(|e| ArtifactError::ChecksumMismatch(e.to_string()))
+}
+
+/// Loads and validates an artifact bundle: manifest must exist, parse, be
+/// version-frozen and reference weight/norm files whose SHA-256 matches.
+pub fn validate_artifact_bundle(
+    output_dir: &std::path::Path,
+    expected: &ArtifactManifestV1,
+) -> Result<(), ArtifactError> {
+    let raw = std::fs::read_to_string(output_dir.join("artifact.json")).map_err(|_| {
+        ArtifactError::FileNotFound(format!("missing artifact.json in {}", output_dir.display()))
+    })?;
+    let manifest: ArtifactManifestV1 = serde_json::from_str(&raw)
+        .map_err(|e| ArtifactError::DeserializationError(e.to_string()))?;
+    if manifest.version != ARTIFACT_MANIFEST_VERSION {
+        return Err(ArtifactError::IncompatibleArchitecture(format!(
+            "manifest version {} != {ARTIFACT_MANIFEST_VERSION}",
+            manifest.version
+        )));
+    }
+    if manifest != *expected {
+        return Err(ArtifactError::ChecksumMismatch(
+            "artifact.json differs from the run manifest".to_string(),
+        ));
+    }
+    for (file, want) in [
+        (weight_file_name(&manifest.model_kind), &manifest.model_hash),
+        (norm_file_name(&manifest.model_kind), &manifest.norm_hash),
+    ] {
+        let actual = sha256_file_hex(&output_dir.join(file))?;
+        if &actual != want {
+            return Err(ArtifactError::ChecksumMismatch(format!(
+                "{file}: manifest {want}, actual {actual}"
+            )));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -235,5 +339,44 @@ mod tests {
         let json = serde_json::to_string(&norm).unwrap();
         let back: NormSnapshotV1 = serde_json::from_str(&json).unwrap();
         assert_eq!(back, norm);
+    }
+
+    #[test]
+    fn weight_and_norm_names_are_stable_per_model_kind() {
+        assert_eq!(weight_file_name(&ModelKind::Pinn), "stellar_model.bpk");
+        assert_eq!(
+            weight_file_name(&ModelKind::GnnKinematics),
+            "stellar_gnn_model.bpk"
+        );
+        assert_eq!(
+            weight_file_name(&ModelKind::Siren),
+            "stellar_siren_model.bpk"
+        );
+        assert_eq!(norm_file_name(&ModelKind::Pinn), "stellar_norm.json");
+        assert_eq!(
+            architecture_version(&ModelKind::Pinn),
+            architecture_version(&ModelKind::Pinn)
+        );
+    }
+
+    #[test]
+    fn artifact_bundle_round_trips_through_atomic_write_and_validate() {
+        let dir = std::env::temp_dir().join("lnai-training-artifact-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(weight_file_name(&ModelKind::Pinn)), b"weights").unwrap();
+        std::fs::write(dir.join(norm_file_name(&ModelKind::Pinn)), b"norm").unwrap();
+
+        let mut manifest = sample_manifest(ModelKind::Pinn);
+        manifest.model_hash =
+            sha256_file_hex(&dir.join(weight_file_name(&ModelKind::Pinn))).unwrap();
+        manifest.norm_hash = sha256_file_hex(&dir.join(norm_file_name(&ModelKind::Pinn))).unwrap();
+        write_artifact_bundle(&dir, &manifest).expect("write bundle");
+        validate_artifact_bundle(&dir, &manifest).expect("validate bundle");
+
+        let mut tampered = manifest.clone();
+        tampered.model_hash = "deadbeef".into();
+        assert!(validate_artifact_bundle(&dir, &tampered).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

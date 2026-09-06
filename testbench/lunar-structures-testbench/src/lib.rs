@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+pub mod typed;
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ModelKind {

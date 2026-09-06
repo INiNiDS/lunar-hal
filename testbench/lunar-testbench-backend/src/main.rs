@@ -8,6 +8,8 @@ use axum::{
 use lunar_utils::env::{DEFAULT_TESTBENCH_HOST, DEFAULT_TESTBENCH_PORT, resolve_port};
 use tower_http::cors::{Any, CorsLayer};
 
+pub mod ai_jobs;
+pub mod data_jobs;
 pub mod jobs;
 pub mod system;
 
@@ -46,8 +48,19 @@ async fn main() -> Result<()> {
             "/jobs/cancel",
             post(jobs::cancel_job).get(jobs::cancel_job_by_query),
         )
+        // Stage 5 canonical typed routes (task 10).
+        .route("/jobs/training", post(ai_jobs::start_training))
+        .route("/jobs/evaluation", post(ai_jobs::start_evaluation))
+        .route("/jobs/benchmark", post(ai_jobs::start_benchmark))
+        .route("/jobs/events/{id}", get(ai_jobs::job_typed_events))
+        // Compatibility aliases: old routes stay, but spawn through the
+        // same typed spec path (no separate implementation).
         .route("/jobs/train", post(jobs::start_train))
         .route("/jobs/validate", post(jobs::start_validate))
+        .route("/data/status", get(data_jobs::get_status))
+        .route("/data/collect", post(data_jobs::start_collect))
+        .route("/data/verify", post(data_jobs::start_verify))
+        .route("/data/build", post(data_jobs::start_build))
         .with_state(state)
         .layer(cors);
 

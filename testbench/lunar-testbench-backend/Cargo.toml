@@ -12,6 +12,8 @@ path = "src/main.rs"
 
 [dependencies]
 lunar-structures = { path = "../../crates/lunar-structures" }
+lnai-data = { path = "../../ai/lnai-data" }
+lnai-training = { path = "../../ai/lnai-training" }
 lunar-structures-testbench = { path = "../lunar-structures-testbench" }
 lunar-utils = { path = "../../crates/lunar-utils" }
 axum = "0.8.9"
