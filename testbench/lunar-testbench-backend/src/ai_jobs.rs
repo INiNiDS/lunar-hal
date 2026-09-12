@@ -98,6 +98,10 @@ pub fn training_spec_from_request(
             ModelKindDto::Siren => lnai_training::spec::ModelKind::Siren,
         })
         .to_string(),
+        // Epoch-watch agent / sampling / tiles are CLI-only for now.
+        max_rows: None,
+        tiles: None,
+        agent: None,
     };
     spec.validate().map_err(|errs| errs.join("; "))?;
     Ok(spec)
