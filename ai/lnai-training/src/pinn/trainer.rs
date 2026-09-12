@@ -135,13 +135,13 @@ pub fn run_train_with_cancel(spec: &TrainingSpec, cancel: &CancelFlag) -> Result
             .map_err(|e| anyhow::anyhow!("failed to load model: {e}"))?;
 
         let dataset: StellarDataset<TrainBackend> =
-            StellarDataset::load_with_norm(data_path.as_path(), loaded_norm.clone(), &device)?;
+            StellarDataset::load_with_norm(data_path.as_path(), loaded_norm.clone(), &device, spec.max_rows, spec.tiles.clone())?;
 
         println!("=== Fine-tuning mode (using loaded normalization) ===");
         (loaded_model, loaded_norm, dataset)
     } else {
         let dataset: StellarDataset<TrainBackend> =
-            StellarDataset::load(data_path.as_path(), &device)?;
+            StellarDataset::load(data_path.as_path(), &device, spec.max_rows, spec.tiles.clone())?;
         let norm = dataset.norm.clone();
         let fresh = StellarMlpConfig::new().init::<TrainBackend>(&device);
         (fresh, norm, dataset)
@@ -342,7 +342,7 @@ pub fn run_train_with_cancel(spec: &TrainingSpec, cancel: &CancelFlag) -> Result
         let holdout_path = Path::new(holdout_path);
         if holdout_path.exists() {
             let holdout_ds: StellarDataset<TrainBackend> =
-                StellarDataset::load(holdout_path, &device)?;
+                StellarDataset::load(holdout_path, &device, spec.max_rows, spec.tiles.clone())?;
             let (_, holdout_val) = holdout_ds.split_with_seed(0.0, seed);
             let infer_model = model.valid();
             let holdout_loss = evaluate_infer(
@@ -448,7 +448,7 @@ pub fn run_evaluate(spec: &TrainingSpec) -> Result<RunOutcome> {
         .map_err(|e| anyhow::anyhow!("failed to load model: {e}"))?;
 
     let dataset: StellarDataset<TrainBackend> =
-        StellarDataset::load_with_norm(data_path.as_path(), norm.clone(), &device)?;
+        StellarDataset::load_with_norm(data_path.as_path(), norm.clone(), &device, None, None)?;
     let (_, val_ds) = dataset.split_with_seed(spec.val_frac, seed);
     let infer_model = model.valid();
     let val_loss = evaluate_infer(
@@ -466,12 +466,23 @@ pub fn run_evaluate(spec: &TrainingSpec) -> Result<RunOutcome> {
     println!("=== Read-only evaluation (no weight updates) ===");
     println!("Validation data loss:    {val_loss:.6}");
     println!("Validation physics loss: {phys_loss:.6}");
+    let (pred_rows, truth_rows) = evaluate_per_target_infer(
+        &infer_model,
+        &val_ds.inputs.clone().valid(),
+        &val_ds.targets.clone().valid(),
+        spec.batch_size as usize,
+    )?;
+    print_per_target_table(
+        "Validation",
+        &crate::metrics::pinn::per_target_metrics(&pred_rows, &truth_rows),
+        &norm,
+    );
 
     if let Some(holdout_path) = &spec.holdout
         && Path::new(holdout_path).exists()
     {
         let holdout_ds: StellarDataset<TrainBackend> =
-            StellarDataset::load(Path::new(holdout_path), &device)?;
+            StellarDataset::load(Path::new(holdout_path), &device, None, None)?;
         let (_, holdout_val) = holdout_ds.split_with_seed(0.0, seed);
         let holdout_loss = evaluate_infer(
             &infer_model,
@@ -480,6 +491,17 @@ pub fn run_evaluate(spec: &TrainingSpec) -> Result<RunOutcome> {
             spec.batch_size as usize,
         );
         println!("Holdout data loss:       {holdout_loss:.6}");
+        let (pred_rows, truth_rows) = evaluate_per_target_infer(
+            &infer_model,
+            &holdout_val.inputs.clone().valid(),
+            &holdout_val.targets.clone().valid(),
+            spec.batch_size as usize,
+        )?;
+        print_per_target_table(
+            "Holdout",
+            &crate::metrics::pinn::per_target_metrics(&pred_rows, &truth_rows),
+            &norm,
+        );
     }
     drop(infer_model);
     println!("Evaluation complete; checkpoints untouched.");
@@ -544,6 +566,72 @@ pub fn run_benchmark(spec: &TrainingSpec, iters: u32, warmup: u32) -> Result<Run
         &serde_json::to_string_pretty(&report).unwrap_or_default(),
     )?;
     Ok(RunOutcome::Completed)
+}
+
+/// Batched inference gathering predictions + truths on CPU for per-target
+/// metrics. Same batching as [`evaluate_infer`]; read-only.
+fn evaluate_per_target_infer(
+    model: &StellarMlp<InferBackend>,
+    inputs: &Tensor<InferBackend, 2>,
+    targets: &Tensor<InferBackend, 2>,
+    batch_size: usize,
+) -> Result<(Vec<[f32; 4]>, Vec<[f32; 4]>)> {
+    let [n, _] = inputs.dims();
+    let mut pred_flat = Vec::with_capacity(n * TARGET_DIM);
+    let mut truth_flat = Vec::with_capacity(n * TARGET_DIM);
+    let mut current = 0usize;
+    while current < n {
+        let end = (current + batch_size).min(n);
+        let preds = model.forward(inputs.clone().slice([current..end, 0..INPUT_DIM]));
+        let truth = targets.clone().slice([current..end, 0..TARGET_DIM]);
+        pred_flat.extend(
+            preds
+                .into_data()
+                .to_vec::<f32>()
+                .map_err(|e| anyhow::anyhow!("download preds: {e}"))?,
+        );
+        truth_flat.extend(
+            truth
+                .into_data()
+                .to_vec::<f32>()
+                .map_err(|e| anyhow::anyhow!("download truth: {e}"))?,
+        );
+        current = end;
+    }
+    let to_rows = |v: Vec<f32>| {
+        v.chunks_exact(TARGET_DIM)
+            .map(|c| [c[0], c[1], c[2], c[3]])
+            .collect::<Vec<_>>()
+    };
+    Ok((to_rows(pred_flat), to_rows(truth_flat)))
+}
+
+/// Prints per-target MSE/MAE/max-abs in normalized units plus MAE in dex
+/// (mae_norm × target std), which is the physically readable number.
+fn print_per_target_table(
+    split: &str,
+    metrics: &[crate::metrics::pinn::PerTargetMetrics],
+    norm: &NormParams,
+) {
+    let std_of = |target: &str| match target {
+        "log10_teff" => norm.log_teff_std,
+        "log10_rad" => norm.log_rad_std,
+        "log10_mass" => norm.log_mass_std,
+        "log10_lum" => norm.log_lum_std,
+        _ => 1.0,
+    };
+    println!("Per-target {split} metrics:");
+    println!("target       |        mse |        mae |    max_abs |   mae_dex");
+    for m in metrics {
+        println!(
+            "{:<12} | {:10.6} | {:10.6} | {:10.6} | {:10.6}",
+            m.target,
+            m.mse,
+            m.mae,
+            m.max_abs_err,
+            m.mae as f32 * std_of(m.target),
+        );
+    }
 }
 
 fn evaluate_infer(

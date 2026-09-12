@@ -132,6 +132,12 @@ pub struct TrainingSpec {
     pub seed: Option<u64>,
     pub model_file: String,
     pub norm_file: String,
+    /// Deterministic systematic sample cap (every k-th row, file order);
+    /// `None`/`Some(0)` loads everything the filters keep.
+    pub max_rows: Option<u64>,
+    /// Spatial-tile subset (`spatial_tile` ids, comma-separated upstream);
+    /// `None` trains on all tiles. Norm stats cover only the subset.
+    pub tiles: Option<String>,
 }
 
 impl TrainingSpec {
@@ -237,6 +243,13 @@ impl TrainingSpec {
             "--grad-accum".to_string(),
             self.grad_accum.to_string(),
         ];
+        // Optional tail flags keep legacy argv byte-identical when unset.
+        if let Some(n) = self.max_rows
+            && n > 0
+        {
+            argv.push("--max-rows".to_string());
+            argv.push(n.to_string());
+        }
         if let Some(resume) = &self.resume_from
             && !resume.is_empty()
         {
@@ -255,6 +268,12 @@ impl TrainingSpec {
                 argv.push(self.batch_size.to_string());
                 argv.push("--physics-weight".to_string());
                 argv.push(cfg.physics_weight.to_string());
+                if let Some(tiles) = self.tiles.as_deref()
+                    && !tiles.is_empty()
+                {
+                    argv.push("--tiles".to_string());
+                    argv.push(tiles.to_string());
+                }
             }
             ModelConfig::GnnKinematics(cfg) => {
                 // Legacy lnai-gnn flag name is --max-nodes carrying the batch budget.
@@ -270,6 +289,12 @@ impl TrainingSpec {
                 argv.push(cfg.max_group_size.to_string());
                 argv.push("--radius-pc".to_string());
                 argv.push(cfg.radius_pc.to_string());
+                if let Some(tiles) = self.tiles.as_deref()
+                    && !tiles.is_empty()
+                {
+                    argv.push("--tiles".to_string());
+                    argv.push(tiles.to_string());
+                }
             }
             ModelConfig::GnnLocalization(_) => {}
             ModelConfig::Siren(cfg) => {
@@ -456,6 +481,8 @@ mod tests {
             seed: None,
             model_file: "stellar_gnn_loc_model.bpk".into(),
             norm_file: "stellar_gnn_loc_norm.json".into(),
+            max_rows: None,
+            tiles: None,
         }
     }
 
@@ -482,6 +509,8 @@ mod tests {
             seed: Some(42),
             model_file: "stellar_model.bpk".into(),
             norm_file: "stellar_norm.json".into(),
+            max_rows: None,
+            tiles: None,
         }
     }
 

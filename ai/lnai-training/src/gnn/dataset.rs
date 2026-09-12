@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use burn::prelude::*;
 use lnai_models::compute_knn_adjacency;
 use polars::prelude::*;
@@ -7,7 +7,7 @@ use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::fs::File;
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::mpsc;
@@ -19,22 +19,22 @@ pub const DEFAULT_MAX_GROUP: usize = 64;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GnnNormParams {
-    pub log_teff_mean: f32,
-    pub log_teff_std: f32,
-    pub log_rad_mean: f32,
-    pub log_rad_std: f32,
-    pub log_mass_mean: f32,
-    pub log_mass_std: f32,
-    pub log_lum_mean: f32,
-    pub log_lum_std: f32,
-    pub mg_mean: f32,
-    pub mg_std: f32,
     pub x_mean: f32,
     pub x_std: f32,
     pub y_mean: f32,
     pub y_std: f32,
     pub z_mean: f32,
     pub z_std: f32,
+    pub bp_rp_mean: f32,
+    pub bp_rp_std: f32,
+    pub mg_mean: f32,
+    pub mg_std: f32,
+    pub mag_bp_mean: f32,
+    pub mag_bp_std: f32,
+    pub mag_rp_mean: f32,
+    pub mag_rp_std: f32,
+    pub ruwe_mean: f32,
+    pub ruwe_std: f32,
     pub vx_mean: f32,
     pub vx_std: f32,
     pub vy_mean: f32,
@@ -69,6 +69,8 @@ impl GnnDataset {
         knn_k: usize,
         max_group_size: usize,
         radius_pc: f32,
+        max_rows: Option<u64>,
+        tiles: Option<String>,
     ) -> Result<Self> {
         Self::load_with_seed(
             parquet_path,
@@ -76,6 +78,8 @@ impl GnnDataset {
             max_group_size,
             radius_pc,
             crate::runner::DEFAULT_TRAIN_SEED,
+            max_rows,
+            tiles,
         )
     }
 
@@ -85,9 +89,18 @@ impl GnnDataset {
         max_group_size: usize,
         radius_pc: f32,
         seed: u64,
+        max_rows: Option<u64>,
+        tiles: Option<String>,
     ) -> Result<Self> {
-        let (groups, norm) =
-            build_groups_from_parquet(parquet_path, knn_k, max_group_size, radius_pc, seed)?;
+        let (groups, norm) = build_groups_from_parquet(
+            parquet_path,
+            knn_k,
+            max_group_size,
+            radius_pc,
+            seed,
+            max_rows,
+            tiles,
+        )?;
         let n = groups.len();
         println!("Built {} star groups from parquet", n);
 
@@ -104,6 +117,8 @@ impl GnnDataset {
         knn_k: usize,
         max_group_size: usize,
         radius_pc: f32,
+        max_rows: Option<u64>,
+        tiles: Option<String>,
     ) -> Result<Self> {
         Self::load_with_norm_and_seed(
             parquet_path,
@@ -112,6 +127,8 @@ impl GnnDataset {
             max_group_size,
             radius_pc,
             crate::runner::DEFAULT_TRAIN_SEED,
+            max_rows,
+            tiles,
         )
     }
 
@@ -123,6 +140,8 @@ impl GnnDataset {
         max_group_size: usize,
         radius_pc: f32,
         seed: u64,
+        max_rows: Option<u64>,
+        tiles: Option<String>,
     ) -> Result<Self> {
         let (groups, _) = build_groups_from_parquet_with_norm(
             parquet_path,
@@ -131,6 +150,8 @@ impl GnnDataset {
             max_group_size,
             radius_pc,
             seed,
+            max_rows,
+            tiles,
         )?;
         let n = groups.len();
         println!("Built {} star groups (external norm)", n);
@@ -300,65 +321,62 @@ fn build_groups_from_parquet(
     max_group_size: usize,
     radius_pc: f32,
     seed: u64,
+    max_rows: Option<u64>,
+    tiles: Option<String>,
 ) -> Result<(Vec<StarGroup>, GnnNormParams)> {
-    let df = read_gnn_parquet(path)?;
+    let df = read_gnn_parquet(path, max_rows, tiles)?;
 
     let x = extract_f32(&df, "x_pc")?;
     let y = extract_f32(&df, "y_pc")?;
     let z = extract_f32(&df, "z_pc")?;
-    let _bp_rp = extract_f32(&df, "bp_rp")?;
-    let g_mag = extract_f32(&df, "g_mag")?;
-    let teff = extract_f32(&df, "st_teff")?;
-    let rad = extract_f32(&df, "st_rad")?;
-    let mass = extract_f32(&df, "st_mass")?;
-    let lum = extract_f32(&df, "st_lum")?;
-    let vx = extract_f32(&df, "vx")?;
-    let vy = extract_f32(&df, "vy")?;
-    let vz = extract_f32(&df, "vz")?;
+    let bp_rp = extract_f32(&df, "bp_rp")?;
+    let mag_g = extract_f32(&df, "mag_g")?;
+    let mag_bp = extract_f32(&df, "mag_bp")?;
+    let mag_rp = extract_f32(&df, "mag_rp")?;
+    let ruwe = extract_f32(&df, "ruwe")?;
+    let vx = extract_f32(&df, "vx_kms")?;
+    let vy = extract_f32(&df, "vy_kms")?;
+    let vz = extract_f32(&df, "vz_kms")?;
 
     let n = df.height();
 
+    // Absolute G magnitude from apparent mag + Cartesian distance (pc).
     let mg: Vec<f32> = (0..n)
         .map(|i| {
             let d = (x[i] * x[i] + y[i] * y[i] + z[i] * z[i]).sqrt().max(1e-6);
-            g_mag[i] - 5.0 * d.log10() + 5.0
+            mag_g[i] - 5.0 * d.log10() + 5.0
         })
         .collect();
 
-    let log_teff: Vec<f32> = teff.par_iter().map(|&v| v.max(1e-10).log10()).collect();
-    let log_rad: Vec<f32> = rad.par_iter().map(|&v| v.max(1e-10).log10()).collect();
-    let log_mass: Vec<f32> = mass.par_iter().map(|&v| v.max(1e-10).log10()).collect();
-    let log_lum: Vec<f32> = lum.par_iter().map(|&v| v.max(1e-10).log10()).collect();
-
-    let (log_teff_m, log_teff_s) = mean_std(&log_teff);
-    let (log_rad_m, log_rad_s) = mean_std(&log_rad);
-    let (log_mass_m, log_mass_s) = mean_std(&log_mass);
-    let (log_lum_m, log_lum_s) = mean_std(&log_lum);
-    let (mg_m, mg_s) = mean_std(&mg);
     let (x_m, x_s) = mean_std(&x);
     let (y_m, y_s) = mean_std(&y);
     let (z_m, z_s) = mean_std(&z);
+    let (bp_rp_m, bp_rp_s) = mean_std(&bp_rp);
+    let (mg_m, mg_s) = mean_std(&mg);
+    let (mag_bp_m, mag_bp_s) = mean_std(&mag_bp);
+    let (mag_rp_m, mag_rp_s) = mean_std(&mag_rp);
+    let (ruwe_m, ruwe_s) = mean_std(&ruwe);
     let (vx_m, vx_s) = mean_std(&vx);
     let (vy_m, vy_s) = mean_std(&vy);
     let (vz_m, vz_s) = mean_std(&vz);
 
     let norm = GnnNormParams {
-        log_teff_mean: log_teff_m,
-        log_teff_std: log_teff_s,
-        log_rad_mean: log_rad_m,
-        log_rad_std: log_rad_s,
-        log_mass_mean: log_mass_m,
-        log_mass_std: log_mass_s,
-        log_lum_mean: log_lum_m,
-        log_lum_std: log_lum_s,
-        mg_mean: mg_m,
-        mg_std: mg_s,
         x_mean: x_m,
         x_std: x_s,
         y_mean: y_m,
         y_std: y_s,
         z_mean: z_m,
         z_std: z_s,
+        bp_rp_mean: bp_rp_m,
+        bp_rp_std: bp_rp_s,
+        mg_mean: mg_m,
+        mg_std: mg_s,
+        mag_bp_mean: mag_bp_m,
+        mag_bp_std: mag_bp_s,
+        mag_rp_mean: mag_rp_m,
+        mag_rp_std: mag_rp_s,
+        ruwe_mean: ruwe_m,
+        ruwe_std: ruwe_s,
         vx_mean: vx_m,
         vx_std: vx_s,
         vy_mean: vy_m,
@@ -372,11 +390,11 @@ fn build_groups_from_parquet(
             x: &x,
             y: &y,
             z: &z,
-            log_teff: &log_teff,
-            log_rad: &log_rad,
-            log_mass: &log_mass,
-            log_lum: &log_lum,
+            bp_rp: &bp_rp,
             mg: &mg,
+            mag_bp: &mag_bp,
+            mag_rp: &mag_rp,
+            ruwe: &ruwe,
             vx: &vx,
             vy: &vy,
             vz: &vz,
@@ -398,46 +416,43 @@ fn build_groups_from_parquet_with_norm(
     max_group_size: usize,
     radius_pc: f32,
     seed: u64,
+    max_rows: Option<u64>,
+    tiles: Option<String>,
 ) -> Result<(Vec<StarGroup>, GnnNormParams)> {
-    let df = read_gnn_parquet(path)?;
+    let df = read_gnn_parquet(path, max_rows, tiles)?;
 
     let x = extract_f32(&df, "x_pc")?;
     let y = extract_f32(&df, "y_pc")?;
     let z = extract_f32(&df, "z_pc")?;
-    let _bp_rp = extract_f32(&df, "bp_rp")?;
-    let g_mag = extract_f32(&df, "g_mag")?;
-    let teff = extract_f32(&df, "st_teff")?;
-    let rad = extract_f32(&df, "st_rad")?;
-    let mass = extract_f32(&df, "st_mass")?;
-    let lum = extract_f32(&df, "st_lum")?;
-    let vx = extract_f32(&df, "vx")?;
-    let vy = extract_f32(&df, "vy")?;
-    let vz = extract_f32(&df, "vz")?;
+    let bp_rp = extract_f32(&df, "bp_rp")?;
+    let mag_g = extract_f32(&df, "mag_g")?;
+    let mag_bp = extract_f32(&df, "mag_bp")?;
+    let mag_rp = extract_f32(&df, "mag_rp")?;
+    let ruwe = extract_f32(&df, "ruwe")?;
+    let vx = extract_f32(&df, "vx_kms")?;
+    let vy = extract_f32(&df, "vy_kms")?;
+    let vz = extract_f32(&df, "vz_kms")?;
 
     let n = df.height();
 
+    // Absolute G magnitude from apparent mag + Cartesian distance (pc).
     let mg: Vec<f32> = (0..n)
         .map(|i| {
             let d = (x[i] * x[i] + y[i] * y[i] + z[i] * z[i]).sqrt().max(1e-6);
-            g_mag[i] - 5.0 * d.log10() + 5.0
+            mag_g[i] - 5.0 * d.log10() + 5.0
         })
         .collect();
-
-    let log_teff: Vec<f32> = teff.par_iter().map(|&v| v.max(1e-10).log10()).collect();
-    let log_rad: Vec<f32> = rad.par_iter().map(|&v| v.max(1e-10).log10()).collect();
-    let log_mass: Vec<f32> = mass.par_iter().map(|&v| v.max(1e-10).log10()).collect();
-    let log_lum: Vec<f32> = lum.par_iter().map(|&v| v.max(1e-10).log10()).collect();
 
     let groups = build_star_groups(&GroupBuildConfig {
         features: StarFeatures {
             x: &x,
             y: &y,
             z: &z,
-            log_teff: &log_teff,
-            log_rad: &log_rad,
-            log_mass: &log_mass,
-            log_lum: &log_lum,
+            bp_rp: &bp_rp,
             mg: &mg,
+            mag_bp: &mag_bp,
+            mag_rp: &mag_rp,
+            ruwe: &ruwe,
             vx: &vx,
             vy: &vy,
             vz: &vz,
@@ -456,11 +471,11 @@ struct StarFeatures<'a> {
     x: &'a [f32],
     y: &'a [f32],
     z: &'a [f32],
-    log_teff: &'a [f32],
-    log_rad: &'a [f32],
-    log_mass: &'a [f32],
-    log_lum: &'a [f32],
+    bp_rp: &'a [f32],
     mg: &'a [f32],
+    mag_bp: &'a [f32],
+    mag_rp: &'a [f32],
+    ruwe: &'a [f32],
     vx: &'a [f32],
     vy: &'a [f32],
     vz: &'a [f32],
@@ -480,11 +495,11 @@ fn build_star_groups(config: &GroupBuildConfig<'_>) -> Vec<StarGroup> {
         x,
         y,
         z,
-        log_teff,
-        log_rad,
-        log_mass,
-        log_lum,
+        bp_rp,
         mg,
+        mag_bp,
+        mag_rp,
+        ruwe,
         vx,
         vy,
         vz,
@@ -500,6 +515,22 @@ fn build_star_groups(config: &GroupBuildConfig<'_>) -> Vec<StarGroup> {
     let mut order: Vec<usize> = (0..n).collect();
     order.shuffle(&mut StdRng::seed_from_u64(config.seed));
 
+    // Spatial hash grid (cell = search radius): neighbor lookup is O(1)
+    // amortized instead of O(n) per seed — required at canonical scale.
+    // With cell == radius, every point within `radius_pc` of the seed is
+    // guaranteed to sit in the 27 cells around it, and ascending candidate
+    // order reproduces the exact output of the old full scan.
+    let cell = radius_pc;
+    let mut grid: HashMap<(i32, i32, i32), Vec<usize>> = HashMap::new();
+    for (i, (&xi, &yi)) in x.iter().zip(y.iter()).enumerate() {
+        let key = (
+            (xi / cell).floor() as i32,
+            (yi / cell).floor() as i32,
+            (z[i] / cell).floor() as i32,
+        );
+        grid.entry(key).or_default().push(i);
+    }
+
     for &seed in &order {
         if assigned[seed] {
             continue;
@@ -510,8 +541,23 @@ fn build_star_groups(config: &GroupBuildConfig<'_>) -> Vec<StarGroup> {
         let sz = z[seed];
         let r2 = radius_pc * radius_pc;
 
+        let mut candidates: Vec<usize> = Vec::new();
+        let cx = (sx / cell).floor() as i32;
+        let cy = (sy / cell).floor() as i32;
+        let cz = (sz / cell).floor() as i32;
+        for ox in -1..=1 {
+            for oy in -1..=1 {
+                for oz in -1..=1 {
+                    if let Some(bucket) = grid.get(&(cx + ox, cy + oy, cz + oz)) {
+                        candidates.extend_from_slice(bucket);
+                    }
+                }
+            }
+        }
+        candidates.sort_unstable();
+
         let mut members: Vec<usize> = Vec::new();
-        for j in 0..n {
+        for j in candidates {
             if assigned[j] {
                 continue;
             }
@@ -540,14 +586,14 @@ fn build_star_groups(config: &GroupBuildConfig<'_>) -> Vec<StarGroup> {
             .iter()
             .map(|&i| {
                 [
-                    (log_teff[i] - norm.log_teff_mean) / norm.log_teff_std,
-                    (log_rad[i] - norm.log_rad_mean) / norm.log_rad_std,
-                    (log_mass[i] - norm.log_mass_mean) / norm.log_mass_std,
-                    (log_lum[i] - norm.log_lum_mean) / norm.log_lum_std,
-                    (mg[i] - norm.mg_mean) / norm.mg_std,
                     (x[i] - norm.x_mean) / norm.x_std,
                     (y[i] - norm.y_mean) / norm.y_std,
                     (z[i] - norm.z_mean) / norm.z_std,
+                    (bp_rp[i] - norm.bp_rp_mean) / norm.bp_rp_std,
+                    (mg[i] - norm.mg_mean) / norm.mg_std,
+                    (mag_bp[i] - norm.mag_bp_mean) / norm.mag_bp_std,
+                    (mag_rp[i] - norm.mag_rp_mean) / norm.mag_rp_std,
+                    (ruwe[i] - norm.ruwe_mean) / norm.ruwe_std,
                 ]
             })
             .collect();
@@ -583,34 +629,78 @@ fn build_star_groups(config: &GroupBuildConfig<'_>) -> Vec<StarGroup> {
     groups
 }
 
-fn read_gnn_parquet(path: &Path) -> Result<DataFrame> {
+fn read_gnn_parquet(path: &Path, max_rows: Option<u64>, tiles: Option<String>) -> Result<DataFrame> {
     println!("Loading parquet: {}", path.display());
-    let file = File::open(path).context("failed to open parquet")?;
-    let df = ParquetReader::new(file)
-        .finish()
-        .context("failed to read parquet")?;
+    let path_str = path
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("non-utf8 data path"))?;
+    // Lazy scan with column projection: the canonical file is gigabytes wide,
+    // but GNN needs only 12 columns — never materialize the rest.
+    let mut lf = anyhow::Context::context(
+        LazyFrame::scan_parquet(PlRefPath::from(path_str), Default::default()),
+        "failed to scan parquet",
+    )?;
+    let schema = anyhow::Context::context(lf.collect_schema(), "read parquet schema")?;
 
+    // Canonical-v1 (Stage 4) schema: positions + photometry + full 3D velocities.
+    // radial_velocity_kms must be present (non-null): rows without a measured RV
+    // would otherwise carry an RV=0 assumption baked into vx/vy/vz
+    // (see lnai-data clean.rs), which must not become a training target.
     let required_cols: &[&str] = &[
-        "x_pc", "y_pc", "z_pc", "bp_rp", "g_mag", "st_teff", "st_rad", "st_mass", "st_lum", "vx",
-        "vy", "vz",
+        "x_pc",
+        "y_pc",
+        "z_pc",
+        "bp_rp",
+        "mag_g",
+        "mag_bp",
+        "mag_rp",
+        "ruwe",
+        "radial_velocity_kms",
+        "vx_kms",
+        "vy_kms",
+        "vz_kms",
     ];
 
     for &col_name in required_cols {
-        if df.column(col_name).is_err() {
+        if !schema.contains(col_name) {
             anyhow::bail!(
-                "Column '{}' not found in dataset. GNN training requires velocity columns (vx, vy, vz).",
-                col_name
+                "Column '{col_name}' not found in dataset. GNN training expects the \
+                 canonical-v1 schema (x_pc/y_pc/z_pc, bp_rp, mag_g/mag_bp/mag_rp, ruwe, \
+                 radial_velocity_kms, vx_kms/vy_kms/vz_kms)."
             );
         }
     }
 
-    let df = df
-        .drop_nulls(Some(required_cols))
-        .context("drop_nulls failed")?;
-
-    let df = df
-        .lazy()
-        .filter(
+    let mut proj: Vec<Expr> = required_cols.iter().map(|c| col(*c)).collect();
+    proj.push(col("spatial_tile"));
+    let mut lf = lf.select(proj);
+    for &col_name in required_cols {
+        lf = lf.filter(col(col_name).is_not_null());
+    }
+    // Optional spatial-tile subset: shard the sky without loading the rest.
+    if let Some(wanted) = tiles.as_deref() {
+        let wanted: Vec<&str> = wanted
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .collect();
+        if !wanted.is_empty() {
+            println!("GNN tile subset: {} tiles", wanted.len());
+            let mut pred: Option<Expr> = None;
+            for t in wanted {
+                let e = col("spatial_tile").eq(lit(t.to_string()));
+                pred = Some(match pred {
+                    None => e,
+                    Some(p) => p.or(e),
+                });
+            }
+            if let Some(p) = pred {
+                lf = lf.filter(p);
+            }
+        }
+    }
+    let df = anyhow::Context::context(
+        lf.filter(
             col("x_pc")
                 .abs()
                 .lt(lit(10000.0))
@@ -618,25 +708,50 @@ fn read_gnn_parquet(path: &Path) -> Result<DataFrame> {
                 .and(col("z_pc").abs().lt(lit(10000.0)))
                 .and(col("bp_rp").gt(lit(-1.0)))
                 .and(col("bp_rp").lt(lit(10.0)))
-                .and(col("g_mag").gt(lit(0.0)))
-                .and(col("g_mag").lt(lit(25.0))),
+                .and(col("mag_g").gt(lit(0.0)))
+                .and(col("mag_g").lt(lit(25.0))),
         )
-        .collect()?;
+        .collect(),
+        "failed to load filtered rows",
+    )?;
 
-    println!("Loaded {} rows with velocity data", df.height());
+    let kept = df.height();
+    let df = apply_max_rows(df, max_rows)?;
+    println!(
+        "Loaded {} rows with velocity data ({} after filters)",
+        df.height(),
+        kept
+    );
     Ok(df)
 }
 
+/// Deterministic systematic sample: every k-th row in file order, at most
+/// `cap` rows (file order follows RA-shard assembly, so a stride stays
+/// spatially uniform).
+fn apply_max_rows(df: DataFrame, max_rows: Option<u64>) -> Result<DataFrame> {
+    let cap = match max_rows {
+        Some(n) if n > 0 && (n as usize) < df.height() => n as usize,
+        _ => return Ok(df),
+    };
+    let height = df.height();
+    let step = height.div_ceil(cap).max(1) as u32;
+    let idx: Vec<u32> = (0..height as u32).step_by(step as usize).collect();
+    let idx = Series::new("row_idx".into(), idx);
+    let idx = idx
+        .u32()
+        .map_err(|e| anyhow::anyhow!("sample index: {e}"))?;
+    anyhow::Context::context(df.take(idx), "max-rows sample")
+}
+
 pub fn extract_f32(df: &DataFrame, name: &str) -> Result<Vec<f32>> {
-    let s = df
-        .column(name)
-        .context(format!("column {name} not found"))?;
-    let s = s
-        .cast(&DataType::Float64)
-        .context(format!("column {name} cast to f64 failed"))?;
-    let ca = s.f64().context(format!("column {name} is not f64"))?;
+    let s = anyhow::Context::context(df.column(name), format!("column {name} not found"))?;
+    let s = anyhow::Context::context(
+        s.cast(&DataType::Float64),
+        format!("column {name} cast to f64 failed"),
+    )?;
+    let ca = anyhow::Context::context(s.f64(), format!("column {name} is not f64"))?;
     let values: Vec<f32> = ca
-        .into_iter()
+        .iter()
         .map(|opt| opt.map(|v| v as f32).unwrap_or(0.0f32))
         .collect();
     Ok(values)
@@ -654,4 +769,58 @@ fn mean_std(data: &[f32]) -> (f32, f32) {
         .sum::<f64>()
         / n;
     (mean as f32, variance.sqrt() as f32)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn write_parquet(
+        df: &mut DataFrame,
+        name: &str,
+    ) -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::tempdir().expect("tmpdir");
+        let path = dir.path().join(name);
+        let file = std::fs::File::create(&path).expect("create");
+        ParquetWriter::new(file).finish(df).expect("write");
+        (dir, path)
+    }
+
+    fn canonical_like_frame() -> DataFrame {
+        df![
+            "x_pc" => [0.0f32, 10.0, 20.0, 1000.0],
+            "y_pc" => [0.0f32, 0.0, 0.0, 0.0],
+            "z_pc" => [0.0f32, 0.0, 0.0, 0.0],
+            "bp_rp" => [1.0f32, 0.8, 1.1, 0.9],
+            "mag_g" => [10.0f32, 9.0, 11.0, 8.0],
+            "mag_bp" => [10.5f32, 9.4, 11.6, 8.4],
+            "mag_rp" => [9.5f32, 8.6, 10.5, 7.5],
+            "ruwe" => [1.0f32, 1.0, 1.1, 1.0],
+            "radial_velocity_kms" => [Some(5.0), None, Some(-3.0), Some(10.0)],
+            "vx_kms" => [1.0f32, 2.0, 3.0, 4.0],
+            "vy_kms" => [0.0f32, 0.0, 0.0, 0.0],
+            "vz_kms" => [0.0f32, 0.0, 0.0, 0.0],
+            "spatial_tile" => ["tileA", "tileA", "tileB", "tileB"],
+        ]
+        .expect("frame")
+    }
+
+    #[test]
+    fn read_tiles_filter_and_rv_requirement() {
+        let (_dir, path) = write_parquet(&mut canonical_like_frame(), "gnn.parquet");
+        // tileA: 2 rows, one without RV -> 1 survives.
+        let df = read_gnn_parquet(&path, None, Some("tileA".to_string())).expect("read");
+        assert_eq!(df.height(), 1);
+        // No filter: 3 rows (null-RV row dropped).
+        let df_all = read_gnn_parquet(&path, None, None).expect("read");
+        assert_eq!(df_all.height(), 3);
+    }
+
+    #[test]
+    fn read_max_rows_strides() {
+        let (_dir, path) = write_parquet(&mut canonical_like_frame(), "gnn.parquet");
+        // 3 valid rows capped at 2 -> stride 2 -> 2 rows.
+        let df = read_gnn_parquet(&path, Some(2), None).expect("read");
+        assert_eq!(df.height(), 2);
+    }
 }

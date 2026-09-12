@@ -37,6 +37,8 @@ pub fn spec_from_args(args: &Args) -> TrainingSpec {
         seed: Some(args.seed),
         model_file: args.model_file.clone(),
         norm_file: args.norm_file.clone(),
+        max_rows: args.max_rows,
+        tiles: None,
     }
 }
 

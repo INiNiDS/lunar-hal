@@ -40,6 +40,8 @@ fn pinn_spec(output_dir: &str) -> TrainingSpec {
         seed: Some(42),
         model_file: "stellar_model.bpk".into(),
         norm_file: "stellar_norm.json".into(),
+        max_rows: None,
+        tiles: None,
     }
 }
 
@@ -70,6 +72,8 @@ fn gnn_spec(output_dir: &str) -> TrainingSpec {
         seed: Some(42),
         model_file: "stellar_gnn_model.bpk".into(),
         norm_file: "stellar_gnn_norm.json".into(),
+        max_rows: None,
+        tiles: None,
     }
 }
 
@@ -98,6 +102,8 @@ fn siren_spec(output_dir: &str) -> TrainingSpec {
         seed: Some(42),
         model_file: "stellar_siren_model.bpk".into(),
         norm_file: "stellar_siren_norm.json".into(),
+        max_rows: None,
+        tiles: None,
     }
 }
 

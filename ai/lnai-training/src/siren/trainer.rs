@@ -126,6 +126,7 @@ pub fn run_train_with_cancel(spec: &TrainingSpec, cancel: &CancelFlag) -> Result
             siren_cfg.max_stars as usize,
             spec.val_frac,
             siren_cfg.seed,
+            spec.max_rows,
         )?;
 
         let mut store = BurnpackStore::from_file(model_path.to_str().unwrap());
@@ -143,6 +144,7 @@ pub fn run_train_with_cancel(spec: &TrainingSpec, cancel: &CancelFlag) -> Result
             siren_cfg.max_stars as usize,
             spec.val_frac,
             siren_cfg.seed,
+            spec.max_rows,
         )?;
         let norm = train_ds.norm.clone();
         let fresh = StellarSirenConfig::new().init::<TrainBackend>(&device);
@@ -332,6 +334,7 @@ pub fn run_train_with_cancel(spec: &TrainingSpec, cancel: &CancelFlag) -> Result
                 siren_cfg.max_stars as usize,
                 0.0,
                 siren_cfg.seed,
+                spec.max_rows,
             )?;
             drop(holdout_train);
             let infer_model = model.valid();
@@ -431,6 +434,7 @@ pub fn run_evaluate(spec: &TrainingSpec) -> Result<RunOutcome> {
         siren_cfg.max_stars as usize,
         spec.val_frac,
         siren_cfg.seed,
+        None,
     )?;
     drop(train_ds);
     let val_loss = evaluate_infer(

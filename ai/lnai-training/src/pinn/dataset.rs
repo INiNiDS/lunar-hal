@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use burn::prelude::*;
 use polars::prelude::*;
 use rand::SeedableRng;
@@ -6,7 +6,6 @@ use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::fs::File;
 use std::path::Path;
 
 pub const INPUT_DIM: usize = 5;
@@ -42,8 +41,8 @@ pub struct StellarDataset<B: Backend> {
 }
 
 impl<B: Backend> StellarDataset<B> {
-    pub fn load(parquet_path: &Path, device: &B::Device) -> Result<Self> {
-        let (df, n) = read_filtered_parquet(parquet_path)?;
+    pub fn load(parquet_path: &Path, device: &B::Device, max_rows: Option<u64>, tiles: Option<String>) -> Result<Self> {
+        let (df, n) = read_filtered_parquet(parquet_path, max_rows, tiles)?;
         println!(
             "Loaded {} complete rows (all required features non-null, outliers filtered)",
             n
@@ -71,8 +70,10 @@ impl<B: Backend> StellarDataset<B> {
         parquet_path: &Path,
         norm: NormParams,
         device: &B::Device,
+        max_rows: Option<u64>,
+        tiles: Option<String>,
     ) -> Result<Self> {
-        let (df, n) = read_filtered_parquet(parquet_path)?;
+        let (df, n) = read_filtered_parquet(parquet_path, max_rows, tiles)?;
         println!(
             "Loaded {} complete rows (all required features non-null, outliers filtered)",
             n
@@ -185,35 +186,128 @@ impl<B: Backend> GpuBatcher<B> {
     }
 }
 
-fn read_filtered_parquet(parquet_path: &Path) -> Result<(DataFrame, usize)> {
-    println!("Loading parquet: {}", parquet_path.display());
-    let file = File::open(parquet_path).context("failed to open parquet")?;
-    let df = ParquetReader::new(file)
-        .finish()
-        .context("failed to read parquet")?;
+/// Input schema flavor: legacy `clean` output vs canonical-v1 enriched with
+/// Gaia astrophysical parameters (`lnaicli enrich-stellar`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SchemaKind {
+    Legacy,
+    ApEnriched,
+}
 
-    let required_cols: &[&str] = &[
-        "x_pc", "y_pc", "z_pc", "bp_rp", "g_mag", "st_teff", "st_rad", "st_mass", "st_lum",
-    ];
+fn detect_schema(df: &DataFrame) -> Result<SchemaKind> {
+    if df.column("st_teff").is_ok() {
+        Ok(SchemaKind::Legacy)
+    } else if df.column("teff_gspphot").is_ok() {
+        Ok(SchemaKind::ApEnriched)
+    } else {
+        anyhow::bail!(
+            "PINN training needs stellar targets: legacy clean schema \
+             (x_pc/y_pc/z_pc, bp_rp, g_mag, st_teff/st_rad/st_mass/st_lum) or \
+             canonical-v1 + AP enrichment (x_pc/y_pc/z_pc, bp_rp, mag_g, \
+             teff_gspphot/radius_gspphot/mass_flame/lum_flame via \
+             `lnaicli enrich-stellar`)."
+        );
+    }
+}
+
+fn read_filtered_parquet(
+    parquet_path: &Path,
+    max_rows: Option<u64>,
+    tiles: Option<String>,
+) -> Result<(DataFrame, usize)> {
+    println!("Loading parquet: {}", parquet_path.display());
+    let path_str = parquet_path
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("non-utf8 data path"))?;
+    // Lazy scan with column projection: the enriched canonical file is ~8GB
+    // across 27 columns, but PINN needs only 9 — never materialize the rest.
+    let mut lf = anyhow::Context::context(
+        LazyFrame::scan_parquet(PlRefPath::from(path_str), Default::default()),
+        "failed to scan parquet",
+    )?;
+
+    let schema = anyhow::Context::context(lf.collect_schema(), "read parquet schema")?;
+    let kind = if schema.contains("st_teff") {
+        SchemaKind::Legacy
+    } else if schema.contains("teff_gspphot") {
+        SchemaKind::ApEnriched
+    } else {
+        anyhow::bail!(
+            "PINN training needs stellar targets: legacy clean schema \
+             (x_pc/y_pc/z_pc, bp_rp, g_mag, st_teff/st_rad/st_mass/st_lum) or \
+             canonical-v1 + AP enrichment (x_pc/y_pc/z_pc, bp_rp, mag_g, \
+             teff_gspphot/radius_gspphot/mass_flame/lum_flame via \
+             `lnaicli enrich-stellar`)."
+        );
+    };
+    let (mag_col, required_cols): (&str, &[&str]) = match kind {
+        SchemaKind::Legacy => (
+            "g_mag",
+            &[
+                "x_pc", "y_pc", "z_pc", "bp_rp", "g_mag", "st_teff", "st_rad", "st_mass",
+                "st_lum",
+            ],
+        ),
+        SchemaKind::ApEnriched => (
+            "mag_g",
+            &[
+                "x_pc",
+                "y_pc",
+                "z_pc",
+                "bp_rp",
+                "mag_g",
+                "teff_gspphot",
+                "radius_gspphot",
+                "mass_flame",
+                "lum_flame",
+            ],
+        ),
+    };
 
     for &col_name in required_cols {
-        if df.column(col_name).is_err() {
+        if !schema.contains(col_name) {
             anyhow::bail!(
-                "Column '{}' not found in dataset. \
-                 Please re-fetch data from Gaia using: lnaicli fetch (release mode) \
-                 and then: lnaicli clean",
-                col_name
+                "Column '{col_name}' not found in dataset ({kind:?} schema)."
             );
         }
     }
 
-    let df = df
-        .drop_nulls(Some(required_cols))
-        .context("drop_nulls failed")?;
-
-    let df = df
-        .lazy()
-        .filter(
+    let mut proj: Vec<Expr> = required_cols.iter().map(|c| col(*c)).collect();
+    // Tile filtering needs the tile column, which legacy clean files lack.
+    if tiles.as_deref().is_some_and(|t| !t.is_empty()) {
+        if !schema.contains("spatial_tile") {
+            anyhow::bail!("--tiles needs the spatial_tile column (canonical schema).");
+        }
+        proj.push(col("spatial_tile"));
+    }
+    let mut lf = lf.select(proj);
+    for &col_name in required_cols {
+        lf = lf.filter(col(col_name).is_not_null());
+    }
+    // Optional spatial-tile subset: shard the sky without loading the rest.
+    if let Some(wanted) = tiles.as_deref() {
+        let wanted: Vec<&str> = wanted
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .collect();
+        if !wanted.is_empty() {
+            println!("PINN tile subset: {} tiles", wanted.len());
+            let mut pred: Option<Expr> = None;
+            for t in wanted {
+                let e = col("spatial_tile").eq(lit(t.to_string()));
+                pred = Some(match pred {
+                    None => e,
+                    Some(p) => p.or(e),
+                });
+            }
+            if let Some(p) = pred {
+                lf = lf.filter(p);
+            }
+        }
+    }
+    let df = anyhow::Context::context(
+        lf.filter(
             col("x_pc")
                 .abs()
                 .lt(lit(10000.0))
@@ -221,13 +315,36 @@ fn read_filtered_parquet(parquet_path: &Path) -> Result<(DataFrame, usize)> {
                 .and(col("z_pc").abs().lt(lit(10000.0)))
                 .and(col("bp_rp").gt(lit(-1.0)))
                 .and(col("bp_rp").lt(lit(10.0)))
-                .and(col("g_mag").gt(lit(0.0)))
-                .and(col("g_mag").lt(lit(25.0))),
+                .and(col(mag_col).gt(lit(0.0)))
+                .and(col(mag_col).lt(lit(25.0))),
         )
-        .collect()?;
+        .collect(),
+        "failed to load filtered rows",
+    )?;
 
+    let kept = df.height();
+    let df = apply_max_rows(df, max_rows)?;
     let n = df.height();
+    println!("Loaded {n} rows ({kept} after filters)");
     Ok((df, n))
+}
+
+/// Deterministic systematic sample: every k-th row in file order, at most
+/// `cap` rows. File order follows RA-shard assembly, so a stride stays
+/// spatially uniform (unlike a head slice).
+fn apply_max_rows(df: DataFrame, max_rows: Option<u64>) -> Result<DataFrame> {
+    let cap = match max_rows {
+        Some(n) if n > 0 && (n as usize) < df.height() => n as usize,
+        _ => return Ok(df),
+    };
+    let height = df.height();
+    let step = height.div_ceil(cap).max(1) as u32;
+    let idx: Vec<u32> = (0..height as u32).step_by(step as usize).collect();
+    let idx = Series::new("row_idx".into(), idx);
+    let idx = idx
+        .u32()
+        .map_err(|e| anyhow::anyhow!("sample index: {e}"))?;
+    anyhow::Context::context(df.take(idx), "max-rows sample")
 }
 
 struct RawColumns {
@@ -244,15 +361,26 @@ struct RawColumns {
 
 impl RawColumns {
     fn extract(df: &DataFrame) -> Result<Self> {
+        let kind = detect_schema(df)?;
+        let (mag_name, teff_name, rad_name, mass_name, lum_name) = match kind {
+            SchemaKind::Legacy => ("g_mag", "st_teff", "st_rad", "st_mass", "st_lum"),
+            SchemaKind::ApEnriched => (
+                "mag_g",
+                "teff_gspphot",
+                "radius_gspphot",
+                "mass_flame",
+                "lum_flame",
+            ),
+        };
         let x = extract_f32(df, "x_pc")?;
         let y = extract_f32(df, "y_pc")?;
         let z = extract_f32(df, "z_pc")?;
         let bp_rp = extract_f32(df, "bp_rp")?;
-        let g_mag = extract_f32(df, "g_mag")?;
-        let teff = extract_f32(df, "st_teff")?;
-        let rad = extract_f32(df, "st_rad")?;
-        let mass = extract_f32(df, "st_mass")?;
-        let lum = extract_f32(df, "st_lum")?;
+        let g_mag = extract_f32(df, mag_name)?;
+        let teff = extract_f32(df, teff_name)?;
+        let rad = extract_f32(df, rad_name)?;
+        let mass = extract_f32(df, mass_name)?;
+        let lum = extract_f32(df, lum_name)?;
 
         let mg: Vec<f32> = x
             .par_iter()
@@ -374,15 +502,14 @@ impl RawColumns {
 }
 
 fn extract_f32(df: &DataFrame, name: &str) -> Result<Vec<f32>> {
-    let s = df
-        .column(name)
-        .context(format!("column {name} not found"))?;
-    let s = s
-        .cast(&DataType::Float64)
-        .context(format!("column {name} cast to f64 failed"))?;
-    let ca = s.f64().context(format!("column {name} is not f64"))?;
+    let s = anyhow::Context::context(df.column(name), format!("column {name} not found"))?;
+    let s = anyhow::Context::context(
+        s.cast(&DataType::Float64),
+        format!("column {name} cast to f64 failed"),
+    )?;
+    let ca = anyhow::Context::context(s.f64(), format!("column {name} is not f64"))?;
     let values: Vec<f32> = ca
-        .into_iter()
+        .iter()
         .map(|opt| opt.map(|v| v as f32).unwrap_or(0.0f32))
         .collect();
     Ok(values)
@@ -418,4 +545,132 @@ fn interleave(column_vecs: &[&Vec<f32>]) -> Vec<f32> {
             }
         });
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ap_frame() -> DataFrame {
+        df![
+            "x_pc" => [100.0f32, 200.0],
+            "y_pc" => [0.0f32, 0.0],
+            "z_pc" => [0.0f32, 0.0],
+            "bp_rp" => [1.0f32, 0.8],
+            "mag_g" => [10.0f32, 9.0],
+            "teff_gspphot" => [5778.0, 6000.0],
+            "radius_gspphot" => [1.0, 1.1],
+            "mass_flame" => [1.0, 1.05],
+            "lum_flame" => [1.0, 1.5],
+        ]
+        .expect("frame")
+    }
+
+    #[test]
+    fn detect_schema_prefers_legacy_but_finds_ap() {
+        assert_eq!(
+            detect_schema(&ap_frame()).expect("detect"),
+            SchemaKind::ApEnriched
+        );
+        let legacy = df![
+            "st_teff" => [5778.0],
+            "teff_gspphot" => [5778.0],
+        ]
+        .expect("frame");
+        assert_eq!(
+            detect_schema(&legacy).expect("detect"),
+            SchemaKind::Legacy
+        );
+        let bare = df!["x_pc" => [1.0f32]].expect("frame");
+        assert!(detect_schema(&bare).is_err());
+    }
+
+    #[test]
+    fn extract_ap_columns_shapes_and_mg() {
+        let df = ap_frame();
+        let raw = RawColumns::extract(&df).expect("extract");
+        assert_eq!(raw.x.len(), 2);
+        // M_G = g - 5*log10(d) + 5; d=100 -> M_G = g - 5.
+        assert!((raw.mg[0] - 5.0).abs() < 1e-4);
+        assert!((raw.mg[1] - (9.0 - 5.0 * 200f32.log10() + 5.0)).abs() < 1e-4);
+        assert!((raw.log_teff[0] - 5778f32.log10()).abs() < 1e-5);
+        assert_eq!(raw.log_mass.len(), 2);
+    }
+
+    fn write_parquet(
+        df: &mut DataFrame,
+        name: &str,
+    ) -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::tempdir().expect("tmpdir");
+        let path = dir.path().join(name);
+        let file = std::fs::File::create(&path).expect("create");
+        ParquetWriter::new(file).finish(df).expect("write");
+        (dir, path)
+    }
+
+    fn ap_file_frame() -> DataFrame {
+        df![
+            "x_pc" => [100.0f32, 200.0, 300.0, 400.0, 500.0, 600.0],
+            "y_pc" => [0.0f32, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "z_pc" => [0.0f32, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "bp_rp" => [1.0f32, 0.8, 1.2, 0.9, 1.1, 1.0],
+            "mag_g" => [10.0f32, 9.0, 11.0, 10.5, 9.5, 10.0],
+            "teff_gspphot" => [Some(5778.0), Some(6000.0), None, Some(5000.0), Some(4500.0), Some(6200.0)],
+            "radius_gspphot" => [Some(1.0), Some(1.1), Some(1.0), Some(0.9), Some(2.0), Some(1.2)],
+            "mass_flame" => [Some(1.0), Some(1.05), Some(1.0), Some(0.8), Some(1.3), Some(1.1)],
+            "lum_flame" => [Some(1.0), Some(1.5), Some(1.0), Some(0.5), Some(5.0), Some(2.0)],
+            "spatial_tile" => ["tileA", "tileA", "tileA", "tileB", "tileB", "tileB"],
+        ]
+        .expect("frame")
+    }
+
+    #[test]
+    fn read_ap_file_filters_tiles_and_nulls() {
+        let (_dir, path) = write_parquet(&mut ap_file_frame(), "ap.parquet");
+        // tileA has 3 rows, one with null teff -> 2 survive.
+        let (df, n) =
+            read_filtered_parquet(&path, None, Some("tileA".to_string())).expect("read");
+        assert_eq!(n, 2);
+        assert_eq!(df.height(), 2);
+        // No tile filter: 5 valid rows of 6.
+        let (_, n_all) = read_filtered_parquet(&path, None, None).expect("read");
+        assert_eq!(n_all, 5);
+    }
+
+    #[test]
+    fn read_ap_file_max_rows_strides() {
+        let (_dir, path) = write_parquet(&mut ap_file_frame(), "ap.parquet");
+        // 5 valid rows capped at 2 -> stride 3 -> filtered rows 0 and 3.
+        let (df, n) = read_filtered_parquet(&path, Some(2), None).expect("read");
+        assert_eq!(n, 2);
+        let bp: Vec<f32> = df
+            .column("bp_rp")
+            .unwrap()
+            .f32()
+            .unwrap()
+            .iter()
+            .flatten()
+            .collect();
+        assert_eq!(bp, vec![1.0, 1.1]);
+    }
+
+    #[test]
+    fn tiles_on_legacy_without_tile_column_bails() {
+        let mut legacy = df![
+            "x_pc" => [100.0f32],
+            "y_pc" => [0.0f32],
+            "z_pc" => [0.0f32],
+            "bp_rp" => [1.0f32],
+            "g_mag" => [10.0f32],
+            "st_teff" => [5778.0],
+            "st_rad" => [1.0],
+            "st_mass" => [1.0],
+            "st_lum" => [1.0],
+        ]
+        .expect("frame");
+        let (_dir, path) = write_parquet(&mut legacy, "legacy.parquet");
+        assert!(read_filtered_parquet(&path, None, Some("tileA".to_string())).is_err());
+        let (_, n) = read_filtered_parquet(&path, None, None).expect("legacy read");
+        assert_eq!(n, 1);
+    }
 }

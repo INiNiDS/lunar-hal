@@ -268,7 +268,8 @@ fn count_parquet_rows(path: &Path) -> Result<u64, String> {
     let df = lf
         .select([len()])
         .collect_with_engine(Engine::Streaming)
-        .map_err(|e| format!("row count {}: {e}", path.display()))?;
+        .map_err(|e| format!("row count {}: {e}", path.display()))?
+        .unwrap_single();
     let n = df
         .column("len")
         .map_err(|e| format!("row count column: {e}"))?

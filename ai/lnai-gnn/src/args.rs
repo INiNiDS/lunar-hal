@@ -59,4 +59,11 @@ pub struct Args {
     pub benchmark_iters: u32,
     #[arg(long, default_value_t = 10)]
     pub benchmark_warmup: u32,
+    /// Deterministic systematic sample cap (every k-th row); unset = all rows.
+    #[arg(long)]
+    pub max_rows: Option<u64>,
+    /// Spatial-tile subset, comma-separated (e.g. "tile_ra0_dec0,tile_ra0_dec1");
+    /// unset = all tiles. Norm stats cover only the subset.
+    #[arg(long)]
+    pub tiles: Option<String>,
 }

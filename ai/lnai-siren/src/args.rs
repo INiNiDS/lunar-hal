@@ -49,4 +49,7 @@ pub struct Args {
     pub benchmark_iters: u32,
     #[arg(long, default_value_t = 10)]
     pub benchmark_warmup: u32,
+    /// Deterministic systematic sample cap (every k-th row); unset = all rows.
+    #[arg(long)]
+    pub max_rows: Option<u64>,
 }

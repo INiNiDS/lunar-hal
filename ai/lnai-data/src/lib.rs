@@ -12,6 +12,7 @@
 //! * [`integrity`] — hashing/row-count helpers.
 //! * stage 4A additions: [`sources`], [`auth`], [`provenance`], [`crossmatch`],
 //!   [`source_manifest`], [`enrich`]; new-object-store sink: [`s3`]/[`storage`].
+//! * stage 4B: [`stellar_params`] — Gaia astrophysical_parameters enrichment.
 
 pub mod assemble;
 pub mod auth;
@@ -27,5 +28,6 @@ pub mod schema;
 pub mod source_manifest;
 pub mod sources;
 pub mod split;
+pub mod stellar_params;
 pub mod storage;
 pub mod tap;

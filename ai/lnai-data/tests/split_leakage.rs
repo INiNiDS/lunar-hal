@@ -128,7 +128,8 @@ fn col_strings(df: &DataFrame, name: &str) -> Vec<String> {
         .unwrap()
         .str()
         .unwrap()
-        .into_no_null_iter()
+        .iter()
+        .flatten()
         .map(|s| s.to_string())
         .collect()
 }
@@ -138,7 +139,7 @@ fn col_opt_strings(df: &DataFrame, name: &str) -> Vec<Option<String>> {
         .unwrap()
         .str()
         .unwrap()
-        .into_iter()
+        .iter()
         .map(|o| o.map(|s| s.to_string()))
         .collect()
 }

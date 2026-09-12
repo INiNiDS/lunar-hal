@@ -131,6 +131,8 @@ pub fn run_train_with_cancel(spec: &TrainingSpec, cancel: &CancelFlag) -> Result
                 gnn_cfg.max_group_size as usize,
                 gnn_cfg.radius_pc,
                 seed,
+                spec.max_rows,
+                spec.tiles.clone(),
             )?;
 
             (loaded_model, loaded_norm, dataset)
@@ -141,6 +143,8 @@ pub fn run_train_with_cancel(spec: &TrainingSpec, cancel: &CancelFlag) -> Result
                 gnn_cfg.max_group_size as usize,
                 gnn_cfg.radius_pc,
                 seed,
+                spec.max_rows,
+                spec.tiles.clone(),
             )?;
             let norm = dataset.norm.clone();
             let fresh =
@@ -395,6 +399,8 @@ pub fn run_evaluate(spec: &TrainingSpec) -> Result<RunOutcome> {
         gnn_cfg.max_group_size as usize,
         gnn_cfg.radius_pc,
         seed,
+        None,
+        None,
     )?;
     let (_, val_ds) = dataset.split_with_seed(spec.val_frac, seed);
     let infer_model = model.valid();

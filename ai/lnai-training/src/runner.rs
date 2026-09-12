@@ -166,6 +166,8 @@ mod tests {
             seed: None,
             model_file: "stellar_model.bpk".into(),
             norm_file: "stellar_norm.json".into(),
+            max_rows: None,
+            tiles: None,
         }
     }
 

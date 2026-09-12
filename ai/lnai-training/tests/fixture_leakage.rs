@@ -34,7 +34,8 @@ fn parquet_source_ids_and_tiles_match_manifest() {
         .unwrap()
         .str()
         .unwrap()
-        .into_no_null_iter()
+        .iter()
+        .flatten()
         .map(str::to_owned)
         .collect::<Vec<_>>();
     assert_eq!(ids.len(), manifest.row_count as usize);

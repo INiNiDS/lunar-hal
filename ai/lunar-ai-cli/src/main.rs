@@ -129,6 +129,31 @@ enum Commands {
         #[arg(long, default_value_t = false)]
         keep_parts: bool,
     },
+    /// Stage 4B: fetch Gaia astrophysical_parameters (Teff/R/M/L) for the
+    /// source_ids in a canonical parquet and LEFT JOIN them on top.
+    /// PINN targets live here; reruns resume finished chunks.
+    EnrichStellar {
+        /// Canonical parquet to enrich (e.g. assembled/canonical.parquet).
+        #[arg(short, long)]
+        data: String,
+        /// Workdir for AP parts + manifest + coverage (default: data/stellar-ap-v1).
+        #[arg(short, long, default_value = "data/stellar-ap-v1")]
+        out_dir: String,
+        /// Source IDs per TAP query (URL-length bound).
+        #[arg(long, default_value_t = 2000)]
+        ids_per_query: usize,
+        #[arg(long, default_value_t = 4)]
+        concurrency: usize,
+        /// Cap on scanned IDs, 0 = all. Pilot runs use this.
+        #[arg(long, default_value_t = 0)]
+        max_ids: u64,
+        /// Skip fetching; join whatever parts exist on disk.
+        #[arg(long, default_value_t = false)]
+        join_only: bool,
+        /// Enriched parquet path (default: <out_dir>/enriched.parquet).
+        #[arg(long)]
+        join_output: Option<String>,
+    },
     /// Stage 4A: which sources run anonymously vs require env secrets,
     /// plus active object-storage sink status (no secret values printed).
     AuthStatus,
@@ -273,6 +298,12 @@ enum Commands {
         /// Explicit global seed (overrides the derived run seed).
         #[arg(long)]
         seed: Option<u64>,
+        /// Deterministic systematic sample cap (every k-th row); unset = all rows.
+        #[arg(long)]
+        max_rows: Option<u64>,
+        /// Spatial-tile subset, comma-separated (GNN/PINN); unset = all tiles.
+        #[arg(long)]
+        tiles: Option<String>,
         /// Dataset manifest hash recorded into the artifact (default empty).
         #[arg(long, default_value = "")]
         dataset_manifest_hash: String,
@@ -448,6 +479,25 @@ fn main() -> Result<()> {
         Commands::AuthStatus => {
             run_auth_status();
         }
+        Commands::EnrichStellar {
+            data,
+            out_dir,
+            ids_per_query,
+            concurrency,
+            max_ids,
+            join_only,
+            join_output,
+        } => {
+            run_enrich_stellar(
+                &PathBuf::from(data),
+                &PathBuf::from(out_dir),
+                *ids_per_query,
+                *concurrency,
+                *max_ids,
+                *join_only,
+                join_output.clone(),
+            )?;
+        }
         Commands::EnrichFixtures { out_dir } => {
             run_enrich_fixtures(out_dir)?;
         }
@@ -514,6 +564,8 @@ fn main() -> Result<()> {
             max_stars,
             seed,
             dataset_manifest_hash,
+            max_rows,
+            tiles,
         } => {
             run_train(&TrainOptions {
                 model: *model,
@@ -539,6 +591,8 @@ fn main() -> Result<()> {
                 max_stars: *max_stars,
                 seed: *seed,
                 dataset_manifest_hash,
+                max_rows: *max_rows,
+                tiles: tiles.clone(),
             })?;
         }
         Commands::Evaluate {
@@ -697,6 +751,8 @@ struct TrainOptions<'a> {
     max_stars: usize,
     seed: Option<u64>,
     dataset_manifest_hash: &'a str,
+    max_rows: Option<u64>,
+    tiles: Option<String>,
 }
 
 /// Stage 5 (task 9): `lnaicli train` builds one shared [`TrainingSpec`] and
@@ -758,6 +814,8 @@ fn training_spec_from_opts(
         seed: opts.seed,
         model_file: opts.model_file.to_string(),
         norm_file: opts.norm_file.to_string(),
+        max_rows: opts.max_rows,
+        tiles: opts.tiles.clone(),
     };
     spec.validate()
         .map_err(|errs| anyhow!("invalid training spec: {}", errs.join("; ")))?;
@@ -1696,6 +1754,43 @@ fn run_collect_data(args: CollectDataArgs) -> Result<()> {
     Ok(())
 }
 
+fn run_enrich_stellar(
+    data: &Path,
+    out_dir: &Path,
+    ids_per_query: usize,
+    concurrency: usize,
+    max_ids: u64,
+    join_only: bool,
+    join_output: Option<String>,
+) -> Result<()> {
+    use lnai_data::stellar_params::{ApEnrichConfig, run_enrich_ap};
+
+    // Credentials come exclusively from the environment (never argv, never
+    // logs); anonymous mode is the default and sufficient for public TAP.
+    let gaia_user = env::var("GAIA_USERNAME").ok();
+    let gaia_pass = env::var("GAIA_PASSWORD").ok();
+
+    let report = run_enrich_ap(&ApEnrichConfig {
+        data_path: data.to_path_buf(),
+        out_dir: out_dir.to_path_buf(),
+        ids_per_query,
+        concurrency,
+        max_ids,
+        join_only,
+        join_output: join_output.map(PathBuf::from),
+        retry_attempts: 3,
+        sync_url: None,
+        gaia_user,
+        gaia_pass,
+    })
+    .map_err(|e| anyhow::anyhow!("enrich-stellar: {e}"))?;
+    println!(
+        "enrich-stellar done: {}/{} rows carry AP params -> {}",
+        report.matched_rows, report.canonical_rows, report.output
+    );
+    Ok(())
+}
+
 fn run_build_dataset(
     out_dir: &Path,
     write_quality_report: bool,
@@ -1989,7 +2084,7 @@ fn collect_gaia_sample_rows_from_parquet(
     let col_opt_f64 = |name: &str| -> Vec<Option<f64>> {
         df.column(name)
             .ok()
-            .and_then(|series| series.f64().ok().map(|ca| ca.into_iter().collect()))
+            .and_then(|series| series.f64().ok().map(|ca| ca.iter().collect()))
             .unwrap_or_default()
     };
     let col_ids = || -> Result<Vec<String>> {
@@ -1998,7 +2093,7 @@ fn collect_gaia_sample_rows_from_parquet(
             .map_err(|_| anyhow!("column source_id required"))?;
         Ok(series
             .str()?
-            .into_iter()
+            .iter()
             .flatten()
             .map(String::from)
             .collect())

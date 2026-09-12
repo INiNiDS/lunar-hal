@@ -14,7 +14,7 @@ clap = { version = "4.6.1", features = ["derive"] }
 ctrlc = "3"
 lunar-utils = { path = "../../crates/lunar-utils" }
 sha2 = "0.11.0"
-polars = { version = "0.53.0", features = ["lazy", "csv", "parquet", "trigonometry", "abs"] }
+polars = { version = "0.55.2", features = ["lazy", "csv", "parquet", "trigonometry", "abs"] }
 rand = "0.10.1"
 rayon = "1.12"
 burn = { version = "0.21", features = ["std", "train", "cuda", "autodiff", "fusion", "autotune"] }
@@ -23,7 +23,8 @@ lnai-models = { path = "../lnai-models", features = ["pinn", "gnn", "siren", "lo
 
 [dev-dependencies]
 criterion = "0.7"
-polars = { version = "0.53.0", features = ["lazy", "parquet"] }
+tempfile = "3"
+polars = { version = "0.55.2", features = ["lazy", "parquet"] }
 lnai-models = { path = "../lnai-models", features = ["pinn", "gnn", "siren", "localization"] }
 lnai-data = { path = "../lnai-data" }
 burn = { version = "0.21", features = ["ndarray"] }

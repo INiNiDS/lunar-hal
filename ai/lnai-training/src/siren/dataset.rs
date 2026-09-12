@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use burn::prelude::*;
 use polars::prelude::*;
 use rand::SeedableRng;
@@ -6,7 +6,6 @@ use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::fs::File;
 use std::path::Path;
 
 use lnai_models::SIREN_INPUT_DIM;
@@ -19,8 +18,8 @@ pub struct SirenNorm {
     pub bp_rp_std: f32,
     pub mg_mean: f32,
     pub mg_std: f32,
-    pub log_teff_mean: f32,
-    pub log_teff_std: f32,
+    pub ruwe_mean: f32,
+    pub ruwe_std: f32,
 }
 
 pub struct SirenDataset {
@@ -33,7 +32,7 @@ pub struct SirenDataset {
 struct StarParams {
     bp_rp: f32,
     mg: f32,
-    log_teff: f32,
+    ruwe: f32,
 }
 
 impl SirenDataset {
@@ -43,8 +42,9 @@ impl SirenDataset {
         max_stars: usize,
         val_frac: f32,
         seed: u64,
+        max_rows: Option<u64>,
     ) -> Result<(Self, Self)> {
-        let (df, n_total) = read_filtered_parquet(parquet_path)?;
+        let (df, n_total) = read_filtered_parquet(parquet_path, max_rows)?;
         println!("Loaded {} filtered stars from parquet", n_total);
 
         let mut stars = extract_star_params(&df)?;
@@ -78,10 +78,10 @@ impl SirenDataset {
         for (star_idx, star) in stars.iter().enumerate() {
             let n_bp = (star.bp_rp - norm.bp_rp_mean) / norm.bp_rp_std;
             let n_mg = (star.mg - norm.mg_mean) / norm.mg_std;
-            let n_teff = (star.log_teff - norm.log_teff_mean) / norm.log_teff_std;
+            let n_ruwe = (star.ruwe - norm.ruwe_mean) / norm.ruwe_std;
 
-            let base_color = star_base_color(star.log_teff, star.bp_rp);
-            let spot_params = compute_spot_params(star.log_teff, star.bp_rp);
+            let base_color = star_base_color(star.bp_rp, star.mg);
+            let spot_params = compute_spot_params(star.bp_rp, star.mg);
 
             for i in 0..n_pixels {
                 let u = u_coords[i * 2];
@@ -91,7 +91,7 @@ impl SirenDataset {
                 all_inputs.push(v);
                 all_inputs.push(n_bp);
                 all_inputs.push(n_mg);
-                all_inputs.push(n_teff);
+                all_inputs.push(n_ruwe);
 
                 let (r, g, b) = generate_pixel(
                     u,
@@ -252,47 +252,33 @@ fn gather_rows(inputs: &[f32], targets: &[f32], indices: &[usize]) -> (Vec<f32>,
 
 fn extract_star_params(df: &DataFrame) -> Result<Vec<StarParams>> {
     let bp_rp = extract_f32(df, "bp_rp")?;
-    let g_mag = extract_f32(df, "g_mag")?;
+    let mag_g = extract_f32(df, "mag_g")?;
     let x = extract_f32(df, "x_pc")?;
     let y = extract_f32(df, "y_pc")?;
     let z = extract_f32(df, "z_pc")?;
-    let teff = extract_f32(df, "st_teff")?;
-    let rad = extract_f32(df, "st_rad")?;
-    let mass = extract_f32(df, "st_mass")?;
-    let lum = extract_f32(df, "st_lum")?;
+    let ruwe = extract_f32(df, "ruwe")?;
 
     let mg: Vec<f32> = x
         .par_iter()
         .zip(&y)
         .zip(&z)
-        .zip(&g_mag)
+        .zip(&mag_g)
         .map(|(((xi, yi), zi), &g)| {
             let d = (xi * xi + yi * yi + zi * zi).sqrt().max(1e-6);
             g - 5.0 * d.log10() + 5.0
         })
         .collect();
 
-    let log_teff: Vec<f32> = teff.par_iter().map(|&v| v.max(1e-10).log10()).collect();
-
     let result: Vec<StarParams> = (0..bp_rp.len())
         .filter_map(|i| {
-            let t = teff[i];
-            let r = rad[i];
-            let m = mass[i];
-            let l = lum[i];
-            if t.is_finite()
-                && r.is_finite()
-                && m.is_finite()
-                && l.is_finite()
-                && t > 0.0
-                && r > 0.0
-                && m > 0.0
-                && l > 0.0
-            {
+            let c = bp_rp[i];
+            let m = mg[i];
+            let r = ruwe[i];
+            if c.is_finite() && m.is_finite() && r.is_finite() && r >= 0.0 {
                 Some(StarParams {
-                    bp_rp: bp_rp[i],
-                    mg: mg[i],
-                    log_teff: log_teff[i],
+                    bp_rp: c,
+                    mg: m,
+                    ruwe: r,
                 })
             } else {
                 None
@@ -306,19 +292,19 @@ fn extract_star_params(df: &DataFrame) -> Result<Vec<StarParams>> {
 fn compute_norm(stars: &[StarParams]) -> SirenNorm {
     let bp_rps: Vec<f32> = stars.iter().map(|s| s.bp_rp).collect();
     let mgs: Vec<f32> = stars.iter().map(|s| s.mg).collect();
-    let log_teffs: Vec<f32> = stars.iter().map(|s| s.log_teff).collect();
+    let ruwes: Vec<f32> = stars.iter().map(|s| s.ruwe).collect();
 
     let (bp_rp_mean, bp_rp_std) = mean_std(&bp_rps);
     let (mg_mean, mg_std) = mean_std(&mgs);
-    let (log_teff_mean, log_teff_std) = mean_std(&log_teffs);
+    let (ruwe_mean, ruwe_std) = mean_std(&ruwes);
 
     SirenNorm {
         bp_rp_mean,
         bp_rp_std,
         mg_mean,
         mg_std,
-        log_teff_mean,
-        log_teff_std,
+        ruwe_mean,
+        ruwe_std,
     }
 }
 
@@ -333,8 +319,8 @@ fn print_norm(norm: &SirenNorm) {
         norm.mg_mean, norm.mg_std
     );
     println!(
-        "  log_teff:   mean={:.4}, std={:.4}",
-        norm.log_teff_mean, norm.log_teff_std
+        "  ruwe:       mean={:.4}, std={:.4}",
+        norm.ruwe_mean, norm.ruwe_std
     );
 }
 
@@ -366,43 +352,53 @@ fn mean_std(data: &[f32]) -> (f32, f32) {
 }
 
 fn extract_f32(df: &DataFrame, name: &str) -> Result<Vec<f32>> {
-    let s = df
-        .column(name)
-        .context(format!("column {name} not found"))?;
-    let s = s
-        .cast(&DataType::Float64)
-        .context(format!("column {name} cast to f64 failed"))?;
-    let ca = s.f64().context(format!("column {name} is not f64"))?;
+    let s = anyhow::Context::context(df.column(name), format!("column {name} not found"))?;
+    let s = anyhow::Context::context(
+        s.cast(&DataType::Float64),
+        format!("column {name} cast to f64 failed"),
+    )?;
+    let ca = anyhow::Context::context(s.f64(), format!("column {name} is not f64"))?;
     Ok(ca
-        .into_iter()
+        .iter()
         .map(|opt| opt.map(|v| v as f32).unwrap_or(0.0f32))
         .collect())
 }
 
-fn read_filtered_parquet(parquet_path: &Path) -> Result<(DataFrame, usize)> {
+fn read_filtered_parquet(
+    parquet_path: &Path,
+    max_rows: Option<u64>,
+) -> Result<(DataFrame, usize)> {
     println!("Loading parquet: {}", parquet_path.display());
-    let file = File::open(parquet_path).context("failed to open parquet")?;
-    let df = ParquetReader::new(file)
-        .finish()
-        .context("failed to read parquet")?;
+    let path_str = parquet_path
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("non-utf8 data path"))?;
+    // Lazy scan with column projection: SIREN needs only 6 columns.
+    let mut lf = anyhow::Context::context(
+        LazyFrame::scan_parquet(PlRefPath::from(path_str), Default::default()),
+        "failed to scan parquet",
+    )?;
+    let schema = anyhow::Context::context(lf.collect_schema(), "read parquet schema")?;
 
-    let required_cols: &[&str] = &[
-        "x_pc", "y_pc", "z_pc", "bp_rp", "g_mag", "st_teff", "st_rad", "st_mass", "st_lum",
-    ];
+    // Canonical-v1 (Stage 4) schema: textures are conditioned on measured
+    // photometry/astrometry (bp_rp color, absolute M_G, ruwe) instead of
+    // legacy stellar-pipeline columns (st_teff/st_rad/st_mass/st_lum).
+    let required_cols: &[&str] = &["x_pc", "y_pc", "z_pc", "bp_rp", "mag_g", "ruwe"];
 
     for &col_name in required_cols {
-        if df.column(col_name).is_err() {
-            anyhow::bail!("Column '{}' not found in dataset.", col_name);
+        if !schema.contains(col_name) {
+            anyhow::bail!(
+                "Column '{col_name}' not found in dataset. SIREN training expects the \
+                 canonical-v1 schema (x_pc/y_pc/z_pc, bp_rp, mag_g, ruwe)."
+            );
         }
     }
 
-    let df = df
-        .drop_nulls(Some(required_cols))
-        .context("drop_nulls failed")?;
-
-    let df = df
-        .lazy()
-        .filter(
+    let mut lf = lf.select(required_cols.iter().map(|c| col(*c)).collect::<Vec<_>>());
+    for &col_name in required_cols {
+        lf = lf.filter(col(col_name).is_not_null());
+    }
+    let df = anyhow::Context::context(
+        lf.filter(
             col("x_pc")
                 .abs()
                 .lt(lit(10000.0))
@@ -410,17 +406,36 @@ fn read_filtered_parquet(parquet_path: &Path) -> Result<(DataFrame, usize)> {
                 .and(col("z_pc").abs().lt(lit(10000.0)))
                 .and(col("bp_rp").gt(lit(-1.0)))
                 .and(col("bp_rp").lt(lit(10.0)))
-                .and(col("g_mag").gt(lit(0.0)))
-                .and(col("g_mag").lt(lit(25.0)))
-                .and(col("st_teff").gt(lit(2000.0)))
-                .and(col("st_teff").lt(lit(50000.0)))
-                .and(col("st_rad").gt(lit(0.01)))
-                .and(col("st_mass").gt(lit(0.01))),
+                .and(col("mag_g").gt(lit(0.0)))
+                .and(col("mag_g").lt(lit(25.0))),
         )
-        .collect()?;
+        .collect(),
+        "failed to load filtered rows",
+    )?;
 
+    let kept = df.height();
+    let df = apply_max_rows(df, max_rows)?;
     let n = df.height();
+    println!("Loaded {n} rows ({kept} after filters)");
     Ok((df, n))
+}
+
+/// Deterministic systematic sample: every k-th row in file order, at most
+/// `cap` rows (file order follows RA-shard assembly, so a stride stays
+/// spatially uniform).
+fn apply_max_rows(df: DataFrame, max_rows: Option<u64>) -> Result<DataFrame> {
+    let cap = match max_rows {
+        Some(n) if n > 0 && (n as usize) < df.height() => n as usize,
+        _ => return Ok(df),
+    };
+    let height = df.height();
+    let step = height.div_ceil(cap).max(1) as u32;
+    let idx: Vec<u32> = (0..height as u32).step_by(step as usize).collect();
+    let idx = Series::new("row_idx".into(), idx);
+    let idx = idx
+        .u32()
+        .map_err(|e| anyhow::anyhow!("sample index: {e}"))?;
+    anyhow::Context::context(df.take(idx), "max-rows sample")
 }
 
 struct BaseColor {
@@ -429,35 +444,40 @@ struct BaseColor {
     b: f32,
 }
 
-fn star_base_color(log_teff: f32, bp_rp: f32) -> BaseColor {
-    let t = 10f32.powf(log_teff);
-
-    let (r, g, b) = if t > 30000.0 {
+/// Base photosphere color from Gaia BP-RP color and absolute G magnitude.
+/// Spectral classes are color classes, so bp_rp bins mirror the old Teff bins
+/// (O/B < 0.0, A 0.0-0.35, F 0.35-0.6, G 0.6-0.9, K 0.9-1.3/1.9, M > 1.9).
+/// Red giants (bright M_G at red colors) get a mild luminous lift.
+fn star_base_color(bp_rp: f32, mg: f32) -> BaseColor {
+    let (r, g, b) = if bp_rp < 0.0 {
         (0.62, 0.69, 1.0)
-    } else if t > 10000.0 {
-        let f = (t - 10000.0) / 20000.0;
-        (0.70 + f * -0.08, 0.77 + f * -0.08, 0.95 + f * 0.05)
-    } else if t > 7500.0 {
-        let f = (t - 7500.0) / 2500.0;
-        (0.82 + f * -0.12, 0.85 + f * -0.08, 0.95 + f * 0.0)
-    } else if t > 6000.0 {
-        let f = (t - 6000.0) / 1500.0;
-        (0.95 + f * -0.13, 0.93 + f * -0.08, 0.90 + f * 0.05)
-    } else if t > 5200.0 {
-        let f = (t - 5200.0) / 800.0;
-        (1.0, 1.0 + f * -0.07, 0.82 + f * 0.08)
-    } else if t > 3700.0 {
-        let f = (t - 3700.0) / 1500.0;
-        (1.0, 0.85 + f * 0.08, 0.65 + f * 0.25)
+    } else if bp_rp < 0.35 {
+        let f = (bp_rp - 0.0) / 0.35;
+        (0.62 + f * 0.08, 0.69 + f * 0.08, 1.0 + f * -0.05)
+    } else if bp_rp < 0.6 {
+        let f = (bp_rp - 0.35) / 0.25;
+        (0.70 + f * 0.12, 0.77 + f * 0.08, 0.95 + f * 0.0)
+    } else if bp_rp < 0.9 {
+        let f = (bp_rp - 0.6) / 0.3;
+        (0.82 + f * 0.13, 0.85 + f * 0.08, 0.95 + f * -0.05)
+    } else if bp_rp < 1.3 {
+        let f = (bp_rp - 0.9) / 0.4;
+        (1.0, 0.93 + f * 0.07, 0.90 + f * -0.08)
+    } else if bp_rp < 1.9 {
+        let f = (bp_rp - 1.3) / 0.6;
+        (1.0, 0.93 + f * -0.08, 0.90 + f * -0.25)
     } else {
         (1.0, 0.55, 0.35)
     };
 
+    // Red-giant branch: luminous and slightly desaturated vs M dwarfs.
+    let giant_lift = if mg < 3.5 && bp_rp > 0.8 { 0.03 } else { 0.0 };
+
     let bp_tint: f32 = (bp_rp - 0.5) / 4.0;
     BaseColor {
-        r: r.clamp(0.0, 1.0) - bp_tint * 0.05,
-        g: g.clamp(0.0, 1.0) - bp_tint * 0.03,
-        b: b.clamp(0.0, 1.0) + bp_tint * 0.05,
+        r: (r.clamp(0.0, 1.0) - bp_tint * 0.05 + giant_lift).clamp(0.0, 1.0),
+        g: (g.clamp(0.0, 1.0) - bp_tint * 0.03 + giant_lift).clamp(0.0, 1.0),
+        b: (b.clamp(0.0, 1.0) + bp_tint * 0.05 + giant_lift).clamp(0.0, 1.0),
     }
 }
 
@@ -471,32 +491,40 @@ struct SpotParams {
     corona_intensity: f32,
 }
 
-fn compute_spot_params(log_teff: f32, bp_rp: f32) -> SpotParams {
-    let t = 10f32.powf(log_teff);
-
-    let (spot_contrast, spot_freq, spot_size, gran_amp, gran_freq) = if t > 7500.0 {
+/// Activity/granulation regimes from color class; red giants (bright M_G at
+/// red colors) get larger, lower-contrast granulation than dwarfs.
+fn compute_spot_params(bp_rp: f32, mg: f32) -> SpotParams {
+    let (spot_contrast, spot_freq, spot_size, gran_amp, gran_freq) = if bp_rp < 0.6 {
         (0.02, 0.5, 0.03, 0.01, 30.0)
-    } else if t > 6000.0 {
+    } else if bp_rp < 1.0 {
         (0.15, 1.5, 0.08, 0.04, 15.0)
-    } else if t > 4500.0 {
+    } else if bp_rp < 1.6 {
         (0.25, 2.5, 0.12, 0.08, 10.0)
     } else {
         (0.35, 3.5, 0.18, 0.12, 6.0)
     };
 
-    let limb = if t > 10000.0 {
+    let limb = if bp_rp < 0.35 {
         0.2
-    } else if t > 6000.0 {
+    } else if bp_rp < 1.0 {
         0.5
     } else {
         0.7
     };
-    let corona = if t > 7000.0 {
+    let corona = if bp_rp < 0.5 {
         0.15
-    } else if t > 5000.0 {
+    } else if bp_rp < 1.1 {
         0.05
     } else {
         0.01
+    };
+
+    // Giants: big granulation cells, muted spots.
+    let is_giant = mg < 3.5 && bp_rp > 0.8;
+    let (gran_amp, gran_freq, spot_contrast) = if is_giant {
+        (gran_amp * 2.0, gran_freq * 0.5, spot_contrast * 0.7)
+    } else {
+        (gran_amp, gran_freq, spot_contrast)
     };
 
     let rad_factor = (bp_rp / 2.0 - 0.5).max(0.0);
