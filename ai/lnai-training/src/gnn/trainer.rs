@@ -20,6 +20,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::events::{EpochMetric, JobEvent, format_epoch_line};
+use crate::agent::AgentVerdict;
 use crate::runner::{CancelFlag, RunOutcome, append_event_line, effective_train_seed};
 use crate::spec::TrainingSpec;
 
@@ -219,6 +220,7 @@ pub fn run_train_with_cancel(spec: &TrainingSpec, cancel: &CancelFlag) -> Result
     .expect("failed to set Ctrl+C handler");
 
     let epochs = spec.epochs as usize;
+    let mut history: Vec<crate::agent::EpochRow> = Vec::new();
     for epoch in 1..=epochs {
         if interrupted.load(Ordering::SeqCst) || cancel.is_cancelled() {
             println!("\nInterrupted at epoch {epoch}. Saving checkpoint...");
@@ -298,6 +300,52 @@ pub fn run_train_with_cancel(spec: &TrainingSpec, cancel: &CancelFlag) -> Result
             )
         );
         sink.emit_epoch(epoch as u32, epoch_train_loss, val_loss, phys_loss, lr);
+        history.push(crate::agent::EpochRow {
+            epoch: epoch as u32,
+            train_loss: epoch_train_loss,
+            val_loss,
+            phys_loss,
+            lr,
+        });
+
+        // Epoch-watch AI supervisor: blocks here until the agent answers.
+        // Only an explicit VERDICT: STOP halts; anything else continues.
+        if let Some(hook) = spec.agent.as_ref() {
+            let log_tail = crate::agent::tail_file(
+                &output_dir.join("events.ndjson"),
+                hook.log_lines,
+            );
+            let prompt = crate::agent::epoch_prompt(
+                "gnn_kinematics",
+                output_dir,
+                &data_path.display().to_string(),
+                &history,
+                best_val_loss,
+                &log_tail,
+            );
+            match crate::agent::maybe_consult_agent(
+                hook,
+                epoch as u64,
+                &crate::agent::workspace_dir(),
+                &prompt,
+            ) {
+                AgentVerdict::Continue => {}
+                AgentVerdict::Stop { reason } => {
+                    println!("\nAgent verdict STOP at epoch {epoch}: {reason}");
+                    println!("Saving checkpoint before halt...");
+                    save_checkpoint(&model, &norm, &out_model_path, &out_norm_path)?;
+                    let _ = append_event_line(
+                        output_dir,
+                        &JobEvent::Failed {
+                            error_summary: format!("stopped by epoch-watch agent: {reason}"),
+                            exit_code: 3,
+                        },
+                    );
+                    write_artifact_manifest(spec, seed, &norm, best_val_loss)?;
+                    return Ok(RunOutcome::AgentStopped);
+                }
+            }
+        }
 
         if epochs_without_improvement >= spec.patience as usize {
             println!(

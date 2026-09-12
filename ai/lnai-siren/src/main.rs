@@ -39,6 +39,7 @@ pub fn spec_from_args(args: &Args) -> TrainingSpec {
         norm_file: args.norm_file.clone(),
         max_rows: args.max_rows,
         tiles: None,
+        agent: None,
     }
 }
 

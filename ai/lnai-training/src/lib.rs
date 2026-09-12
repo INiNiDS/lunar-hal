@@ -1,4 +1,5 @@
 pub mod artifacts;
+pub mod agent;
 pub mod e2e;
 pub mod evaluation;
 pub mod events;

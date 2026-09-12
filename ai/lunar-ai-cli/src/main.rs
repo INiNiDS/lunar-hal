@@ -304,9 +304,46 @@ enum Commands {
         /// Spatial-tile subset, comma-separated (GNN/PINN); unset = all tiles.
         #[arg(long)]
         tiles: Option<String>,
+        /// Consult the epoch-watch AI agent every N epochs, GNN only
+        /// (0/unset = off). Reads `.opencode/agents/gnn-watch.md`.
+        #[arg(long)]
+        agent_every: Option<u64>,
+        /// Agent model id (`provider/model`) for epoch watch.
+        #[arg(long, default_value = "openrouter/meta/muse-spark-1.3-contributor")]
+        agent_model: String,
+        /// Fallback model id when the primary agent call fails.
+        #[arg(long, default_value = "opencode/muse-spark-1.3-contributor-free")]
+        agent_fallback_model: String,
+        /// Per-call agent timeout in seconds (fail-open: training continues).
+        #[arg(long, default_value_t = 300)]
+        agent_timeout_secs: u64,
+        /// Event-log tail lines attached to each agent call.
+        #[arg(long, default_value_t = 30)]
+        agent_log_lines: usize,
+        /// Print the agent prompt instead of spawning (zero-cost check).
+        #[arg(long, default_value_t = false)]
+        agent_dry_run: bool,
         /// Dataset manifest hash recorded into the artifact (default empty).
         #[arg(long, default_value = "")]
         dataset_manifest_hash: String,
+    },
+    /// Stage 5: spawn a fixer agent (`opencode run`, full tools) over a
+    /// stopped training run. Use after the epoch-watch verdict STOPs a run:
+    /// the fixer reads the output dir + repo, repairs code, then YOU restart
+    /// training from scratch with `lnaicli train` (no --resume).
+    AgentFix {
+        /// Training output dir to diagnose (events.ndjson, artifact.json).
+        #[arg(short, long)]
+        dir: String,
+        /// Model id for the fixer (`provider/model`).
+        #[arg(long, default_value = "openrouter/meta/muse-spark-1.3-contributor")]
+        model: String,
+        /// Extra instructions appended to the fixer prompt.
+        #[arg(long)]
+        message: Option<String>,
+        /// Auto-approve the fixer's tool calls (else it may stall unread).
+        #[arg(long, default_value_t = true)]
+        auto_approve: bool,
     },
     /// Stage 5 (task 9): read-only evaluation through the shared library —
     /// loads the artifact, reports losses, runs no optimizer step.
@@ -566,6 +603,12 @@ fn main() -> Result<()> {
             dataset_manifest_hash,
             max_rows,
             tiles,
+            agent_every,
+            agent_model,
+            agent_fallback_model,
+            agent_timeout_secs,
+            agent_log_lines,
+            agent_dry_run,
         } => {
             run_train(&TrainOptions {
                 model: *model,
@@ -593,7 +636,21 @@ fn main() -> Result<()> {
                 dataset_manifest_hash,
                 max_rows: *max_rows,
                 tiles: tiles.clone(),
+                agent_every: *agent_every,
+                agent_model,
+                agent_fallback_model,
+                agent_timeout_secs: *agent_timeout_secs,
+                agent_log_lines: *agent_log_lines,
+                agent_dry_run: *agent_dry_run,
             })?;
+        }
+        Commands::AgentFix {
+            dir,
+            model,
+            message,
+            auto_approve,
+        } => {
+            run_agent_fix(dir, model, message.clone(), *auto_approve)?;
         }
         Commands::Evaluate {
             model,
@@ -753,6 +810,12 @@ struct TrainOptions<'a> {
     dataset_manifest_hash: &'a str,
     max_rows: Option<u64>,
     tiles: Option<String>,
+    agent_every: Option<u64>,
+    agent_model: &'a str,
+    agent_fallback_model: &'a str,
+    agent_timeout_secs: u64,
+    agent_log_lines: usize,
+    agent_dry_run: bool,
 }
 
 /// Stage 5 (task 9): `lnaicli train` builds one shared [`TrainingSpec`] and
@@ -816,10 +879,99 @@ fn training_spec_from_opts(
         norm_file: opts.norm_file.to_string(),
         max_rows: opts.max_rows,
         tiles: opts.tiles.clone(),
+        agent: match opts.model {
+            // Epoch-watch hook is GNN-only for now; other models ignore it.
+            CliModel::Gnn => agent_hook_from_opts(
+                opts.agent_every,
+                opts.agent_model,
+                opts.agent_fallback_model,
+                opts.agent_timeout_secs,
+                opts.agent_log_lines,
+                opts.agent_dry_run,
+            ),
+            CliModel::Pinn | CliModel::Siren => {
+                if opts.agent_every.is_some_and(|n| n > 0) || opts.agent_dry_run {
+                    println!(
+                        "note: epoch-watch agent is GNN-only for now; ignoring agent flags"
+                    );
+                }
+                None
+            }
+        },
     };
     spec.validate()
         .map_err(|errs| anyhow!("invalid training spec: {}", errs.join("; ")))?;
     Ok(spec)
+}
+
+/// Builds the epoch-watch hook from train flags (GNN path). Shared with the
+/// worker-side builder so CLI and worker agree on defaults.
+fn agent_hook_from_opts(
+    every: Option<u64>,
+    model: &str,
+    fallback_model: &str,
+    timeout_secs: u64,
+    log_lines: usize,
+    dry_run: bool,
+) -> Option<lnai_training::agent::AgentHookConfig> {
+    match every {
+        Some(0) | None if !dry_run => None,
+        _ => Some(lnai_training::agent::AgentHookConfig {
+            every: every.unwrap_or(1).max(1),
+            model: model.to_string(),
+            fallback_model: fallback_model.to_string(),
+            timeout_secs,
+            log_lines,
+            agent: lnai_training::agent::DEFAULT_AGENT_NAME.to_string(),
+            dry_run,
+        }),
+    }
+}
+
+/// `lnaicli agent-fix`: the `opencode_agent` step of the supervised loop.
+/// Spawns `opencode run` (default build agent, full tools) pointed at a
+/// stopped training output dir. Prints the agent's verdict and exits with
+/// ITS exit code; fixing happens inside the agent session.
+fn run_agent_fix(dir: &str, model: &str, message: Option<String>, auto_approve: bool) -> Result<()> {
+    use std::process::Command;
+    let output_dir = PathBuf::from(dir);
+    if !output_dir.join("events.ndjson").exists() {
+        anyhow::bail!(
+            "no events.ndjson in {}: point --dir at a training output dir",
+            output_dir.display()
+        );
+    }
+    let extra = message
+        .map(|m| format!("\nOperator note: {m}\n"))
+        .unwrap_or_default();
+    let prompt = format!(
+        "You are the fixer for a STOPPED Stellar GNN-kinematics training run.\n\
+         Output dir: {out} (read {out}/events.ndjson tail, {out}/artifact.json).\n\
+         Repo root is your working directory.\n\
+         Diagnose the failure from the logs, then REPAIR the code so a fresh \
+         `lnaicli train --model gnn ...` run (from scratch, no --resume) would \
+         get past it. Verify with `cargo check` on the touched crates only; \
+         do NOT start training yourself.{extra}\n\
+         End with a short summary: root cause, files changed, and the exact \
+         train command to restart from scratch.",
+        out = output_dir.display(),
+    );
+    println!("Spawning fixer agent (model {model}) over {} ...", output_dir.display());
+    if auto_approve {
+        println!("NOTE: --auto-approve is on: the agent may edit files and run commands.");
+    }
+    let mut cmd = Command::new("opencode");
+    cmd.args(["run", "--model", model, "--dir", "."]).arg(&prompt);
+    if auto_approve {
+        cmd.arg("--auto");
+    }
+    let status = cmd
+        .status()
+        .map_err(|e| anyhow::anyhow!("spawn opencode: {e} (is it on PATH?)"))?;
+    if !status.success() {
+        anyhow::bail!("fixer agent exited with {:?}", status.code());
+    }
+    Ok(())
 }
 
 fn run_train(opts: &TrainOptions<'_>) -> Result<()> {

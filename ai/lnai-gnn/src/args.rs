@@ -66,4 +66,41 @@ pub struct Args {
     /// unset = all tiles. Norm stats cover only the subset.
     #[arg(long)]
     pub tiles: Option<String>,
+    /// Consult the epoch-watch AI agent every N epochs (0/unset = off).
+    #[arg(long)]
+    pub agent_every: Option<u64>,
+    /// Agent model id (`provider/model`) for epoch watch.
+    #[arg(long, default_value = lnai_training::agent::DEFAULT_AGENT_MODEL)]
+    pub agent_model: String,
+    /// Fallback model id when the primary agent call fails.
+    #[arg(long, default_value = lnai_training::agent::DEFAULT_AGENT_FALLBACK_MODEL)]
+    pub agent_fallback_model: String,
+    /// Per-call agent timeout in seconds (fail-open: training continues).
+    #[arg(long, default_value_t = lnai_training::agent::DEFAULT_AGENT_TIMEOUT_SECS)]
+    pub agent_timeout_secs: u64,
+    /// Event-log tail lines attached to each agent call.
+    #[arg(long, default_value_t = lnai_training::agent::DEFAULT_AGENT_LOG_LINES)]
+    pub agent_log_lines: usize,
+    /// Print the agent prompt instead of spawning (zero-cost plumbing check).
+    #[arg(long, default_value_t = false)]
+    pub agent_dry_run: bool,
+}
+
+impl Args {
+    /// Builds the epoch-watch hook config; `None` disables the hook.
+    /// An explicit `--agent-every 0` also disables (lets dry-run coexist).
+    pub fn agent_hook(&self) -> Option<lnai_training::agent::AgentHookConfig> {
+        match self.agent_every {
+            Some(0) | None if !self.agent_dry_run => None,
+            _ => Some(lnai_training::agent::AgentHookConfig {
+                every: self.agent_every.unwrap_or(1).max(1),
+                model: self.agent_model.clone(),
+                fallback_model: self.agent_fallback_model.clone(),
+                timeout_secs: self.agent_timeout_secs,
+                log_lines: self.agent_log_lines,
+                agent: lnai_training::agent::DEFAULT_AGENT_NAME.to_string(),
+                dry_run: self.agent_dry_run,
+            }),
+        }
+    }
 }

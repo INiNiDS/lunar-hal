@@ -138,6 +138,10 @@ pub struct TrainingSpec {
     /// Spatial-tile subset (`spatial_tile` ids, comma-separated upstream);
     /// `None` trains on all tiles. Norm stats cover only the subset.
     pub tiles: Option<String>,
+    /// Epoch-watch AI supervisor hook (`opencode run` after every N epochs);
+    /// `None` disables it (legacy behaviour).
+    #[serde(default)]
+    pub agent: Option<crate::agent::AgentHookConfig>,
 }
 
 impl TrainingSpec {
@@ -294,6 +298,21 @@ impl TrainingSpec {
                 {
                     argv.push("--tiles".to_string());
                     argv.push(tiles.to_string());
+                }
+                if let Some(hook) = self.agent.as_ref() {
+                    argv.push("--agent-every".to_string());
+                    argv.push(hook.every.to_string());
+                    argv.push("--agent-model".to_string());
+                    argv.push(hook.model.clone());
+                    argv.push("--agent-fallback-model".to_string());
+                    argv.push(hook.fallback_model.clone());
+                    argv.push("--agent-timeout-secs".to_string());
+                    argv.push(hook.timeout_secs.to_string());
+                    argv.push("--agent-log-lines".to_string());
+                    argv.push(hook.log_lines.to_string());
+                    if hook.dry_run {
+                        argv.push("--agent-dry-run".to_string());
+                    }
                 }
             }
             ModelConfig::GnnLocalization(_) => {}
@@ -483,6 +502,7 @@ mod tests {
             norm_file: "stellar_gnn_loc_norm.json".into(),
             max_rows: None,
             tiles: None,
+            agent: None,
         }
     }
 
@@ -511,6 +531,7 @@ mod tests {
             norm_file: "stellar_norm.json".into(),
             max_rows: None,
             tiles: None,
+            agent: None,
         }
     }
 
@@ -675,6 +696,51 @@ mod tests {
         assert_eq!(get("--radius-pc"), "50");
         assert!(!argv.iter().any(|a| a == "--batch-size"));
         assert!(!argv.iter().any(|a| a == "--texture-size"));
+    }
+
+    #[test]
+    fn agent_flags_render_only_for_gnn_and_only_when_set() {
+        // GNN without hook: no agent flags (legacy argv stable).
+        let mut spec = pinn_training_spec();
+        spec.model = ModelKind::GnnKinematics;
+        spec.config = ModelConfig::GnnKinematics(GnnKinematicsConfig {
+            knn_k: 8,
+            hidden_dim: 256,
+            output_dim: 3,
+            max_group_size: 64,
+            radius_pc: 50.0,
+            physics_weight: 0.05,
+        });
+        assert!(!spec.worker_argv().iter().any(|a| a == "--agent-every"));
+
+        // GNN with hook: flags present in order.
+        spec.agent = Some(crate::agent::AgentHookConfig {
+            every: 2,
+            model: "m1".to_string(),
+            fallback_model: "m2".to_string(),
+            timeout_secs: 60,
+            log_lines: 10,
+            agent: "gnn-watch".to_string(),
+            dry_run: true,
+        });
+        let argv = spec.worker_argv();
+        let get = |flag: &str| -> String {
+            argv.windows(2)
+                .find(|w| w[0] == flag)
+                .unwrap_or_else(|| panic!("missing {flag} in {argv:?}"))[1]
+                .clone()
+        };
+        assert_eq!(get("--agent-every"), "2");
+        assert_eq!(get("--agent-model"), "m1");
+        assert_eq!(get("--agent-fallback-model"), "m2");
+        assert_eq!(get("--agent-timeout-secs"), "60");
+        assert_eq!(get("--agent-log-lines"), "10");
+        assert!(argv.iter().any(|a| a == "--agent-dry-run"));
+
+        // PINN with hook set: flags must NOT leak to the pinn worker.
+        let mut pinn = pinn_training_spec();
+        pinn.agent = spec.agent.clone();
+        assert!(!pinn.worker_argv().iter().any(|a| a == "--agent-every"));
     }
 
     #[test]

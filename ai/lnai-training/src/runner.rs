@@ -76,6 +76,8 @@ pub enum RunOutcome {
     Completed,
     Cancelled,
     EarlyStopped,
+    /// Epoch-watch AI agent issued VERDICT: STOP (checkpoint saved).
+    AgentStopped,
 }
 
 /// Validates a training spec without touching data or GPU:
@@ -168,6 +170,7 @@ mod tests {
             norm_file: "stellar_norm.json".into(),
             max_rows: None,
             tiles: None,
+            agent: None,
         }
     }
 

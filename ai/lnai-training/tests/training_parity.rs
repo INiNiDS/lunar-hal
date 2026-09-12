@@ -42,6 +42,7 @@ fn pinn_spec(output_dir: &str) -> TrainingSpec {
         norm_file: "stellar_norm.json".into(),
         max_rows: None,
         tiles: None,
+        agent: None,
     }
 }
 
@@ -74,6 +75,7 @@ fn gnn_spec(output_dir: &str) -> TrainingSpec {
         norm_file: "stellar_gnn_norm.json".into(),
         max_rows: None,
         tiles: None,
+        agent: None,
     }
 }
 
@@ -104,6 +106,7 @@ fn siren_spec(output_dir: &str) -> TrainingSpec {
         norm_file: "stellar_siren_norm.json".into(),
         max_rows: None,
         tiles: None,
+        agent: None,
     }
 }
 

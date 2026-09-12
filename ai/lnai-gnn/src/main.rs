@@ -42,6 +42,7 @@ pub fn spec_from_args(args: &Args) -> TrainingSpec {
         norm_file: args.norm_file.clone(),
         max_rows: args.max_rows,
         tiles: args.tiles.clone(),
+        agent: args.agent_hook(),
     }
 }
 
@@ -63,6 +64,11 @@ fn main() -> Result<()> {
         )?;
         return Ok(());
     }
-    lnai_training::gnn::trainer::run_train(&spec)?;
-    Ok(())
+    match lnai_training::gnn::trainer::run_train(&spec)? {
+        lnai_training::runner::RunOutcome::AgentStopped => {
+            eprintln!("training halted by epoch-watch agent verdict (see output above)");
+            std::process::exit(3);
+        }
+        _ => Ok(()),
+    }
 }
