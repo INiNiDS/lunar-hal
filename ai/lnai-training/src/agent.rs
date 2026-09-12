@@ -140,6 +140,90 @@ pub struct EpochRow {
     pub lr: f64,
 }
 
+/// Best-effort host resource snapshot (GPU/VRAM/RAM/load). Never fails:
+/// anything unreadable becomes an `unavailable` marker instead of an error.
+#[derive(Debug, Clone)]
+pub struct ResourceSnapshot {
+    pub gpu: String,
+    pub ram: String,
+    pub load: String,
+}
+
+impl ResourceSnapshot {
+    pub fn render(&self) -> String {
+        format!("GPU: {}\nRAM: {}\nLoad: {}", self.gpu, self.ram, self.load)
+    }
+}
+
+pub fn collect_resources() -> ResourceSnapshot {
+    ResourceSnapshot {
+        gpu: gpu_summary(),
+        ram: ram_summary(),
+        load: load_summary(),
+    }
+}
+
+fn gpu_summary() -> String {
+    let out = Command::new("nvidia-smi")
+        .args([
+            "--query-gpu=index,name,utilization.gpu,memory.used,memory.total,temperature.gpu",
+            "--format=csv,noheader",
+        ])
+        .output();
+    match out {
+        Ok(o) if o.status.success() => {
+            let body = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            if body.is_empty() {
+                "no GPUs reported".to_string()
+            } else {
+                body.lines()
+                    .map(str::trim)
+                    .collect::<Vec<_>>()
+                    .join(" | ")
+            }
+        }
+        _ => "nvidia-smi unavailable".to_string(),
+    }
+}
+
+fn ram_summary() -> String {
+    let text = std::fs::read_to_string("/proc/meminfo").unwrap_or_default();
+    let mut total = 0u64;
+    let mut avail = 0u64;
+    for line in text.lines() {
+        let mut parts = line.split_whitespace();
+        match (parts.next(), parts.next()) {
+            (Some("MemTotal:"), Some(v)) => total = v.parse().unwrap_or(0),
+            (Some("MemAvailable:"), Some(v)) => avail = v.parse().unwrap_or(0),
+            _ => {}
+        }
+    }
+    if total == 0 {
+        return "RAM info unavailable".to_string();
+    }
+    let used_gb = (total - avail.min(total)) as f64 / 1_048_576.0;
+    let total_gb = total as f64 / 1_048_576.0;
+    format!(
+        "{used_gb:.1}/{total_gb:.1} GB used ({:.0}%)",
+        100.0 * (total - avail.min(total)) as f64 / total as f64
+    )
+}
+
+fn load_summary() -> String {
+    let cores = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(0);
+    let text = std::fs::read_to_string("/proc/loadavg").unwrap_or_default();
+    let loads: Vec<&str> = text.split_whitespace().take(3).collect();
+    if loads.len() < 3 {
+        return "load info unavailable".to_string();
+    }
+    format!(
+        "{} {} {} on {} cores",
+        loads[0], loads[1], loads[2], cores
+    )
+}
+
 /// Builds the per-epoch prompt: epoch table + file pointers. The agent reads
 /// the logs itself; the prompt stays small and stateless (no session reuse).
 pub fn epoch_prompt(
@@ -149,6 +233,7 @@ pub fn epoch_prompt(
     history: &[EpochRow],
     best_val_loss: f64,
     log_tail: &str,
+    resources: &str,
 ) -> String {
     let mut table = String::from("epoch | train_loss | val_loss | phys_loss\n");
     for r in history {
@@ -162,6 +247,7 @@ pub fn epoch_prompt(
          output_dir={output} best_val_loss={best:.6} finished_epochs={n}.\n\
          Epoch table so far (train/val/physics losses):\n{table}\n\
          Recent event-log tail (events.ndjson):\n{log_tail}\n\
+         Host resources right now (say whether this looks normal):\n{resources}\n\
          Useful files (read what you need, you are read-only): \
          {output}/events.ndjson, {output}/artifact.json.\n\
          Analyze this epoch in the context of the table, then end with the \
@@ -388,10 +474,21 @@ mod tests {
             &history,
             0.85,
             "tail...",
+            "GPU: none\nRAM: 1/2 GB\nLoad: 1 1 1 on 4 cores",
         );
         assert!(p.contains("1 | 1.000000 | 0.900000 | 0.950000"), "{p}");
         assert!(p.contains("/tmp/gnn-smoke/events.ndjson"), "{p}");
         assert!(p.contains("best_val_loss=0.850000"), "{p}");
+        assert!(p.contains("RAM: 1/2 GB"), "{p}");
+    }
+
+    #[test]
+    fn resource_snapshot_never_fails_and_renders() {
+        let snap = collect_resources();
+        let text = snap.render();
+        assert!(text.contains("GPU: "), "{text}");
+        assert!(text.contains("RAM: "), "{text}");
+        assert!(text.contains("Load: "), "{text}");
     }
 
     #[test]

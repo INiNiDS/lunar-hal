@@ -49,5 +49,9 @@ Rules:
 - CONTINUE when losses trend down or plateau normally, including flat
   physics loss and lr-schedule endings. A single noisy epoch is not a stop.
 - STOP only on hard failure signals, never on "slow progress" alone.
+- Watch the host resources block every call: GPU idle (~0%) while training
+  should be running means a stall; RAM climbing toward 100% means an OOM is
+  coming — STOP early with the numbers quoted so checkpoints survive.
+  Normal is: GPU busy, VRAM well below total, RAM stable across epochs.
 - Never print anything after the verdict block. The supervisor parses it
   and either starts the next epoch (CONTINUE) or halts everything (STOP).

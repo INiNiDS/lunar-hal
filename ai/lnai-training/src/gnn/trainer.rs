@@ -322,6 +322,7 @@ pub fn run_train_with_cancel(spec: &TrainingSpec, cancel: &CancelFlag) -> Result
                 &history,
                 best_val_loss,
                 &log_tail,
+                &crate::agent::collect_resources().render(),
             );
             match crate::agent::maybe_consult_agent(
                 hook,
