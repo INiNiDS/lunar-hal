@@ -5,20 +5,15 @@ model: openrouter/meta/muse-spark-1.3-contributor
 temperature: 0.1
 steps: 25
 permission:
+  # Allow-list: only file reading. Everything else — including all MCP
+  # server tools (their schemas alone cost tens of thousands of context
+  # tokens per call) — is denied AND therefore not sent to the model.
   read: allow
   glob: allow
   grep: allow
   list: allow
   external_directory: allow
-  edit: deny
-  bash: deny
-  task: deny
-  webfetch: deny
-  websearch: deny
-  skill: deny
-  lsp: deny
-  todowrite: deny
-  question: deny
+  "*": deny
 ---
 
 You are the epoch watch supervisor for a Stellar GNN-kinematics training run

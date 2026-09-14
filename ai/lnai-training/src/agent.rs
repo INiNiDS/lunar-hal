@@ -45,6 +45,10 @@ pub const DEFAULT_AGENT_MODEL: &str = "openrouter/meta/muse-spark-1.3-contributo
 pub const DEFAULT_AGENT_FALLBACK_MODEL: &str = "opencode/muse-spark-1.3-contributor-free";
 /// Agent defined in `.opencode/agents/gnn-watch.md` (repo root).
 pub const DEFAULT_AGENT_NAME: &str = "gnn-watch";
+/// Epoch table rows attached per call: full history burns context for zero
+/// diagnostic gain (early epochs stop mattering), so only the tail travels.
+/// The total count is still reported for scale.
+pub const EPOCH_TABLE_TAIL: usize = 40;
 /// Seconds to wait for one agent call before giving up (fail-open).
 pub const DEFAULT_AGENT_TIMEOUT_SECS: u64 = 300;
 /// Epoch event-log lines attached to each call.
@@ -236,7 +240,8 @@ pub fn epoch_prompt(
     resources: &str,
 ) -> String {
     let mut table = String::from("epoch | train_loss | val_loss | phys_loss\n");
-    for r in history {
+    let shown_from = history.len().saturating_sub(EPOCH_TABLE_TAIL);
+    for r in &history[shown_from..] {
         table.push_str(&format!(
             "{} | {:.6} | {:.6} | {:.6}\n",
             r.epoch, r.train_loss, r.val_loss, r.phys_loss
@@ -251,7 +256,7 @@ pub fn epoch_prompt(
          data={data_path} output_dir={output}.\n\
          Useful files (read what you need, you are read-only): \
          {output}/events.ndjson, {output}/artifact.json.\n\
-         Epoch table so far (train/val/physics losses):\n{table}\n\
+         Epoch table (train/val/physics losses; last {shown} of {n} epochs):\n{table}\n\
          This epoch: finished_epochs={n}, best_val_loss={best:.6}.\n\
          Recent event-log tail (events.ndjson):\n{log_tail}\n\
          Host resources right now (say whether this looks normal):\n{resources}\n\
@@ -260,6 +265,7 @@ pub fn epoch_prompt(
         output = output_dir.display(),
         best = best_val_loss,
         n = history.len(),
+        shown = history.len() - shown_from,
     )
 }
 
