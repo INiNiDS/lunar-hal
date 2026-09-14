@@ -378,6 +378,17 @@ pub fn maybe_consult_agent(
         println!("--- agent watch: AGENT_OFF present in output dir, skipping ---");
         return AgentVerdict::Continue;
     }
+    // Hot model swap, no restart needed: `<output_dir>/AGENT_MODEL` containing
+    // a single `provider/model` line overrides the configured model from the
+    // next epoch on. Delete the file to return to the configured model.
+    let model_override = std::fs::read_to_string(output_dir.join("AGENT_MODEL"))
+        .ok()
+        .map(|s| s.lines().next().unwrap_or_default().trim().to_string())
+        .filter(|s| !s.is_empty());
+    let model = model_override.as_deref().unwrap_or(&cfg.model);
+    if model != cfg.model {
+        println!("--- agent watch: model override from AGENT_MODEL: {model} ---");
+    }
     if cfg.every == 0 || epoch % cfg.every != 0 {
         return AgentVerdict::Continue;
     }
@@ -387,12 +398,12 @@ pub fn maybe_consult_agent(
         println!("--- end dry-run prompt ---");
         return AgentVerdict::Continue;
     }
-    println!("--- agent watch (epoch {epoch}): consulting {} ---", cfg.model);
+    println!("--- agent watch (epoch {epoch}): consulting {model} ---");
     let timeout = Duration::from_secs(cfg.timeout_secs.max(10));
     let title = format!("gnn-watch epoch {epoch}");
     let attempt =
-        |model: &str| run_agent_call("opencode", &cfg.agent, model, workdir, &title, prompt, timeout);
-    match attempt(&cfg.model) {
+        |m: &str| run_agent_call("opencode", &cfg.agent, m, workdir, &title, prompt, timeout);
+    match attempt(model) {
         Ok(out) => match parse_verdict(&out) {
             Some(v) => {
                 println!("--- agent verdict: {v:?} ---");
