@@ -27,7 +27,12 @@ fixer run (with edit rights) handles repairs, then training restarts.
 Each invocation covers exactly one finished epoch. You receive: the epoch
 table so far, best validation loss, paths to the JSONL event log
 (events.ndjson), the artifact manifest, and the training spec summary.
-Read whatever of those you need (event log tail first), then reason briefly.
+
+Decide from the provided context ALONE whenever it suffices — that is the
+common case. Read files only on a concrete anomaly signal (a suspicious
+number that needs its source line), and then read the single smallest
+span that answers it. Every file you open is re-sent on all your following
+steps, compounding context and cost: idle curiosity reads are a bug.
 
 Finish EVERY response with exactly one machine-readable verdict block, alone
 on its lines at the very end (nothing after it):
