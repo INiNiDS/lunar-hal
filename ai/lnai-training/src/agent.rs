@@ -353,12 +353,25 @@ fn tail_str(s: &str, max: usize) -> String {
 /// Returns the parsed verdict, or `AgentVerdict::Continue` fail-open with a
 /// loud warning when anything goes wrong (timeout, spawn failure, fallback
 /// failure, missing verdict). Only an explicit STOP halts training.
+///
+/// Kill switches (checked every call, no restart needed):
+/// * `<output_dir>/AGENT_OFF` file exists → skip silently-ish (one line).
+/// * `LNAI_AGENT_DISABLE=1` in the environment → skip.
 pub fn maybe_consult_agent(
     cfg: &AgentHookConfig,
     epoch: u64,
     workdir: &Path,
+    output_dir: &Path,
     prompt: &str,
 ) -> AgentVerdict {
+    if std::env::var("LNAI_AGENT_DISABLE").is_ok_and(|v| v == "1") {
+        println!("--- agent watch: disabled via LNAI_AGENT_DISABLE=1, skipping ---");
+        return AgentVerdict::Continue;
+    }
+    if output_dir.join("AGENT_OFF").exists() {
+        println!("--- agent watch: AGENT_OFF present in output dir, skipping ---");
+        return AgentVerdict::Continue;
+    }
     if cfg.every == 0 || epoch % cfg.every != 0 {
         return AgentVerdict::Continue;
     }
@@ -512,7 +525,13 @@ mod tests {
         // Epoch 3 is not due: returns Continue without spawning anything.
         // (Due epochs spawn a real `opencode run` — never in unit tests.)
         assert_eq!(
-            maybe_consult_agent(&cfg, 3, Path::new("/nonexistent"), "prompt"),
+            maybe_consult_agent(
+                &cfg,
+                3,
+                Path::new("/nonexistent"),
+                Path::new("/nonexistent"),
+                "prompt"
+            ),
             AgentVerdict::Continue
         );
     }
@@ -525,7 +544,29 @@ mod tests {
             ..AgentHookConfig::default()
         };
         assert_eq!(
-            maybe_consult_agent(&cfg, 7, Path::new("/nonexistent"), "hello-agent"),
+            maybe_consult_agent(
+                &cfg,
+                7,
+                Path::new("/nonexistent"),
+                Path::new("/nonexistent"),
+                "hello-agent"
+            ),
+            AgentVerdict::Continue
+        );
+    }
+
+    #[test]
+    fn agent_off_file_and_env_disable_the_hook() {
+        let dir = tempfile::tempdir().expect("tmpdir");
+        let cfg = AgentHookConfig {
+            every: 1,
+            ..AgentHookConfig::default()
+        };
+        // No flag file: due epoch would spawn — do NOT call it here.
+        // With the flag file present: skips without spawning.
+        std::fs::write(dir.path().join("AGENT_OFF"), "").expect("flag");
+        assert_eq!(
+            maybe_consult_agent(&cfg, 1, Path::new("/nonexistent"), dir.path(), "p"),
             AgentVerdict::Continue
         );
     }

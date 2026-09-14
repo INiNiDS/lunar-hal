@@ -328,6 +328,7 @@ pub fn run_train_with_cancel(spec: &TrainingSpec, cancel: &CancelFlag) -> Result
                 hook,
                 epoch as u64,
                 &crate::agent::workspace_dir(),
+                output_dir,
                 &prompt,
             ) {
                 AgentVerdict::Continue => {}
