@@ -3,7 +3,7 @@ description: Read-only watch supervisor for GNN-kinematics training epochs
 mode: all
 model: openrouter/meta/muse-spark-1.3-contributor
 temperature: 0.1
-steps: 25
+steps: 10
 permission:
   # Allow-list: only file reading. Everything else — including all MCP
   # server tools (their schemas alone cost tens of thousands of context
