@@ -372,10 +372,19 @@ impl EvaluationSpec {
             self.data_path.clone().unwrap_or_default(),
             "--output-dir".to_string(),
             self.output_dir.clone(),
-            "--batch-size".to_string(),
-            self.batch_size.to_string(),
-            "--evaluate-only".to_string(),
         ];
+        // The GNN worker names its batch budget --max-nodes (legacy flag).
+        match self.model {
+            ModelKind::GnnKinematics | ModelKind::GnnLocalization => {
+                argv.push("--max-nodes".to_string());
+                argv.push(self.batch_size.to_string());
+            }
+            _ => {
+                argv.push("--batch-size".to_string());
+                argv.push(self.batch_size.to_string());
+            }
+        }
+        argv.push("--evaluate-only".to_string());
         if let Some(seed) = self.seed {
             argv.push("--seed".to_string());
             argv.push(seed.to_string());
@@ -426,13 +435,22 @@ impl BenchmarkSpec {
         let mut argv = vec![
             "--output-dir".to_string(),
             self.output_dir.clone(),
-            "--batch-size".to_string(),
-            self.batch_size.to_string(),
-            "--benchmark-iters".to_string(),
-            self.iterations.to_string(),
-            "--benchmark-warmup".to_string(),
-            self.warmup_iterations.to_string(),
         ];
+        // The GNN worker names its batch budget --max-nodes (legacy flag).
+        match self.model {
+            ModelKind::GnnKinematics | ModelKind::GnnLocalization => {
+                argv.push("--max-nodes".to_string());
+                argv.push(self.batch_size.to_string());
+            }
+            _ => {
+                argv.push("--batch-size".to_string());
+                argv.push(self.batch_size.to_string());
+            }
+        }
+        argv.push("--benchmark-iters".to_string());
+        argv.push(self.iterations.to_string());
+        argv.push("--benchmark-warmup".to_string());
+        argv.push(self.warmup_iterations.to_string());
         if let Some(seed) = self.seed {
             argv.push("--seed".to_string());
             argv.push(seed.to_string());
