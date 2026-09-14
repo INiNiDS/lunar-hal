@@ -242,14 +242,19 @@ pub fn epoch_prompt(
             r.epoch, r.train_loss, r.val_loss, r.phys_loss
         ));
     }
+    // Layout is cache-ordered: fully stable run identity first, then the
+    // slowly growing epoch table, then the per-call volatile tail last, so a
+    // caching provider can reuse the prefix across epochs.
     format!(
-        "Training run under watch: model={model_slug} data={data_path} \
-         output_dir={output} best_val_loss={best:.6} finished_epochs={n}.\n\
-         Epoch table so far (train/val/physics losses):\n{table}\n\
-         Recent event-log tail (events.ndjson):\n{log_tail}\n\
-         Host resources right now (say whether this looks normal):\n{resources}\n\
+        "Training run under watch.\n\
+         Run identity (stable for the whole run): model={model_slug} \
+         data={data_path} output_dir={output}.\n\
          Useful files (read what you need, you are read-only): \
          {output}/events.ndjson, {output}/artifact.json.\n\
+         Epoch table so far (train/val/physics losses):\n{table}\n\
+         This epoch: finished_epochs={n}, best_val_loss={best:.6}.\n\
+         Recent event-log tail (events.ndjson):\n{log_tail}\n\
+         Host resources right now (say whether this looks normal):\n{resources}\n\
          Analyze this epoch in the context of the table, then end with the \
          verdict block exactly as specified in your instructions.",
         output = output_dir.display(),
@@ -278,6 +283,7 @@ fn run_agent_call(
     agent: &str,
     model: &str,
     workdir: &Path,
+    title: &str,
     prompt: &str,
     timeout: Duration,
 ) -> Result<String, String> {
@@ -290,6 +296,10 @@ fn run_agent_call(
             model,
             "--dir",
             &workdir.to_string_lossy(),
+            // Explicit title: otherwise opencode spends a (pricey) extra model
+            // call per session just to name the chat.
+            "--title",
+            title,
         ])
         .arg(prompt)
         .stdin(Stdio::null())
@@ -360,7 +370,9 @@ pub fn maybe_consult_agent(
     }
     println!("--- agent watch (epoch {epoch}): consulting {} ---", cfg.model);
     let timeout = Duration::from_secs(cfg.timeout_secs.max(10));
-    let attempt = |model: &str| run_agent_call("opencode", &cfg.agent, model, workdir, prompt, timeout);
+    let title = format!("gnn-watch epoch {epoch}");
+    let attempt =
+        |model: &str| run_agent_call("opencode", &cfg.agent, model, workdir, &title, prompt, timeout);
     match attempt(&cfg.model) {
         Ok(out) => match parse_verdict(&out) {
             Some(v) => {
