@@ -775,6 +775,11 @@ fn copy_file_if_present(src: &Path, dst: &Path) -> Result<()> {
     if !src.exists() {
         return Ok(());
     }
+    // Resume-into-same-dir staging must be a no-op: std::fs::copy would
+    // truncate the file to zero bytes when src and dst are identical.
+    if same_file(src, dst) {
+        return Ok(());
+    }
     if let Some(parent) = dst.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {}", parent.display()))?;
@@ -782,6 +787,17 @@ fn copy_file_if_present(src: &Path, dst: &Path) -> Result<()> {
     std::fs::copy(src, dst)
         .with_context(|| format!("failed to copy {} -> {}", src.display(), dst.display()))?;
     Ok(())
+}
+
+/// True when both paths name the same file (exact or canonicalized match).
+fn same_file(a: &Path, b: &Path) -> bool {
+    if a == b {
+        return true;
+    }
+    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+        (Ok(x), Ok(y)) => x == y,
+        _ => false,
+    }
 }
 
 struct TrainOptions<'a> {

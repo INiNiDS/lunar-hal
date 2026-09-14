@@ -533,12 +533,26 @@ fn save_checkpoint(
     model_path: &Path,
     norm_path: &Path,
 ) -> Result<()> {
-    let mut store = BurnpackStore::from_file(model_path.to_str().unwrap()).overwrite(true);
-    model
-        .save_into(&mut store)
-        .map_err(|e| anyhow::anyhow!("failed to save model: {e}"))?;
+    // Atomic writes (tmp + rename): a kill mid-save must never leave a
+    // half-written checkpoint behind.
+    crate::artifacts::atomic_write_through(model_path, "bpk.tmp", |tmp| {
+        let mut store = BurnpackStore::from_file(
+            tmp.to_str()
+                .ok_or_else(|| "non-utf8 checkpoint path".to_string())?,
+        )
+        .overwrite(true);
+        model
+            .save_into(&mut store)
+            .map_err(|e| format!("failed to save model: {e}"))?;
+        Ok(())
+    })
+    .map_err(|e| anyhow::anyhow!("{e}"))?;
     let norm_json = serde_json::to_string_pretty(norm)?;
-    std::fs::write(norm_path, norm_json)?;
+    crate::artifacts::atomic_write_through(norm_path, "tmp", |tmp| {
+        std::fs::write(tmp, &norm_json).map_err(|e| format!("failed to write norm: {e}"))?;
+        Ok(())
+    })
+    .map_err(|e| anyhow::anyhow!("{e}"))?;
     Ok(())
 }
 

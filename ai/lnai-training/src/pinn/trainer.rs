@@ -210,13 +210,25 @@ pub fn run_train_with_cancel(spec: &TrainingSpec, cancel: &CancelFlag) -> Result
     for epoch in 1..=epochs {
         if interrupted.load(Ordering::SeqCst) || cancel.is_cancelled() {
             println!("\nInterrupted at epoch {epoch}. Saving checkpoint...");
-            let mut store =
-                BurnpackStore::from_file(out_model_path.to_str().unwrap()).overwrite(true);
-            model
-                .save_into(&mut store)
-                .expect("failed to save checkpoint");
+            crate::artifacts::atomic_write_through(&out_model_path, "bpk.tmp", |tmp| {
+                let mut store = BurnpackStore::from_file(
+                    tmp.to_str()
+                        .ok_or_else(|| "non-utf8 checkpoint path".to_string())?,
+                )
+                .overwrite(true);
+                model
+                    .save_into(&mut store)
+                    .map_err(|e| format!("failed to save checkpoint: {e}"))?;
+                Ok(())
+            })
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
             let norm_json = serde_json::to_string_pretty(&norm)?;
-            std::fs::write(&out_norm_path, norm_json)?;
+            crate::artifacts::atomic_write_through(&out_norm_path, "tmp", |tmp| {
+                std::fs::write(tmp, &norm_json)
+                    .map_err(|e| format!("failed to write norm: {e}"))?;
+                Ok(())
+            })
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
             println!("Checkpoint saved to: {}", out_model_path.display());
             let _ = append_event_line(output_dir, &JobEvent::Cancelled);
             return Ok(RunOutcome::Cancelled);
@@ -297,13 +309,25 @@ pub fn run_train_with_cancel(spec: &TrainingSpec, cancel: &CancelFlag) -> Result
         if val_loss < best_val_loss {
             best_val_loss = val_loss;
             epochs_without_improvement = 0;
-            let mut store =
-                BurnpackStore::from_file(out_model_path.to_str().unwrap()).overwrite(true);
-            model
-                .save_into(&mut store)
-                .expect("failed to save best model");
+            crate::artifacts::atomic_write_through(&out_model_path, "bpk.tmp", |tmp| {
+                let mut store = BurnpackStore::from_file(
+                    tmp.to_str()
+                        .ok_or_else(|| "non-utf8 checkpoint path".to_string())?,
+                )
+                .overwrite(true);
+                model
+                    .save_into(&mut store)
+                    .map_err(|e| format!("failed to save best model: {e}"))?;
+                Ok(())
+            })
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
             let norm_json = serde_json::to_string_pretty(&norm)?;
-            std::fs::write(&out_norm_path, norm_json)?;
+            crate::artifacts::atomic_write_through(&out_norm_path, "tmp", |tmp| {
+                std::fs::write(tmp, &norm_json)
+                    .map_err(|e| format!("failed to write norm: {e}"))?;
+                Ok(())
+            })
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
             let _ = append_event_line(
                 output_dir,
                 &JobEvent::Checkpoint {

@@ -5,6 +5,23 @@ use serde::{Deserialize, Serialize};
 /// Version of the artifact manifest structure itself.
 pub const ARTIFACT_MANIFEST_VERSION: &str = "1.0.0";
 
+/// Runs `write` against a temp sibling of `final_path`, then atomically
+/// renames over it. A kill mid-save can never leave a half-written
+/// checkpoint behind (the failure mode that zeroed a 135-epoch run once).
+pub fn atomic_write_through<F>(
+    final_path: &std::path::Path,
+    tmp_ext: &str,
+    write: F,
+) -> Result<(), String>
+where
+    F: FnOnce(&std::path::Path) -> Result<(), String>,
+{
+    let tmp = final_path.with_extension(tmp_ext);
+    write(&tmp)?;
+    std::fs::rename(&tmp, final_path)
+        .map_err(|e| format!("publish {}: {e}", final_path.display()))
+}
+
 /// Top-level manifest for a trained model artifact.
 /// Used to verify compatibility with a specific dataset, schema, and normalization state.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -378,5 +395,20 @@ mod tests {
         tampered.model_hash = "deadbeef".into();
         assert!(validate_artifact_bundle(&dir, &tampered).is_err());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn atomic_write_publishes_content_and_leaves_no_tmp() {
+        let dir = tempfile::tempdir().expect("tmpdir");
+        let target = dir.path().join("model.bpk");
+        std::fs::write(&target, b"old").expect("seed");
+        atomic_write_through(&target, "bpk.tmp", |tmp| {
+            std::fs::write(tmp, b"new").map_err(|e| e.to_string())?;
+            Ok(())
+        })
+        .expect("atomic write");
+        assert_eq!(std::fs::read(&target).expect("read"), b"new");
+        assert!(!target.with_extension("bpk.tmp").exists());
+        let _ = std::fs::remove_dir_all(dir);
     }
 }
