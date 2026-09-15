@@ -677,6 +677,16 @@ fn read_gnn_parquet(path: &Path, max_rows: Option<u64>, tiles: Option<String>) -
     for &col_name in required_cols {
         lf = lf.filter(col(col_name).is_not_null());
     }
+    // Physicality guard: transverse velocity explodes as 1/parallax, so
+    // near-zero parallaxes (crowded inner-galaxy tiles especially) produce
+    // garbage rows up to 1e11 km/s that dominate MSE and poison gradients.
+    // Galactic escape velocity is ~550 km/s; keep a 1000 km/s speed ceiling.
+    lf = lf.filter(
+        (col("vx_kms") * col("vx_kms")
+            + col("vy_kms") * col("vy_kms")
+            + col("vz_kms") * col("vz_kms"))
+        .lt(lit(1_000_000.0)),
+    );
     // Optional spatial-tile subset: shard the sky without loading the rest.
     if let Some(wanted) = tiles.as_deref() {
         let wanted: Vec<&str> = wanted
@@ -822,5 +832,30 @@ mod tests {
         // 3 valid rows capped at 2 -> stride 2 -> 2 rows.
         let df = read_gnn_parquet(&path, Some(2), None).expect("read");
         assert_eq!(df.height(), 2);
+    }
+
+    #[test]
+    fn read_drops_unphysical_velocities() {
+        // 1e6 km/s from a near-zero parallax must not reach training:
+        // a single such row would dominate MSE and poison gradients.
+        let mut df = df![
+            "x_pc" => [0.0f32, 10.0],
+            "y_pc" => [0.0f32, 0.0],
+            "z_pc" => [0.0f32, 0.0],
+            "bp_rp" => [1.0f32, 0.8],
+            "mag_g" => [10.0f32, 9.0],
+            "mag_bp" => [10.5f32, 9.4],
+            "mag_rp" => [9.5f32, 8.6],
+            "ruwe" => [1.0f32, 1.0],
+            "radial_velocity_kms" => [Some(5.0), Some(6.0)],
+            "vx_kms" => [1.0f32, 1.0e6],
+            "vy_kms" => [0.0f32, 0.0],
+            "vz_kms" => [0.0f32, 0.0],
+            "spatial_tile" => ["tileA", "tileA"],
+        ]
+        .expect("frame");
+        let (_dir, path) = write_parquet(&mut df, "fast.parquet");
+        let out = read_gnn_parquet(&path, None, None).expect("read");
+        assert_eq!(out.height(), 1);
     }
 }
