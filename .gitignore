@@ -13,6 +13,8 @@ run_pipeline.sh
 !.env.example
 data
 *.bpk
+AGENT_OFF
+AGENT_MODEL
 models/stellar_norm.json
 node_modules/
 tailwind.css
