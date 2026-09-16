@@ -1,0 +1,17 @@
+{"event":"started"}
+{"event":"checkpoint","epoch":1,"path":"./models/pinn-trend/stellar_model.bpk","hash":""}
+{"event":"metric","epoch":1,"train_loss":0.2815631330013275,"val_loss":0.213715061545372,"phys_loss":0.23881147801876068,"lr":0.0004523497400965494,"timestamp_ms":1789127460932}
+{"event":"progress","epoch":1,"total_epochs":5}
+{"event":"checkpoint","epoch":2,"path":"./models/pinn-trend/stellar_model.bpk","hash":""}
+{"event":"metric","epoch":2,"train_loss":0.23179230093955994,"val_loss":0.20751404762268066,"phys_loss":0.2347516268491745,"lr":0.0003275997400965494,"timestamp_ms":1789127462322}
+{"event":"progress","epoch":2,"total_epochs":5}
+{"event":"checkpoint","epoch":3,"path":"./models/pinn-trend/stellar_model.bpk","hash":""}
+{"event":"metric","epoch":3,"train_loss":0.2276623398065567,"val_loss":0.20516707003116608,"phys_loss":0.23461715877056122,"lr":0.00017340025990345064,"timestamp_ms":1789127463712}
+{"event":"progress","epoch":3,"total_epochs":5}
+{"event":"checkpoint","epoch":4,"path":"./models/pinn-trend/stellar_model.bpk","hash":""}
+{"event":"metric","epoch":4,"train_loss":0.22540518641471863,"val_loss":0.20361585915088654,"phys_loss":0.23439018428325653,"lr":0.00004865025990345063,"timestamp_ms":1789127465102}
+{"event":"progress","epoch":4,"total_epochs":5}
+{"event":"checkpoint","epoch":5,"path":"./models/pinn-trend/stellar_model.bpk","hash":""}
+{"event":"metric","epoch":5,"train_loss":0.22468134760856628,"val_loss":0.20334969460964203,"phys_loss":0.2355460673570633,"lr":1e-6,"timestamp_ms":1789127466494}
+{"event":"progress","epoch":5,"total_epochs":5}
+{"event":"completed","exit_code":0}

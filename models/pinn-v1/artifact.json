@@ -1,0 +1,23 @@
+{
+  "version": "1.0.0",
+  "model_kind": "pinn",
+  "architecture_version": "pinn-v1",
+  "model_hash": "f752d10dca865bc5f5804de212675cac30116b676873d669cd8fb81f552c4a31",
+  "norm_hash": "c53218b10452c1bd860bad56c46d18385b9485dc887de40d660dcab5042ccc28",
+  "feature_schema_hash": "",
+  "dataset_id": "gaia_dr3",
+  "dataset_version": "",
+  "seed": 8169980363655041702,
+  "hyperparameters": {
+    "hidden_dim": 256,
+    "kind": "pinn",
+    "physics_weight": 0.1
+  },
+  "git_revision": "unknown",
+  "backend_device": "cuda:0",
+  "evaluation_metrics": {
+    "best_val_loss": 0.17678946256637573
+  },
+  "created_ms": 1789129753936,
+  "localization_meta": null
+}

@@ -1,0 +1,27 @@
+{
+  "version": "1.0.0",
+  "model_kind": "gnn_kinematics",
+  "architecture_version": "gnn-kinematics-v1",
+  "model_hash": "9b229add8eec59bd63073d22071515b4c35deb2082ba7ade8828c60e384764b2",
+  "norm_hash": "9c096a72586d7329150a1429023c1c931c0ff5e3dd8961cf929350b1d30ca47d",
+  "feature_schema_hash": "",
+  "dataset_id": "gaia_dr3",
+  "dataset_version": "",
+  "seed": 4789711481763809265,
+  "hyperparameters": {
+    "hidden_dim": 256,
+    "kind": "gnn_kinematics",
+    "knn_k": 8,
+    "max_group_size": 64,
+    "output_dim": 3,
+    "physics_weight": 0.1,
+    "radius_pc": 50.0
+  },
+  "git_revision": "unknown",
+  "backend_device": "cuda:0",
+  "evaluation_metrics": {
+    "best_val_loss": 0.4179631017159766
+  },
+  "created_ms": 1789490325253,
+  "localization_meta": null
+}

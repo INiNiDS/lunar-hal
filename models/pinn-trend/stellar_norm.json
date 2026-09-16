@@ -1,0 +1,20 @@
+{
+  "x_mean": 881.3739,
+  "x_std": 2318.2354,
+  "y_mean": -114.13021,
+  "y_std": 2049.551,
+  "z_mean": -46.392002,
+  "z_std": 735.896,
+  "bp_rp_mean": 1.2619,
+  "bp_rp_std": 0.5347113,
+  "mg_mean": 3.4576147,
+  "mg_std": 1.6822001,
+  "log_teff_mean": 3.7515855,
+  "log_teff_std": 0.070738554,
+  "log_rad_mean": 0.3379992,
+  "log_rad_std": 0.4168719,
+  "log_mass_mean": 0.12939483,
+  "log_mass_std": 0.1889612,
+  "log_lum_mean": 0.6840324,
+  "log_lum_std": 0.77594066
+}
