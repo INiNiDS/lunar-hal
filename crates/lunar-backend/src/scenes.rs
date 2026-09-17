@@ -1,6 +1,6 @@
 use crate::ai::{
-    PinnInputs, SimpleRng, StarFeatures, generate_hybrid_metadata, get_gnn, get_lore_cache,
-    get_pinn, gnn_infer, pinn_infer,
+    PinnInputs, SimpleRng, StarFeatures, apparent_g_for_member, generate_hybrid_metadata, get_gnn,
+    get_lore_cache, get_pinn, gnn_infer, infer_pinn_batch_async, pinn_infer,
 };
 use axum::{
     Json,
@@ -52,70 +52,81 @@ pub fn sector_seed(cx: f32, cy: f32, cz: f32) -> u64 {
     if s == 0 { 1 } else { s }
 }
 
-pub struct StellarBaseParams {
-    pub teff: f32,
-    pub radius: f32,
-    pub mass: f32,
-    pub luminosity: f32,
-    pub mg: f32,
-}
-
 pub struct SectorSeed {
     pub center: [f32; 3],
     pub search_radius: f32,
-    pub base: StellarBaseParams,
     pub seed: u64,
 }
 
-pub fn generate_sector_stars(spec: SectorSeed) -> Vec<StarFeatures> {
+/// Stage 6: sector geometry only — deterministic member positions, no
+/// physics. Every star's physical parameters come from its own batched
+/// PINN inference (see [`infer_sector_stars`]), never from random
+/// replication of the center value.
+pub fn generate_sector_positions(spec: SectorSeed) -> Vec<[f32; 3]> {
     let [cx, cy, cz] = spec.center;
     let search_radius = spec.search_radius;
-    let base_teff = spec.base.teff;
-    let base_rad = spec.base.radius;
-    let base_mass = spec.base.mass;
-    let base_lum = spec.base.luminosity;
-    let base_mg = spec.base.mg;
     let seed = spec.seed;
 
     let mut rng = SimpleRng::new(seed);
-    let mut stars = Vec::with_capacity(STARS_PER_SECTOR);
+    let mut positions = Vec::with_capacity(STARS_PER_SECTOR);
+    positions.push([cx, cy, cz]);
 
-    stars.push(StarFeatures {
-        coords: [cx, cy, cz],
-        log_teff: base_teff.max(0.01).log10(),
-        log_rad: base_rad.max(0.01).log10(),
-        log_mass: base_mass.max(0.01).log10(),
-        log_lum: base_lum.max(0.01).log10(),
-        mg: base_mg,
-    });
-
-    for _i in 1..STARS_PER_SECTOR {
+    for _ in 1..STARS_PER_SECTOR {
         let angle1 = rng.next_f32() * std::f32::consts::PI * 2.0;
         let angle2 = rng.next_f32() * std::f32::consts::PI * 2.0;
         let dist = rng.next_f32().sqrt() * search_radius * 0.8;
 
-        let x = cx + dist * angle1.cos() * angle2.cos();
-        let y = cy + dist * angle1.sin() * angle2.cos();
-        let z = cz + dist * angle2.sin();
-
-        let noise_teff = 1.0 + (rng.gaussian() * 0.08).clamp(-0.2, 0.2);
-        let noise_rad = 1.0 + (rng.gaussian() * 0.10).clamp(-0.25, 0.25);
-        let noise_mass = 1.0 + (rng.gaussian() * 0.10).clamp(-0.25, 0.25);
-        let noise_lum = 1.0 + (rng.gaussian() * 0.12).clamp(-0.3, 0.3);
-
-        let mg_val = base_mg + rng.gaussian() * 0.3;
-
-        stars.push(StarFeatures {
-            coords: [x, y, z],
-            log_teff: (base_teff * noise_teff).max(0.01).log10(),
-            log_rad: (base_rad * noise_rad).max(0.01).log10(),
-            log_mass: (base_mass * noise_mass).max(0.01).log10(),
-            log_lum: (base_lum * noise_lum).max(0.01).log10(),
-            mg: mg_val,
-        });
+        positions.push([
+            cx + dist * angle1.cos() * angle2.cos(),
+            cy + dist * angle1.sin() * angle2.cos(),
+            cz + dist * angle2.sin(),
+        ]);
     }
 
-    stars
+    positions
+}
+
+/// Stage 6: per-star batched sector inference. Positions are geometric;
+/// each member gets its own PINN row with shared color but its own
+/// distance-modulus apparent magnitude, so parameter spread is model
+/// physics — not gaussian noise around the center.
+pub async fn infer_sector_stars(
+    center: [f32; 3],
+    search_radius: f32,
+    seed: u64,
+    bp_rp: f32,
+    g_mag: f32,
+) -> Vec<StarFeatures> {
+    let positions = generate_sector_positions(SectorSeed {
+        center,
+        search_radius,
+        seed,
+    });
+    let mg_center =
+        calculate_absolute_magnitude(center[0], center[1], center[2], g_mag);
+    let inputs: Vec<PinnInputs> = positions
+        .iter()
+        .map(|&position| PinnInputs {
+            position,
+            bp_rp,
+            g_mag: apparent_g_for_member(position, mg_center, g_mag),
+        })
+        .collect();
+    let outputs = infer_pinn_batch_async(inputs).await;
+
+    positions
+        .iter()
+        .zip(outputs.iter().chain(std::iter::repeat(&[0.0, 0.0, 0.0, 0.0])))
+        .map(|(&coords, &[teff, rad, mass, lum])| StarFeatures {
+            coords,
+            log_teff: teff.max(0.01).log10(),
+            log_rad: rad.max(0.01).log10(),
+            log_mass: mass.max(0.01).log10(),
+            log_lum: lum.max(0.01).log10(),
+            mg: mg_center,
+        })
+        .take(STARS_PER_SECTOR)
+        .collect()
 }
 
 pub async fn compile_response_stars(stars: &[StarFeatures], temperature: f32) -> Vec<ResponseStar> {
@@ -182,35 +193,14 @@ pub async fn generate_sector_internal(query: SectorQuery) -> Vec<ResponseStar> {
         return Vec::new();
     }
 
-    let [teff, rad, mass, lum] = infer_pinn_async(PinnInputs {
-        position: query.center,
-        bp_rp: query.bp_rp,
-        g_mag: query.g_mag,
-    })
-    .await;
-    let mg = calculate_absolute_magnitude(
-        query.center[0],
-        query.center[1],
-        query.center[2],
+    let stars = infer_sector_stars(
+        query.center,
+        query.search_radius,
+        query.seed,
+        query.bp_rp,
         query.g_mag,
-    );
-
-    let stars = tokio::task::spawn_blocking(move || {
-        generate_sector_stars(SectorSeed {
-            center: query.center,
-            search_radius: query.search_radius,
-            base: StellarBaseParams {
-                teff,
-                radius: rad,
-                mass,
-                luminosity: lum,
-                mg,
-            },
-            seed: query.seed,
-        })
-    })
-    .await
-    .unwrap_or_default();
+    )
+    .await;
 
     compile_response_stars(&stars, query.temperature).await
 }
@@ -755,34 +745,14 @@ async fn generate_initial_scene_stars(
     let scene_bp_rp = 0.4 + rng.next_f32() * 2.6;
     let scene_g_mag = 4.0 + rng.next_f32() * 12.0;
 
-    let [teff, rad, mass, lum] = infer_pinn_async(PinnInputs {
-        position: [req.center_x, req.center_y, req.center_z],
-        bp_rp: scene_bp_rp,
-        g_mag: scene_g_mag,
-    })
+    let features = infer_sector_stars(
+        [req.center_x, req.center_y, req.center_z],
+        SEARCH_RADIUS,
+        seed,
+        scene_bp_rp,
+        scene_g_mag,
+    )
     .await;
-
-    let mg = calculate_absolute_magnitude(req.center_x, req.center_y, req.center_z, scene_g_mag);
-
-    let features = tokio::task::spawn_blocking({
-        let center = [req.center_x, req.center_y, req.center_z];
-        move || {
-            generate_sector_stars(SectorSeed {
-                center,
-                search_radius: SEARCH_RADIUS,
-                base: StellarBaseParams {
-                    teff,
-                    radius: rad,
-                    mass,
-                    luminosity: lum,
-                    mg,
-                },
-                seed,
-            })
-        }
-    })
-    .await
-    .map_err(|e| e.to_string())?;
 
     let response_stars = compile_response_stars(&features, req.temperature).await;
 
@@ -793,6 +763,39 @@ async fn generate_initial_scene_stars(
 #[cfg(test)]
 mod live_scene_tests {
     use super::*;
+    use crate::ai::apparent_g_for_member;
+
+    #[test]
+    fn sector_positions_are_deterministic_center_first_and_bounded() {
+        let spec = SectorSeed {
+            center: [100.0, -50.0, 25.0],
+            search_radius: 250.0,
+            seed: 12345,
+        };
+        let a = generate_sector_positions(spec);
+        let b = generate_sector_positions(SectorSeed {
+            center: [100.0, -50.0, 25.0],
+            search_radius: 250.0,
+            seed: 12345,
+        });
+        assert_eq!(a, b);
+        assert_eq!(a.len(), STARS_PER_SECTOR);
+        assert_eq!(a[0], [100.0, -50.0, 25.0]);
+        for p in &a {
+            let d = ((p[0] - 100.0).powi(2) + (p[1] + 50.0).powi(2) + (p[2] - 25.0).powi(2)).sqrt();
+            assert!(d <= 250.0 * 0.8 + 1e-3, "out of radius: {d}");
+        }
+    }
+
+    #[test]
+    fn apparent_g_round_trips_through_absolute_magnitude() {
+        let center = [8000.0, 0.0, 0.0];
+        let g_mag = 12.0;
+        let mg = calculate_absolute_magnitude(center[0], center[1], center[2], g_mag);
+        let back = apparent_g_for_member(center, mg, g_mag);
+        assert!((back - g_mag).abs() < 1e-3, "got {back}");
+    }
+
 
     fn temporary_directory() -> PathBuf {
         std::env::temp_dir().join(format!(

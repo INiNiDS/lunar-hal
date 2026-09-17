@@ -91,12 +91,21 @@ pub struct PinnInputs {
     pub g_mag: f32,
 }
 
-pub fn pinn_infer(
-    model: &StellarMlp<B>,
-    device: &Device<B>,
-    norm: &StellarNorm,
-    inputs: PinnInputs,
-) -> [f32; 4] {
+/// Apparent G magnitude of a member at `position` assuming it shares the
+/// sector's absolute magnitude `mg_center` (distance modulus, parsecs).
+/// Falls back to `mg_center + 5*log10(0.1) - 5` near the origin, mirroring
+/// the single-star guard below.
+pub fn apparent_g_for_member(position: [f32; 3], mg_center: f32, g_fallback: f32) -> f32 {
+    let d = (position[0] * position[0] + position[1] * position[1] + position[2] * position[2])
+        .sqrt();
+    if d < 0.1 {
+        g_fallback
+    } else {
+        mg_center + 5.0 * d.log10() - 5.0
+    }
+}
+
+fn pinn_input_row(norm: &StellarNorm, inputs: PinnInputs) -> [f32; 5] {
     let [x_pc, y_pc, z_pc] = inputs.position;
     let d_raw = (x_pc * x_pc + y_pc * y_pc + z_pc * z_pc).sqrt();
 
@@ -106,29 +115,79 @@ pub fn pinn_infer(
         inputs.g_mag - 5.0 * d_raw.log10() + 5.0
     };
 
-    let nx = (x_pc - norm.x_mean) / norm.x_std;
-    let ny = (y_pc - norm.y_mean) / norm.y_std;
-    let nz = (z_pc - norm.z_mean) / norm.z_std;
-    let nbp = (inputs.bp_rp - norm.bp_rp_mean) / norm.bp_rp_std;
-    let nmg = (mg - norm.mg_mean) / norm.mg_std;
+    [
+        (x_pc - norm.x_mean) / norm.x_std,
+        (y_pc - norm.y_mean) / norm.y_std,
+        (z_pc - norm.z_mean) / norm.z_std,
+        (inputs.bp_rp - norm.bp_rp_mean) / norm.bp_rp_std,
+        (mg - norm.mg_mean) / norm.mg_std,
+    ]
+}
 
-    let input =
-        Tensor::<B, 2>::from_data(TensorData::new(vec![nx, ny, nz, nbp, nmg], [1, 5]), device);
-    let output = model.forward(input);
-    let data = output.into_data();
-    let vals: Vec<f32> = data.to_vec().expect("failed to convert output");
-
+fn denorm_pinn_row(norm: &StellarNorm, vals: [f32; 4]) -> [f32; 4] {
     let log_teff = vals[0] * norm.log_teff_std + norm.log_teff_mean;
     let log_rad = vals[1] * norm.log_rad_std + norm.log_rad_mean;
     let log_mass = vals[2] * norm.log_mass_std + norm.log_mass_mean;
     let log_lum = vals[3] * norm.log_lum_std + norm.log_lum_mean;
 
-    let teff = 10f32.powf(log_teff);
-    let rad = 10f32.powf(log_rad);
-    let mass = 10f32.powf(log_mass);
-    let lum = 10f32.powf(log_lum);
+    [
+        10f32.powf(log_teff),
+        10f32.powf(log_rad),
+        10f32.powf(log_mass),
+        10f32.powf(log_lum),
+    ]
+}
 
-    [teff, rad, mass, lum]
+pub fn pinn_infer(
+    model: &StellarMlp<B>,
+    device: &Device<B>,
+    norm: &StellarNorm,
+    inputs: PinnInputs,
+) -> [f32; 4] {
+    pinn_infer_batch(model, device, norm, &[inputs])
+        .into_iter()
+        .next()
+        .unwrap_or([0.0, 0.0, 0.0, 0.0])
+}
+
+/// Stage 6: per-star batched PINN inference — one forward pass for the
+/// whole sector instead of one call per star (or one call for the center
+/// with random replication for the rest).
+pub fn pinn_infer_batch(
+    model: &StellarMlp<B>,
+    device: &Device<B>,
+    norm: &StellarNorm,
+    inputs: &[PinnInputs],
+) -> Vec<[f32; 4]> {
+    if inputs.is_empty() {
+        return Vec::new();
+    }
+    let flat: Vec<f32> = inputs
+        .iter()
+        .flat_map(|i| pinn_input_row(norm, *i))
+        .collect();
+    let input = Tensor::<B, 2>::from_data(TensorData::new(flat, [inputs.len(), 5]), device);
+    let output = model.forward(input);
+    let vals: Vec<f32> = output
+        .into_data()
+        .to_vec()
+        .expect("failed to convert output");
+
+    vals.chunks_exact(4)
+        .map(|c| denorm_pinn_row(norm, [c[0], c[1], c[2], c[3]]))
+        .collect()
+}
+
+pub async fn infer_pinn_batch_async(inputs: Vec<PinnInputs>) -> Vec<[f32; 4]> {
+    if inputs.is_empty() {
+        return Vec::new();
+    }
+    let pinn = get_pinn().await;
+    tokio::task::spawn_blocking(move || {
+        pinn_infer_batch(&pinn.model, &pinn.device, &pinn.norm, &inputs)
+    })
+    .await
+    .unwrap_or_default()
 }
 
 fn default_one() -> f32 {
