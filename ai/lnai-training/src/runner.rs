@@ -151,6 +151,7 @@ mod tests {
             config: ModelConfig::Pinn(PinnConfig {
                 physics_weight: 0.1,
                 hidden_dim: 256,
+                ..Default::default()
             }),
             dataset_manifest_hash: "manifest".into(),
             data_path: None,

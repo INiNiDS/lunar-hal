@@ -15,12 +15,15 @@ use lnai_training::spec::{ModelConfig, ModelKind, PinnConfig, TrainingSpec};
 
 pub use args::Args;
 
-pub fn spec_from_args(args: &Args) -> TrainingSpec {
-    TrainingSpec {
+pub fn spec_from_args(args: &Args) -> Result<TrainingSpec> {
+    Ok(TrainingSpec {
         model: ModelKind::Pinn,
         config: ModelConfig::Pinn(PinnConfig {
             physics_weight: args.physics_weight,
             hidden_dim: 256,
+            loss: args.loss_kind()?,
+            huber_delta: args.huber_delta,
+            target_weights: args.target_weights_array()?,
         }),
         dataset_manifest_hash: String::new(),
         data_path: if args.data.is_empty() {
@@ -45,12 +48,12 @@ pub fn spec_from_args(args: &Args) -> TrainingSpec {
         max_rows: args.max_rows,
         tiles: args.tiles.clone(),
         agent: None,
-    }
+    })
 }
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    let spec = spec_from_args(&args);
+    let spec = spec_from_args(&args)?;
     if let Err(errs) = spec.validate() {
         anyhow::bail!("invalid PINN spec: {}", errs.join("; "));
     }

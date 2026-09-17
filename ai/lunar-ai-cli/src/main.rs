@@ -850,6 +850,7 @@ fn training_spec_from_opts(
             ModelConfig::Pinn(PinnConfig {
                 physics_weight: opts.physics_weight,
                 hidden_dim: 256,
+                ..Default::default()
             }),
         ),
         CliModel::Gnn => (

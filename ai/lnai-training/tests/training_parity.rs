@@ -23,6 +23,7 @@ fn pinn_spec(output_dir: &str) -> TrainingSpec {
         config: ModelConfig::Pinn(PinnConfig {
             physics_weight: 0.1,
             hidden_dim: 256,
+            ..Default::default()
         }),
         dataset_manifest_hash: "manifest-v1".into(),
         data_path: Some("ai_data/clean_stars2.parquet".into()),

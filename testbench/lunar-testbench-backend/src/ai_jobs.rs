@@ -39,6 +39,7 @@ pub fn training_spec_from_request(
                 ModelConfig::Pinn(PinnConfig {
                     physics_weight: req.physics_weight,
                     hidden_dim: 256,
+                    ..Default::default()
                 }),
             )
         }

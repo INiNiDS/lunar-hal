@@ -46,10 +46,79 @@ impl ModelKind {
     }
 }
 
+/// Stage 6 (task 1/8): selectable PINN data-loss shape. `Mse` is the
+/// legacy behaviour; `Huber` is the robustness experiment (linear penalty
+/// past `huber_delta`, in normalized target units).
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum PinnLossKind {
+    #[default]
+    Mse,
+    Huber,
+}
+
+impl PinnLossKind {
+    pub fn slug(&self) -> &'static str {
+        match self {
+            PinnLossKind::Mse => "mse",
+            PinnLossKind::Huber => "huber",
+        }
+    }
+
+    pub fn from_slug(slug: &str) -> Option<Self> {
+        match slug {
+            "mse" => Some(PinnLossKind::Mse),
+            "huber" => Some(PinnLossKind::Huber),
+            _ => None,
+        }
+    }
+}
+
+fn default_huber_delta() -> f32 {
+    1.0
+}
+
+fn default_target_weights() -> [f32; 4] {
+    [1.0, 1.0, 1.0, 1.0]
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct PinnConfig {
     pub physics_weight: f64,
     pub hidden_dim: u32,
+    /// Data-loss shape (default `Mse` = legacy behaviour).
+    #[serde(default)]
+    pub loss: PinnLossKind,
+    /// Huber knee in normalized target units (used only when
+    /// `loss == Huber`).
+    #[serde(default = "default_huber_delta")]
+    pub huber_delta: f32,
+    /// Per-target data-loss weights in [`PINN_TARGETS`](crate::metrics::pinn::PINN_TARGETS)
+    /// order `[teff, rad, mass, lum]` (default uniform).
+    #[serde(default = "default_target_weights")]
+    pub target_weights: [f32; 4],
+}
+
+impl PinnConfig {
+    /// Legacy configuration: MSE loss with uniform target weights.
+    pub fn is_legacy_loss_config(&self) -> bool {
+        self.loss == PinnLossKind::Mse
+            && (self.huber_delta - 1.0).abs() < f32::EPSILON
+            && self.target_weights == [1.0, 1.0, 1.0, 1.0]
+    }
+}
+
+impl Default for PinnConfig {
+    /// Legacy defaults: MSE loss, unit Huber knee, uniform target weights.
+    fn default() -> Self {
+        Self {
+            physics_weight: 0.1,
+            hidden_dim: 256,
+            loss: PinnLossKind::Mse,
+            huber_delta: default_huber_delta(),
+            target_weights: default_target_weights(),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -179,6 +248,18 @@ impl TrainingSpec {
                 if cfg.hidden_dim == 0 {
                     errors.push("pinn hidden_dim must be >= 1".to_string());
                 }
+                if !cfg.huber_delta.is_finite() || cfg.huber_delta <= 0.0 {
+                    errors.push(format!(
+                        "pinn huber_delta must be finite and > 0, got {}",
+                        cfg.huber_delta
+                    ));
+                }
+                if cfg.target_weights.iter().any(|w| !w.is_finite() || *w < 0.0) {
+                    errors.push("pinn target_weights must be finite and >= 0".to_string());
+                }
+                if cfg.target_weights.iter().sum::<f32>() <= 0.0 {
+                    errors.push("pinn target_weights must sum to > 0".to_string());
+                }
             }
             ModelConfig::GnnKinematics(cfg) => {
                 if cfg.knn_k == 0 {
@@ -272,6 +353,22 @@ impl TrainingSpec {
                 argv.push(self.batch_size.to_string());
                 argv.push("--physics-weight".to_string());
                 argv.push(cfg.physics_weight.to_string());
+                // Stage 6 loss options are trailing and opt-in: legacy
+                // specs keep the frozen golden argv byte-identical.
+                if !cfg.is_legacy_loss_config() {
+                    argv.push("--loss-kind".to_string());
+                    argv.push(cfg.loss.slug().to_string());
+                    argv.push("--huber-delta".to_string());
+                    argv.push(cfg.huber_delta.to_string());
+                    argv.push("--target-weights".to_string());
+                    argv.push(
+                        cfg.target_weights
+                            .iter()
+                            .map(ToString::to_string)
+                            .collect::<Vec<_>>()
+                            .join(","),
+                    );
+                }
                 if let Some(tiles) = self.tiles.as_deref()
                     && !tiles.is_empty()
                 {
@@ -530,6 +627,7 @@ mod tests {
             config: ModelConfig::Pinn(PinnConfig {
                 physics_weight: 0.1,
                 hidden_dim: 256,
+                ..Default::default()
             }),
             dataset_manifest_hash: "manifest-hash".into(),
             data_path: Some("ai_data/clean_stars2.parquet".into()),

@@ -58,4 +58,52 @@ pub struct Args {
     /// unset = all tiles.
     #[arg(long)]
     pub tiles: Option<String>,
+    /// Stage 6: data-loss shape — "mse" (legacy) or "huber" (robustness
+    /// experiment, linear past --huber-delta).
+    #[arg(long, default_value = "mse")]
+    pub loss_kind: String,
+    /// Stage 6: Huber knee in normalized target units (Huber loss only).
+    #[arg(long, default_value_t = 1.0)]
+    pub huber_delta: f32,
+    /// Stage 6: per-target data-loss weights in [teff,rad,mass,lum] order,
+    /// comma-separated (default "1,1,1,1" = uniform).
+    #[arg(long, default_value = "1,1,1,1")]
+    pub target_weights: String,
+}
+
+impl Args {
+    /// Resolves `--loss-kind`, rejecting unknown slugs loudly so a typo
+    /// can never silently train with the wrong loss.
+    pub fn loss_kind(&self) -> anyhow::Result<lnai_training::spec::PinnLossKind> {
+        use lnai_training::spec::PinnLossKind;
+        PinnLossKind::from_slug(self.loss_kind.as_str()).ok_or_else(|| {
+            anyhow::anyhow!(
+                "invalid --loss-kind '{}': expected 'mse' or 'huber'",
+                self.loss_kind
+            )
+        })
+    }
+
+    /// Parses `--target-weights` as four comma-separated floats; any parse
+    /// failure is an error (spec validation then checks range/sum).
+    pub fn target_weights_array(&self) -> anyhow::Result<[f32; 4]> {
+        let parts: Vec<&str> = self.target_weights.split(',').collect();
+        if parts.len() != 4 {
+            anyhow::bail!(
+                "invalid --target-weights '{}': expected 4 comma-separated floats",
+                self.target_weights
+            );
+        }
+        let mut out = [0.0f32; 4];
+        for (slot, part) in out.iter_mut().zip(parts) {
+            *slot = part.trim().parse::<f32>().map_err(|_| {
+                anyhow::anyhow!(
+                    "invalid --target-weights '{}': '{}' is not a float",
+                    self.target_weights,
+                    part.trim()
+                )
+            })?;
+        }
+        Ok(out)
+    }
 }

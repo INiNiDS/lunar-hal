@@ -51,6 +51,26 @@ pub fn per_target_metrics(pred: &[[f32; 4]], truth: &[[f32; 4]]) -> Vec<PerTarge
         .collect()
 }
 
+/// Weighted aggregate of per-target MSE: `sum(w_i * mse_i) / sum(w)`
+/// with weights in [`PINN_TARGETS`] order. Returns `None` when the weight
+/// sum is not positive (Stage 6: single headline number for runs with
+/// non-uniform `target_weights`).
+pub fn weighted_mean_mse(metrics: &[PerTargetMetrics], weights: &[f32; 4]) -> Option<f64> {
+    if metrics.len() != PINN_TARGETS.len() {
+        return None;
+    }
+    let w_sum: f64 = weights.iter().map(|w| f64::from(*w)).sum();
+    if !(w_sum > 0.0) {
+        return None;
+    }
+    let acc: f64 = metrics
+        .iter()
+        .zip(weights.iter())
+        .map(|(m, w)| m.mse * f64::from(*w))
+        .sum();
+    Some(acc / w_sum)
+}
+
 /// Stefan–Boltzmann residual in log10 solar units:
 /// `log10_lum - (4*log10_teff + 2*log10_rad)`.
 /// Zero for physically consistent predictions.
@@ -113,5 +133,19 @@ mod tests {
             PINN_TARGETS,
             ["log10_teff", "log10_rad", "log10_mass", "log10_lum"]
         );
+    }
+
+    #[test]
+    fn weighted_mean_mse_selects_and_rejects_bad_weights() {
+        let truth = [[1.0, 2.0, 3.0, 4.0], [1.0, 2.0, 3.0, 4.0]];
+        let pred = [[2.0, 2.0, 3.0, 6.0], [1.0, 4.0, 5.0, 4.0]];
+        let metrics = per_target_metrics(&pred, &truth);
+        // Per-target MSEs are [0.5, 2.0, 2.0, 2.0].
+        let uniform = weighted_mean_mse(&metrics, &[1.0, 1.0, 1.0, 1.0]).unwrap();
+        assert!((uniform - 1.625).abs() < 1e-12, "got {uniform}");
+        let teff_only = weighted_mean_mse(&metrics, &[1.0, 0.0, 0.0, 0.0]).unwrap();
+        assert!((teff_only - 0.5).abs() < 1e-12, "got {teff_only}");
+        assert!(weighted_mean_mse(&metrics, &[0.0, 0.0, 0.0, 0.0]).is_none());
+        assert!(weighted_mean_mse(&metrics[..2], &[1.0, 1.0, 1.0, 1.0]).is_none());
     }
 }

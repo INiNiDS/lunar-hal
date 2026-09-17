@@ -251,12 +251,31 @@ pub fn run_train_with_cancel(spec: &TrainingSpec, cancel: &CancelFlag) -> Result
         let mut accum_count = 0usize;
 
         while let Some((batch_inputs, batch_targets)) = batcher.next_batch() {
-            let physics_weight = match &spec.config {
-                crate::spec::ModelConfig::Pinn(cfg) => cfg.physics_weight,
-                _ => 0.1,
+            let (physics_weight, loss_kind, huber_delta, target_weights) = match &spec.config
+            {
+                crate::spec::ModelConfig::Pinn(cfg) => (
+                    cfg.physics_weight,
+                    cfg.loss,
+                    cfg.huber_delta,
+                    cfg.target_weights,
+                ),
+                _ => (
+                    0.1,
+                    crate::spec::PinnLossKind::Mse,
+                    1.0,
+                    [1.0, 1.0, 1.0, 1.0],
+                ),
             };
             let predictions = model.forward(batch_inputs);
-            let loss = compute_pinn_loss(predictions, batch_targets, physics_weight, &norm);
+            let loss = compute_pinn_loss(
+                predictions,
+                batch_targets,
+                physics_weight,
+                &norm,
+                loss_kind,
+                huber_delta,
+                &target_weights,
+            );
 
             let scaled_loss = if spec.grad_accum > 1 {
                 loss.clone().div_scalar(spec.grad_accum as f32)
@@ -364,10 +383,22 @@ pub fn run_train_with_cancel(spec: &TrainingSpec, cancel: &CancelFlag) -> Result
         println!();
         println!("=== Holdout Evaluation ===");
         let holdout_path = Path::new(holdout_path);
-        if holdout_path.exists() {
+        // Stage 6: an explicitly requested holdout must exist and be
+        // non-empty — a silent 0.0 loss on missing/empty data used to
+        // masquerade as perfect generalization.
+        if !holdout_path.exists() {
+            anyhow::bail!("holdout file not found: {}", holdout_path.display());
+        }
+        {
             let holdout_ds: StellarDataset<TrainBackend> =
                 StellarDataset::load(holdout_path, &device, spec.max_rows, spec.tiles.clone())?;
             let (_, holdout_val) = holdout_ds.split_with_seed(0.0, seed);
+            if holdout_val.n_samples == 0 {
+                anyhow::bail!(
+                    "holdout file is empty after filtering: {}",
+                    holdout_path.display()
+                );
+            }
             let infer_model = model.valid();
             let holdout_loss = evaluate_infer(
                 &infer_model,
@@ -393,8 +424,6 @@ pub fn run_train_with_cancel(spec: &TrainingSpec, cancel: &CancelFlag) -> Result
                     "         The model may be overfitting. Consider regularization or more data."
                 );
             }
-        } else {
-            println!("Holdout file not found: {}", holdout_path.display());
         }
     }
 
@@ -500,32 +529,42 @@ pub fn run_evaluate(spec: &TrainingSpec) -> Result<RunOutcome> {
         "Validation",
         &crate::metrics::pinn::per_target_metrics(&pred_rows, &truth_rows),
         &norm,
+        pinn_target_weights(spec),
     );
 
-    if let Some(holdout_path) = &spec.holdout
-        && Path::new(holdout_path).exists()
-    {
-        let holdout_ds: StellarDataset<TrainBackend> =
-            StellarDataset::load(Path::new(holdout_path), &device, None, None)?;
-        let (_, holdout_val) = holdout_ds.split_with_seed(0.0, seed);
-        let holdout_loss = evaluate_infer(
-            &infer_model,
-            &holdout_val.inputs.clone().valid(),
-            &holdout_val.targets.clone().valid(),
-            spec.batch_size as usize,
-        );
-        println!("Holdout data loss:       {holdout_loss:.6}");
-        let (pred_rows, truth_rows) = evaluate_per_target_infer(
-            &infer_model,
-            &holdout_val.inputs.clone().valid(),
-            &holdout_val.targets.clone().valid(),
-            spec.batch_size as usize,
-        )?;
-        print_per_target_table(
-            "Holdout",
-            &crate::metrics::pinn::per_target_metrics(&pred_rows, &truth_rows),
-            &norm,
-        );
+    if let Some(holdout_path) = &spec.holdout {
+        // Stage 6: same non-empty gate as training — a requested holdout
+        // must exist and carry samples.
+        if !Path::new(holdout_path).exists() {
+            anyhow::bail!("holdout file not found: {holdout_path}");
+        }
+        {
+            let holdout_ds: StellarDataset<TrainBackend> =
+                StellarDataset::load(Path::new(holdout_path), &device, None, None)?;
+            let (_, holdout_val) = holdout_ds.split_with_seed(0.0, seed);
+            if holdout_val.n_samples == 0 {
+                anyhow::bail!("holdout file is empty after filtering: {holdout_path}");
+            }
+            let holdout_loss = evaluate_infer(
+                &infer_model,
+                &holdout_val.inputs.clone().valid(),
+                &holdout_val.targets.clone().valid(),
+                spec.batch_size as usize,
+            );
+            println!("Holdout data loss:       {holdout_loss:.6}");
+            let (pred_rows, truth_rows) = evaluate_per_target_infer(
+                &infer_model,
+                &holdout_val.inputs.clone().valid(),
+                &holdout_val.targets.clone().valid(),
+                spec.batch_size as usize,
+            )?;
+            print_per_target_table(
+                "Holdout",
+                &crate::metrics::pinn::per_target_metrics(&pred_rows, &truth_rows),
+                &norm,
+                pinn_target_weights(spec),
+            );
+        }
     }
     drop(infer_model);
     println!("Evaluation complete; checkpoints untouched.");
@@ -631,11 +670,13 @@ fn evaluate_per_target_infer(
 }
 
 /// Prints per-target MSE/MAE/max-abs in normalized units plus MAE in dex
-/// (mae_norm × target std), which is the physically readable number.
+/// (mae_norm × target std), which is the physically readable number, plus
+/// the Stage 6 weighted MSE aggregate over `weights`.
 fn print_per_target_table(
     split: &str,
     metrics: &[crate::metrics::pinn::PerTargetMetrics],
     norm: &NormParams,
+    weights: [f32; 4],
 ) {
     let std_of = |target: &str| match target {
         "log10_teff" => norm.log_teff_std,
@@ -655,6 +696,18 @@ fn print_per_target_table(
             m.max_abs_err,
             m.mae as f32 * std_of(m.target),
         );
+    }
+    match crate::metrics::pinn::weighted_mean_mse(metrics, &weights) {
+        Some(agg) => println!("weighted mean mse [{weights:?}]: {agg:.6}"),
+        None => println!("weighted mean mse: n/a (non-positive weight sum)"),
+    }
+}
+
+/// Target weights carried by the spec (uniform for legacy specs).
+fn pinn_target_weights(spec: &TrainingSpec) -> [f32; 4] {
+    match &spec.config {
+        crate::spec::ModelConfig::Pinn(cfg) => cfg.target_weights,
+        _ => [1.0, 1.0, 1.0, 1.0],
     }
 }
 
