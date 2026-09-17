@@ -8,5 +8,8 @@ pub mod dataset;
 pub mod loss;
 pub mod trainer;
 
-pub use dataset::{PrefetchBatcher, SirenDataset, SirenNorm, TARGET_DIM};
-pub use loss::{compute_data_loss, compute_siren_loss};
+pub use dataset::{
+    PrefetchBatcher, SirenDataset, SirenNorm, StarParams, StarTexturePlan, StreamingBatcher,
+    TARGET_DIM,
+};
+pub use loss::{compute_data_loss, compute_siren_loss, compute_siren_loss_conditioned};

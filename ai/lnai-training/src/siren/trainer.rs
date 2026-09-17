@@ -5,7 +5,7 @@
 //! cancellation, plus read-only `run_evaluate` and `run_benchmark` modes.
 
 use super::dataset::{PrefetchBatcher, SirenDataset, SirenNorm, TARGET_DIM};
-use super::loss::{compute_data_loss, compute_siren_loss};
+use super::loss::{compute_data_loss, compute_siren_loss_conditioned};
 use anyhow::Result;
 use burn::backend::Autodiff;
 use burn::backend::cuda::CudaDevice;
@@ -251,8 +251,12 @@ pub fn run_train_with_cancel(spec: &TrainingSpec, cancel: &CancelFlag) -> Result
         while let Some((batch_inputs, batch_targets)) =
             prefetcher.next_batch::<TrainBackend>(&device)
         {
+            // Stage 6 target-aware loss: conditioning columns (normed
+            // bp_rp/mg/ruwe) ride along in inputs columns 2..5.
+            let [batch_rows, _] = batch_inputs.dims();
+            let conditioning = batch_inputs.clone().slice([0..batch_rows, 2..5]);
             let predictions = model.forward(batch_inputs);
-            let loss = compute_siren_loss(predictions, batch_targets);
+            let loss = compute_siren_loss_conditioned(predictions, batch_targets, conditioning);
 
             let loss_scalar = loss.clone().into_scalar().elem::<f32>();
             let scaled_loss = if spec.grad_accum > 1 {
@@ -351,16 +355,27 @@ pub fn run_train_with_cancel(spec: &TrainingSpec, cancel: &CancelFlag) -> Result
         println!();
         println!("=== Holdout Evaluation ===");
         let holdout_path = Path::new(holdout_path);
-        if holdout_path.exists() {
-            let (holdout_train, holdout_val) = SirenDataset::generate(
-                holdout_path,
-                siren_cfg.texture_size as usize,
-                siren_cfg.max_stars as usize,
-                0.0,
-                siren_cfg.seed,
-                spec.max_rows,
-            )?;
-            drop(holdout_train);
+        // Stage 6: a requested holdout must exist and be non-empty. Note
+        // the full split goes to validation (`val_frac = 1.0`) — with
+        // star-disjoint splits there is no train side to keep.
+        if !holdout_path.exists() {
+            anyhow::bail!("holdout file not found: {}", holdout_path.display());
+        }
+        let (_, holdout_val) = SirenDataset::generate(
+            holdout_path,
+            siren_cfg.texture_size as usize,
+            siren_cfg.max_stars as usize,
+            1.0,
+            siren_cfg.seed,
+            spec.max_rows,
+        )?;
+        if holdout_val.n_samples == 0 {
+            anyhow::bail!(
+                "holdout file is empty after filtering: {}",
+                holdout_path.display()
+            );
+        }
+        {
             let infer_model = model.valid();
             let holdout_loss = evaluate_infer(
                 &infer_model,
@@ -378,8 +393,6 @@ pub fn run_train_with_cancel(spec: &TrainingSpec, cancel: &CancelFlag) -> Result
             } else {
                 println!("WARNING: Holdout loss significantly higher than validation loss.");
             }
-        } else {
-            println!("Holdout file not found: {}", holdout_path.display());
         }
     }
 
