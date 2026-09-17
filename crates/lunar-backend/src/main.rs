@@ -10,8 +10,8 @@ use tokio::sync::broadcast;
 use tower_http::cors::{Any, CorsLayer};
 
 use crate::ai::{
-    RandomStellarInputs, StarFeatures, generate_hybrid_metadata, generate_random_inputs, get_gnn,
-    get_lore_cache, get_pinn, gnn_infer, warmup_models,
+    RandomStellarInputs, generate_hybrid_metadata, generate_random_inputs, get_lore_cache,
+    get_pinn, warmup_models,
 };
 use lunar_structures::{
     PinnResponse, PipelineRequest, PipelineResponse, RandomStarRequest, RandomStarResponse,
@@ -198,9 +198,6 @@ async fn random_star(Json(payload): Json<RandomStarRequest>) -> Json<RandomStarR
     })
     .await;
 
-    let mg = calculate_absolute_magnitude(inputs.x_pc, inputs.y_pc, inputs.z_pc, inputs.g_mag);
-
-    let gnn_opt = get_gnn().await;
     let lore = get_lore_cache().await;
 
     let metadata = generate_hybrid_metadata(
@@ -212,25 +209,11 @@ async fn random_star(Json(payload): Json<RandomStarRequest>) -> Json<RandomStarR
         lore.as_deref(),
     );
 
-    let vel = if let Some(gnn) = gnn_opt {
-        let stars = vec![StarFeatures {
-            coords: [inputs.x_pc, inputs.y_pc, inputs.z_pc],
-            log_teff: teff.max(0.01).log10(),
-            log_rad: rad.max(0.01).log10(),
-            log_mass: mass.max(0.01).log10(),
-            log_lum: lum.max(0.01).log10(),
-            mg,
-        }];
-        let stars_clone = stars.clone();
-        let velocities =
-            tokio::task::spawn_blocking(move || gnn_infer(&gnn, &stars_clone, 8, entropy))
-                .await
-                .unwrap_or_default();
-
-        velocities.first().copied().unwrap_or([0.0, 0.0, 0.0])
-    } else {
-        [0.0, 0.0, 0.0]
-    };
+    // Stage 6.6: single-node GNN is excluded from production — one star
+    // has no neighbors, so there is no valid group to run the model on.
+    // Zero velocity is the explicit fallback (same as missing-GNN),
+    // never a self-loop forward.
+    let vel = [0.0, 0.0, 0.0];
 
     let star = ResponseStar {
         id: 0,

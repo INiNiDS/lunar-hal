@@ -1,3 +1,4 @@
+use anyhow::Result;
 use burn::prelude::*;
 use burn_store::{BurnpackStore, ModuleSnapshot};
 use lnai_models::{
@@ -399,15 +400,25 @@ fn compute_deterministic_velocities(
     velocities
 }
 
+/// Stage 6: batched GNN-Kinematics inference over a star group.
+/// Single-node (`n < 2`) inference is rejected: the model never trains on
+/// singletons (dataset drops them, loss panics on them), so a self-loop
+/// forward would be unvalidated physics. Callers fall back to zero
+/// velocity explicitly instead.
 pub fn gnn_infer(
     gnn: &GnnModel,
     stars: &[StarFeatures],
     knn_k: usize,
     temperature: f32,
-) -> Vec<[f32; 3]> {
+) -> Result<Vec<[f32; 3]>> {
     let n = stars.len();
     if n == 0 {
-        return vec![];
+        return Ok(vec![]);
+    }
+    if n < 2 {
+        anyhow::bail!(
+            "gnn_infer requires a group of >= 2 stars, got {n}: single-node GNN is excluded from production (Stage 6.6)"
+        );
     }
 
     let norm = &gnn.norm;
@@ -432,9 +443,14 @@ pub fn gnn_infer(
     let vals: Vec<f32> = data.to_vec().expect("failed to convert GNN output");
 
     if gnn.variational {
-        compute_variational_velocities(&vals, stars, norm, temperature)
+        Ok(compute_variational_velocities(&vals, stars, norm, temperature))
     } else {
-        compute_deterministic_velocities(&vals, stars, norm, temperature)
+        Ok(compute_deterministic_velocities(
+            &vals,
+            stars,
+            norm,
+            temperature,
+        ))
     }
 }
 
@@ -1145,6 +1161,8 @@ pub async fn warmup_models() {
             gnn_arc.variational
         );
         tokio::task::spawn_blocking(move || {
+            // Two-node group: single-node inference is excluded (Stage
+            // 6.6), so warmup runs the smallest valid group instead.
             let star = StarFeatures {
                 coords: [0.0, 0.0, 0.0],
                 log_teff: 3.75,
@@ -1153,7 +1171,11 @@ pub async fn warmup_models() {
                 log_lum: 0.0,
                 mg: 0.0,
             };
-            let _ = gnn_infer(&gnn_arc, &[star], 1, 0.0);
+            let neighbor = StarFeatures {
+                coords: [1.0, 0.5, -0.5],
+                ..star
+            };
+            let _ = gnn_infer(&gnn_arc, &[star, neighbor], 1, 0.0);
         })
         .await
         .ok();
@@ -1186,4 +1208,68 @@ pub async fn warmup_models() {
     }
 
     println!("  All models warmed up and ready.");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn dummy_gnn() -> GnnModel {
+        let device: Device<B> = Default::default();
+        let model = StellarGnnConfig::new(GNN_INPUT_DIM, 8, GNN_OUTPUT_DIM).init(&device);
+        GnnModel {
+            model,
+            device,
+            norm: GnnNorm {
+                log_teff_mean: 0.0,
+                log_teff_std: 1.0,
+                log_rad_mean: 0.0,
+                log_rad_std: 1.0,
+                log_mass_mean: 0.0,
+                log_mass_std: 1.0,
+                log_lum_mean: 0.0,
+                log_lum_std: 1.0,
+                mg_mean: 0.0,
+                mg_std: 1.0,
+                x_mean: 0.0,
+                x_std: 1.0,
+                y_mean: 0.0,
+                y_std: 1.0,
+                z_mean: 0.0,
+                z_std: 1.0,
+                vx_mean: 0.0,
+                vx_std: 1.0,
+                vy_mean: 0.0,
+                vy_std: 1.0,
+                vz_mean: 0.0,
+                vz_std: 1.0,
+                vx_logvar_mean: 0.0,
+                vx_logvar_std: 1.0,
+                vy_logvar_mean: 0.0,
+                vy_logvar_std: 1.0,
+                vz_logvar_mean: 0.0,
+                vz_logvar_std: 1.0,
+            },
+            variational: false,
+        }
+    }
+
+    fn dummy_star(x: f32) -> StarFeatures {
+        StarFeatures {
+            coords: [x, 0.0, 0.0],
+            log_teff: 3.75,
+            log_rad: 0.0,
+            log_mass: 0.0,
+            log_lum: 0.0,
+            mg: 0.0,
+        }
+    }
+
+    #[test]
+    fn gnn_infer_accepts_empty_and_rejects_single_node() {
+        let gnn = dummy_gnn();
+        assert!(gnn_infer(&gnn, &[], 1, 0.0).unwrap().is_empty());
+        let err = gnn_infer(&gnn, &[dummy_star(0.0)], 1, 0.0).expect_err("single-node must fail");
+        assert!(err.to_string().contains(">= 2 stars"), "{err:#}");
+    }
 }

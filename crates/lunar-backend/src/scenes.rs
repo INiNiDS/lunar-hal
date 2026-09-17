@@ -143,7 +143,13 @@ pub async fn compile_response_stars(stars: &[StarFeatures], temperature: f32) ->
             gnn_infer(&gnn, &stars_clone, 8.min(stars_clone.len()), temperature)
         })
         .await
-        .unwrap_or_else(|_| vec![[0.0, 0.0, 0.0]; stars.len()])
+        .unwrap_or_else(|join_err| {
+            Err(anyhow::anyhow!("gnn blocking task failed: {join_err}"))
+        })
+        .unwrap_or_else(|err| {
+            eprintln!("warning: gnn_infer failed, zero velocities: {err:#}");
+            vec![[0.0, 0.0, 0.0]; stars.len()]
+        })
     } else {
         vec![[0.0, 0.0, 0.0]; stars.len()]
     };

@@ -44,15 +44,20 @@ pub fn target_centered_physics<B: Backend>(
 }
 
 /// Full readout `[N, 3]` (deterministic) or `[N, 6]` (variational) plus
-/// `[N, 3]` targets → optimized total. Panics on unsupported widths so a
-/// misconfigured head can never train silently.
+/// `[N, 3]` targets → optimized total. Panics on unsupported widths and on
+/// single-node batches so a misconfigured head or a singleton group can
+/// never train silently (Stage 6.6).
 pub fn compute_gnn_total_loss<B: Backend>(
     predictions: Tensor<B, 2>,
     targets: Tensor<B, 2>,
     physics_weight: f64,
     kl_weight: f64,
 ) -> Tensor<B, 1> {
-    let [_, width] = predictions.dims();
+    let [n, width] = predictions.dims();
+    assert!(
+        n >= 2,
+        "gnn loss requires a group of >= 2 nodes, got {n}: single-node GNN is excluded (Stage 6.6)"
+    );
     let head = GnnHeadKind::from_output_dim(width).expect(
         "gnn readout width must be 3 (deterministic) or 6 (variational), check output_dim",
     );
@@ -86,6 +91,11 @@ pub fn gnn_loss_scalars<B: Backend>(
     physics_weight: f64,
     kl_weight: f64,
 ) -> (f32, f32) {
+    let [n, _] = predictions.dims();
+    assert!(
+        n >= 2,
+        "gnn loss requires a group of >= 2 nodes, got {n}: single-node GNN is excluded (Stage 6.6)"
+    );
     let total: f32 = compute_gnn_total_loss(
         predictions.clone(),
         targets.clone(),
@@ -163,9 +173,20 @@ mod tests {
     fn total_loss_rejects_unknown_widths() {
         let device = Default::default();
         let bad: Tensor<TestBackend, 2> =
-            Tensor::from_floats([[1.0, 2.0, 3.0, 4.0]], &device);
+            Tensor::from_floats([[1.0, 2.0, 3.0, 4.0], [1.0, 2.0, 3.0, 4.0]], &device);
+        let targets: Tensor<TestBackend, 2> =
+            Tensor::from_floats([[1.0, 2.0, 3.0], [1.0, 2.0, 3.0]], &device);
+        let _ = compute_gnn_total_loss(bad, targets, 0.0, 0.0);
+    }
+
+    #[test]
+    #[should_panic(expected = ">= 2 nodes")]
+    fn total_loss_rejects_single_node_batches() {
+        let device = Default::default();
+        let single: Tensor<TestBackend, 2> =
+            Tensor::from_floats([[1.0, 2.0, 3.0]], &device);
         let targets: Tensor<TestBackend, 2> =
             Tensor::from_floats([[1.0, 2.0, 3.0]], &device);
-        let _ = compute_gnn_total_loss(bad, targets, 0.0, 0.0);
+        let _ = compute_gnn_total_loss(single, targets, 0.0, 0.0);
     }
 }
