@@ -14,15 +14,13 @@ use burn::module::{AutodiffModule, Module};
 use burn::optim::{AdamWConfig, GradientsAccumulator, GradientsParams, Optimizer};
 use burn::tensor::ElementConversion;
 use burn_store::{BurnpackStore, ModuleSnapshot};
-use lnai_models::{
-    GNN_INPUT_DIM, GnnHeadKind, StellarGnn, StellarGnnConfig,
-};
+use lnai_models::{GNN_INPUT_DIM, GnnHeadKind, StellarGnn, StellarGnnConfig};
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use crate::events::{EpochMetric, JobEvent, format_epoch_line};
 use crate::agent::AgentVerdict;
+use crate::events::{EpochMetric, JobEvent, format_epoch_line};
 use crate::runner::{CancelFlag, RunOutcome, append_event_line, effective_train_seed};
 use crate::spec::TrainingSpec;
 
@@ -514,9 +512,8 @@ pub fn run_evaluate(spec: &TrainingSpec) -> Result<RunOutcome> {
     let norm_json = std::fs::read_to_string(&norm_path)?;
     let norm: GnnNormParams = serde_json::from_str(&norm_json)?;
     let mut store = BurnpackStore::from_file(model_path.to_str().unwrap());
-    let mut model =
-        StellarGnnConfig::new(GNN_INPUT_DIM, gnn_cfg.hidden_dim as usize, model_width)
-            .init::<TrainBackend>(&device);
+    let mut model = StellarGnnConfig::new(GNN_INPUT_DIM, gnn_cfg.hidden_dim as usize, model_width)
+        .init::<TrainBackend>(&device);
     model
         .load_from(&mut store)
         .map_err(|e| anyhow::anyhow!("failed to load model: {e}"))?;
@@ -599,9 +596,8 @@ pub fn run_benchmark(spec: &TrainingSpec, iters: u32, warmup: u32) -> Result<Run
         anyhow::bail!("benchmark: model file not found: {}", model_path.display());
     }
     let mut store = BurnpackStore::from_file(model_path.to_str().unwrap());
-    let mut loaded =
-        StellarGnnConfig::new(GNN_INPUT_DIM, gnn_cfg.hidden_dim as usize, model_width)
-            .init::<TrainBackend>(&device);
+    let mut loaded = StellarGnnConfig::new(GNN_INPUT_DIM, gnn_cfg.hidden_dim as usize, model_width)
+        .init::<TrainBackend>(&device);
     loaded
         .load_from(&mut store)
         .map_err(|e| anyhow::anyhow!("failed to load model: {e}"))?;

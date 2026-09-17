@@ -11,10 +11,7 @@ const LOG_T_SUN: f64 = 3.5617974672827754;
 fn huber_penalty<B: Backend>(err: Tensor<B, 2>, delta: f32) -> Tensor<B, 2> {
     let clipped = err.clone().clamp(-delta, delta);
     let quad = clipped.clone().square().mul_scalar(0.5);
-    let linear = err
-        .abs()
-        .sub(clipped.abs())
-        .mul_scalar(delta);
+    let linear = err.abs().sub(clipped.abs()).mul_scalar(delta);
     quad + linear
 }
 
@@ -67,9 +64,7 @@ pub fn compute_pinn_loss<B: Backend>(
     let err = predictions.clone() - targets;
     // Legacy fast path: plain MSE keeps bit-identical numerics for every
     // pre-Stage-6 spec (uniform weights + MSE).
-    let data_loss = if loss_kind == PinnLossKind::Mse
-        && *target_weights == [1.0, 1.0, 1.0, 1.0]
-    {
+    let data_loss = if loss_kind == PinnLossKind::Mse && *target_weights == [1.0, 1.0, 1.0, 1.0] {
         err.square().mean()
     } else {
         let penalty = match loss_kind {
@@ -222,8 +217,7 @@ mod tests {
         let norm = unit_norm();
         // SB-consistent in denormalized space: lum = 2*rad + 4*(teff - T_sun).
         let teff = LOG_T_SUN as f32;
-        let pred: Tensor<TestBackend, 2> =
-            Tensor::from_floats([[teff, 0.5, 0.0, 1.0]], &device);
+        let pred: Tensor<TestBackend, 2> = Tensor::from_floats([[teff, 0.5, 0.0, 1.0]], &device);
         let phys = scalar(compute_physics_loss(pred, &norm));
         assert!(phys.abs() < 1e-6, "got {phys}");
         // Scale behaviour: the same physical row under a different norm

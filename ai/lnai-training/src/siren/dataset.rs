@@ -148,11 +148,7 @@ impl StarTexturePlan {
 /// (never pixels) is what keeps validation free of train leakage.
 /// Public frozen contract: same `(n_stars, val_frac, seed)` always yields
 /// the same partition.
-pub fn split_star_indices(
-    n_stars: usize,
-    val_frac: f32,
-    seed: u64,
-) -> (Vec<usize>, Vec<usize>) {
+pub fn split_star_indices(n_stars: usize, val_frac: f32, seed: u64) -> (Vec<usize>, Vec<usize>) {
     let n_val = ((n_stars as f32) * val_frac.clamp(0.0, 1.0)) as usize;
     let n_val = n_val.min(n_stars);
     let mut order: Vec<usize> = (0..n_stars).collect();

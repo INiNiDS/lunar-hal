@@ -251,8 +251,7 @@ pub fn run_train_with_cancel(spec: &TrainingSpec, cancel: &CancelFlag) -> Result
         let mut accum_count = 0usize;
 
         while let Some((batch_inputs, batch_targets)) = batcher.next_batch() {
-            let (physics_weight, loss_kind, huber_delta, target_weights) = match &spec.config
-            {
+            let (physics_weight, loss_kind, huber_delta, target_weights) = match &spec.config {
                 crate::spec::ModelConfig::Pinn(cfg) => (
                     cfg.physics_weight,
                     cfg.loss,

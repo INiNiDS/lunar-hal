@@ -34,7 +34,10 @@ pub fn target_centered_physics<B: Backend>(
 ) -> Tensor<B, 1> {
     let mean_p = mean_pred.clone().mean_dim(0);
     let mean_t = targets.clone().mean_dim(0);
-    let mean_loss: Tensor<B, 1> = (mean_p.clone() - mean_t.clone()).square().sum().reshape([1]);
+    let mean_loss: Tensor<B, 1> = (mean_p.clone() - mean_t.clone())
+        .square()
+        .sum()
+        .reshape([1]);
 
     let var_p = (mean_pred - mean_p).square().mean_dim(0);
     let var_t = (targets - mean_t).square().mean_dim(0);
@@ -58,9 +61,8 @@ pub fn compute_gnn_total_loss<B: Backend>(
         n >= 2,
         "gnn loss requires a group of >= 2 nodes, got {n}: single-node GNN is excluded (Stage 6.6)"
     );
-    let head = GnnHeadKind::from_output_dim(width).expect(
-        "gnn readout width must be 3 (deterministic) or 6 (variational), check output_dim",
-    );
+    let head = GnnHeadKind::from_output_dim(width)
+        .expect("gnn readout width must be 3 (deterministic) or 6 (variational), check output_dim");
     let (mean, logvar) = split_mean_logvar(predictions, head);
     let data = compute_gnn_loss(mean.clone(), targets.clone());
     let physics = target_centered_physics(mean.clone(), targets);
@@ -105,9 +107,8 @@ pub fn gnn_loss_scalars<B: Backend>(
     .into_scalar()
     .elem();
     let [_, width] = predictions.dims();
-    let head = GnnHeadKind::from_output_dim(width).expect(
-        "gnn readout width must be 3 (deterministic) or 6 (variational), check output_dim",
-    );
+    let head = GnnHeadKind::from_output_dim(width)
+        .expect("gnn readout width must be 3 (deterministic) or 6 (variational), check output_dim");
     let (mean, _) = split_mean_logvar(predictions, head);
     let physics: f32 = target_centered_physics(mean, targets)
         .mul_scalar(physics_weight as f32)
@@ -144,7 +145,10 @@ mod tests {
         let collapsed: Tensor<TestBackend, 2> =
             Tensor::from_floats([[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]], &device);
         let phys = scalar(target_centered_physics(collapsed, targets));
-        assert!(phys > 1e6, "collapsed dispersion must be penalized, got {phys}");
+        assert!(
+            phys > 1e6,
+            "collapsed dispersion must be penalized, got {phys}"
+        );
     }
 
     #[test]
@@ -160,10 +164,18 @@ mod tests {
         assert!((total - 1.0 / 6.0).abs() < 1e-6, "got {total}");
         // Variational with zero logvar/mean offset: KL > 0 raises total.
         let var: Tensor<TestBackend, 2> = Tensor::from_floats(
-            [[1.0, 2.0, 4.0, 0.0, 0.0, 0.0], [1.0, 2.0, 3.0, 0.0, 0.0, 0.0]],
+            [
+                [1.0, 2.0, 4.0, 0.0, 0.0, 0.0],
+                [1.0, 2.0, 3.0, 0.0, 0.0, 0.0],
+            ],
             &device,
         );
-        let no_kl = scalar(compute_gnn_total_loss(var.clone(), targets.clone(), 0.0, 0.0));
+        let no_kl = scalar(compute_gnn_total_loss(
+            var.clone(),
+            targets.clone(),
+            0.0,
+            0.0,
+        ));
         let with_kl = scalar(compute_gnn_total_loss(var, targets, 0.0, 1.0));
         assert!(with_kl > no_kl, "{with_kl} vs {no_kl}");
     }
@@ -183,10 +195,8 @@ mod tests {
     #[should_panic(expected = ">= 2 nodes")]
     fn total_loss_rejects_single_node_batches() {
         let device = Default::default();
-        let single: Tensor<TestBackend, 2> =
-            Tensor::from_floats([[1.0, 2.0, 3.0]], &device);
-        let targets: Tensor<TestBackend, 2> =
-            Tensor::from_floats([[1.0, 2.0, 3.0]], &device);
+        let single: Tensor<TestBackend, 2> = Tensor::from_floats([[1.0, 2.0, 3.0]], &device);
+        let targets: Tensor<TestBackend, 2> = Tensor::from_floats([[1.0, 2.0, 3.0]], &device);
         let _ = compute_gnn_total_loss(single, targets, 0.0, 0.0);
     }
 }

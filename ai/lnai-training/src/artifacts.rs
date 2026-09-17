@@ -282,14 +282,9 @@ pub struct RegisteredArtifact {
 /// Loads `dir/artifact.json` and verifies it against itself: frozen
 /// manifest version, expected architecture line, and weight/norm SHA-256
 /// reproducing from the sibling files.
-pub fn discover_bundle(
-    dir: &std::path::Path,
-) -> Result<RegisteredArtifact, ArtifactError> {
+pub fn discover_bundle(dir: &std::path::Path) -> Result<RegisteredArtifact, ArtifactError> {
     let raw = std::fs::read_to_string(dir.join("artifact.json")).map_err(|_| {
-        ArtifactError::FileNotFound(format!(
-            "missing artifact.json in {}",
-            dir.display()
-        ))
+        ArtifactError::FileNotFound(format!("missing artifact.json in {}", dir.display()))
     })?;
     let manifest: ArtifactManifestV1 = serde_json::from_str(&raw)
         .map_err(|e| ArtifactError::DeserializationError(e.to_string()))?;
@@ -599,18 +594,14 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    fn write_run_bundle(
-        dir: &std::path::Path,
-        kind: ModelKind,
-        arch: &str,
-    ) -> ArtifactManifestV1 {
+    fn write_run_bundle(dir: &std::path::Path, kind: ModelKind, arch: &str) -> ArtifactManifestV1 {
         std::fs::create_dir_all(dir).unwrap();
         std::fs::write(dir.join(weight_file_name(&kind)), b"weights").unwrap();
         std::fs::write(dir.join(norm_file_name(&kind)), b"norm").unwrap();
         let mut manifest = sample_manifest(kind);
         manifest.architecture_version = arch.into();
-        manifest.model_hash = sha256_file_hex(&dir.join(weight_file_name(&manifest.model_kind)))
-            .unwrap();
+        manifest.model_hash =
+            sha256_file_hex(&dir.join(weight_file_name(&manifest.model_kind))).unwrap();
         manifest.norm_hash =
             sha256_file_hex(&dir.join(norm_file_name(&manifest.model_kind))).unwrap();
         write_artifact_bundle(dir, &manifest).expect("write bundle");
@@ -622,13 +613,18 @@ mod tests {
         let root = tempfile::tempdir().expect("tmpdir");
         let models = root.path();
         // Run-dir layout with a valid bundle.
-        write_run_bundle(&models.join("gnn-v1"), ModelKind::GnnKinematics, "gnn-kinematics-v1");
+        write_run_bundle(
+            &models.join("gnn-v1"),
+            ModelKind::GnnKinematics,
+            "gnn-kinematics-v1",
+        );
         // Flat serving layout with a valid manifest.
         std::fs::write(models.join(weight_file_name(&ModelKind::Pinn)), b"w").unwrap();
         std::fs::write(models.join(norm_file_name(&ModelKind::Pinn)), b"n").unwrap();
         let mut pinn = sample_manifest(ModelKind::Pinn);
         pinn.architecture_version = "pinn-v1".into();
-        pinn.model_hash = sha256_file_hex(&models.join(weight_file_name(&ModelKind::Pinn))).unwrap();
+        pinn.model_hash =
+            sha256_file_hex(&models.join(weight_file_name(&ModelKind::Pinn))).unwrap();
         pinn.norm_hash = sha256_file_hex(&models.join(norm_file_name(&ModelKind::Pinn))).unwrap();
         std::fs::write(
             models.join(manifest_file_name(&ModelKind::Pinn)),

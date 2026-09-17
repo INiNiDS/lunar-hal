@@ -71,10 +71,8 @@ pub async fn version() -> Json<VersionResponse> {
         status: "embedded".to_string(),
         manifest_version: None,
         architecture_version: Some(
-            lnai_training::artifacts::architecture_version(
-                &lnai_training::spec::ModelKind::Pinn,
-            )
-            .to_string(),
+            lnai_training::artifacts::architecture_version(&lnai_training::spec::ModelKind::Pinn)
+                .to_string(),
         ),
         git_revision: Some(
             option_env!("LUNAR_AI_GIT_REV")

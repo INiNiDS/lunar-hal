@@ -1,17 +1,17 @@
 use anyhow::Result;
 use burn::prelude::*;
 use burn_store::{BurnpackStore, ModuleSnapshot};
-use lnai_training::artifacts::{
-    RegisteredArtifact, RegistryStatus, manifest_file_name, scan_model_registry,
-    verify_manifest_against_files,
-};
-use lnai_training::spec::ModelKind;
 use lnai_models::{
     GNN_INPUT_DIM, GNN_OUTPUT_DIM, GNN_VARIATIONAL_DIM, GnnHeadKind, StellarGnn, StellarGnnConfig,
     StellarMlp, StellarMlpConfig, compute_knn_adjacency,
 };
 #[cfg(feature = "siren")]
 use lnai_models::{SIREN_INPUT_DIM, StellarSiren, StellarSirenConfig};
+use lnai_training::artifacts::{
+    RegisteredArtifact, RegistryStatus, manifest_file_name, scan_model_registry,
+    verify_manifest_against_files,
+};
+use lnai_training::spec::ModelKind;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::{OnceCell, RwLock};
@@ -102,8 +102,8 @@ pub struct PinnInputs {
 /// Falls back to `mg_center + 5*log10(0.1) - 5` near the origin, mirroring
 /// the single-star guard below.
 pub fn apparent_g_for_member(position: [f32; 3], mg_center: f32, g_fallback: f32) -> f32 {
-    let d = (position[0] * position[0] + position[1] * position[1] + position[2] * position[2])
-        .sqrt();
+    let d =
+        (position[0] * position[0] + position[1] * position[1] + position[2] * position[2]).sqrt();
     if d < 0.1 {
         g_fallback
     } else {
@@ -271,8 +271,8 @@ fn check_serving_manifest(
     }
     let raw =
         std::fs::read_to_string(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
-    let manifest: lnai_training::artifacts::ArtifactManifestV1 = serde_json::from_str(&raw)
-        .map_err(|e| format!("parse {}: {e}", path.display()))?;
+    let manifest: lnai_training::artifacts::ArtifactManifestV1 =
+        serde_json::from_str(&raw).map_err(|e| format!("parse {}: {e}", path.display()))?;
     verify_manifest_against_files(models_dir, &manifest)
         .map_err(|e| format!("serving bundle for {} rejected: {e}", path.display()))?;
     Ok(Some(manifest))
@@ -489,7 +489,12 @@ pub fn gnn_infer(
     let vals: Vec<f32> = data.to_vec().expect("failed to convert GNN output");
 
     if gnn.variational {
-        Ok(compute_variational_velocities(&vals, stars, norm, temperature))
+        Ok(compute_variational_velocities(
+            &vals,
+            stars,
+            norm,
+            temperature,
+        ))
     } else {
         Ok(compute_deterministic_velocities(
             &vals,
@@ -920,33 +925,33 @@ pub async fn get_lore_cache() -> Option<Arc<LoreCache>> {
 }
 
 async fn load_lore_cache() -> Option<Arc<LoreCache>> {
-            let models_dir = get_lunar_models_dir();
-            let path = models_dir.join("stellar_lore_cache.json");
+    let models_dir = get_lunar_models_dir();
+    let path = models_dir.join("stellar_lore_cache.json");
 
-            if !path.exists() {
-                println!("  Lore cache not found ({})", path.display());
-                return None;
-            }
+    if !path.exists() {
+        println!("  Lore cache not found ({})", path.display());
+        return None;
+    }
 
-            let json = match std::fs::read_to_string(&path) {
-                Ok(j) => j,
-                Err(_) => return None,
-            };
+    let json = match std::fs::read_to_string(&path) {
+        Ok(j) => j,
+        Err(_) => return None,
+    };
 
-            let entries: Vec<LoreEntry> = match serde_json::from_str(&json) {
-                Ok(e) => e,
-                Err(e) => {
-                    eprintln!("  Failed to parse lore cache: {e}");
-                    return None;
-                }
-            };
+    let entries: Vec<LoreEntry> = match serde_json::from_str(&json) {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("  Failed to parse lore cache: {e}");
+            return None;
+        }
+    };
 
-            println!(
-                "  Lore cache loaded: {} entries from {}",
-                entries.len(),
-                path.display()
-            );
-            Some(Arc::new(LoreCache { entries }))
+    println!(
+        "  Lore cache loaded: {} entries from {}",
+        entries.len(),
+        path.display()
+    );
+    Some(Arc::new(LoreCache { entries }))
 }
 
 impl LoreCache {

@@ -110,7 +110,9 @@ pub fn split_mean_logvar<B: Backend>(
     let mean = readout.clone().slice([0..n, 0..GNN_OUTPUT_DIM]);
     let logvar = match head {
         GnnHeadKind::Deterministic => None,
-        GnnHeadKind::Variational => Some(readout.slice([0..n, GNN_OUTPUT_DIM..GNN_VARIATIONAL_DIM])),
+        GnnHeadKind::Variational => {
+            Some(readout.slice([0..n, GNN_OUTPUT_DIM..GNN_VARIATIONAL_DIM]))
+        }
     };
     (mean, logvar)
 }
@@ -211,14 +213,8 @@ mod tests {
         );
         assert_eq!(GnnHeadKind::from_output_dim(0), None);
         assert_eq!(GnnHeadKind::from_output_dim(4), None);
-        assert_eq!(
-            GnnHeadKind::Deterministic.output_width(),
-            GNN_OUTPUT_DIM
-        );
-        assert_eq!(
-            GnnHeadKind::Variational.output_width(),
-            GNN_VARIATIONAL_DIM
-        );
+        assert_eq!(GnnHeadKind::Deterministic.output_width(), GNN_OUTPUT_DIM);
+        assert_eq!(GnnHeadKind::Variational.output_width(), GNN_VARIATIONAL_DIM);
     }
 }
 

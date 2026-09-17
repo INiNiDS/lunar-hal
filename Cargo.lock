@@ -6149,6 +6149,7 @@ dependencies = [
  "burn",
  "burn-store",
  "lnai-models",
+ "lnai-training",
  "lunar-structures",
  "lunar-utils",
  "serde",

@@ -260,7 +260,11 @@ impl TrainingSpec {
                         cfg.huber_delta
                     ));
                 }
-                if cfg.target_weights.iter().any(|w| !w.is_finite() || *w < 0.0) {
+                if cfg
+                    .target_weights
+                    .iter()
+                    .any(|w| !w.is_finite() || *w < 0.0)
+                {
                     errors.push("pinn target_weights must be finite and >= 0".to_string());
                 }
                 if cfg.target_weights.iter().sum::<f32>() <= 0.0 {

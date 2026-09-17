@@ -1,0 +1,54 @@
+{
+  "stage": 6,
+  "title": "Исправить модели и serving до оптимизации",
+  "approved_code_commit": "1dfbca643a7ca50cbb8596cd5e2f8a6b0e977d76",
+  "approved_at": "2026-09-17",
+  "suites": [
+    {
+      "file": "ai/lnai-training/tests/fixture_leakage.rs",
+      "tests": 3,
+      "status": "passed"
+    },
+    {
+      "file": "ai/lnai-training/tests/gnn_oracle.rs",
+      "tests": 1,
+      "status": "passed"
+    },
+    {
+      "file": "ai/lnai-training/tests/pinn_accuracy.rs",
+      "tests": 1,
+      "status": "passed"
+    },
+    {
+      "file": "ai/lnai-training/tests/pinn_gnn_chain.rs",
+      "tests": 1,
+      "status": "passed"
+    },
+    {
+      "file": "ai/lnai-training/tests/position_rollout.rs",
+      "tests": 2,
+      "status": "passed"
+    },
+    {
+      "file": "ai/lnai-training/tests/training_parity.rs",
+      "tests": 6,
+      "status": "passed"
+    },
+    {
+      "file": "ai/lnai-training/tests/stage6_baseline.rs",
+      "tests": 5,
+      "status": "passed",
+      "note": "living pin of this record plus finite/deterministic/split/spec gates"
+    }
+  ],
+  "gates": {
+    "finite": "per_target_metrics finite (pinn_accuracy), vx/vy/vz finite (chain), spec rejects non-finite lr/weights",
+    "deterministic": "pinn_accuracy again==metrics, effective_train_seed path-independent, seeded chain reproduces exactly",
+    "holdout": "trainers bail on missing/empty holdout (pinn/gnn/siren), evaluation holdout_non_empty gate, 1.5x drift warning"
+  },
+  "exit_gate": {
+    "finite_deterministic_holdout": "pass",
+    "api_artifact_version": "GET /version reports exact artifact version per registry entry (verified in version_reports_service_and_model_rows)",
+    "chained_report_no_synthetic_noise": "pass (pinn_gnn_chain derives GNN nodes from PINN outputs, seeded)"
+  }
+}

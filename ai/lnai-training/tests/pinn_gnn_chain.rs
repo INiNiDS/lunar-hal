@@ -39,7 +39,11 @@ fn run_chain() -> Vec<[f32; 3]> {
     let xs = Tensor::<B, 2>::random([BATCH, 5], burn::tensor::Distribution::Default, &device);
     let targets = pinn.forward(xs.clone());
     let [batch, out_dim] = targets.dims();
-    assert_eq!((batch, out_dim), (BATCH, 4), "PINN output contract is [N, 4]");
+    assert_eq!(
+        (batch, out_dim),
+        (BATCH, 4),
+        "PINN output contract is [N, 4]"
+    );
     let _ = fourier_encode(xs.clone().slice([0..1, 0..3]), 8); // preprocessing in the loop compiles
 
     // 2) GNN node rows from the model path only: PINN log-targets plus the
@@ -89,10 +93,7 @@ fn run_chain() -> Vec<[f32; 3]> {
     // 5) Every raw row decodes into the typed KinematicsOutput.
     let vel_data = velocities.into_data();
     let floats = vel_data.as_slice::<f32>().expect("f32 data").to_vec();
-    floats
-        .chunks(3)
-        .map(|c| [c[0], c[1], c[2]])
-        .collect()
+    floats.chunks(3).map(|c| [c[0], c[1], c[2]]).collect()
 }
 
 #[test]
