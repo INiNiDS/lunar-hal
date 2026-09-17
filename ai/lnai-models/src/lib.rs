@@ -7,8 +7,9 @@ pub use pinn::*;
 pub mod gnn;
 #[cfg(feature = "gnn")]
 pub use gnn::{
-    GNN_INPUT_DIM, GNN_OUTPUT_DIM, GNN_VARIATIONAL_DIM, GcnLayer, KinematicsOutput, StellarGnn,
-    StellarGnnConfig, compute_adjacency_matrix, compute_knn_adjacency, sample_stellar_dynamics,
+    GNN_INPUT_DIM, GNN_OUTPUT_DIM, GNN_VARIATIONAL_DIM, GcnLayer, GnnHeadKind, KinematicsOutput,
+    StellarGnn, StellarGnnConfig, compute_adjacency_matrix, compute_knn_adjacency,
+    sample_stellar_dynamics, split_mean_logvar, variational_kl,
 };
 
 #[cfg(feature = "siren")]

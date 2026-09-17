@@ -5,7 +5,7 @@
 //! cancellation, plus read-only `run_evaluate` and `run_benchmark` modes.
 
 use super::dataset::{GnnDataset, GnnNormParams, PrefetchBatchedBatcher};
-use super::loss::{compute_gnn_loss, compute_gnn_physics_loss};
+use super::loss::{compute_gnn_total_loss, gnn_loss_scalars};
 use anyhow::Result;
 use burn::backend::Autodiff;
 use burn::backend::cuda::CudaDevice;
@@ -14,7 +14,9 @@ use burn::module::{AutodiffModule, Module};
 use burn::optim::{AdamWConfig, GradientsAccumulator, GradientsParams, Optimizer};
 use burn::tensor::ElementConversion;
 use burn_store::{BurnpackStore, ModuleSnapshot};
-use lnai_models::{GNN_INPUT_DIM, GNN_OUTPUT_DIM, StellarGnn, StellarGnnConfig};
+use lnai_models::{
+    GNN_INPUT_DIM, GnnHeadKind, StellarGnn, StellarGnnConfig,
+};
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -69,6 +71,13 @@ pub fn run_train_with_cancel(spec: &TrainingSpec, cancel: &CancelFlag) -> Result
         other => anyhow::bail!("GNN trainer requires gnn_kinematics config, got {other:?}"),
     };
     let seed = effective_train_seed(spec);
+    // Stage 6: the readout head is explicit — 3 deterministic, 6
+    // variational. Validation already restricts the values; resolve once
+    // so train, resume, eval and benchmark share one width.
+    let head = GnnHeadKind::from_output_dim(gnn_cfg.output_dim as usize).expect(
+        "gnn output_dim must be 3 (deterministic) or 6 (variational), check spec validation",
+    );
+    let model_width = head.output_width();
 
     let device = CudaDevice::new(spec.gpu_index as usize);
     println!("Compute device: Cuda({})", spec.gpu_index);
@@ -119,7 +128,7 @@ pub fn run_train_with_cancel(spec: &TrainingSpec, cancel: &CancelFlag) -> Result
 
             let mut store = BurnpackStore::from_file(model_path.to_str().unwrap());
             let mut loaded_model =
-                StellarGnnConfig::new(GNN_INPUT_DIM, gnn_cfg.hidden_dim as usize, GNN_OUTPUT_DIM)
+                StellarGnnConfig::new(GNN_INPUT_DIM, gnn_cfg.hidden_dim as usize, model_width)
                     .init::<TrainBackend>(&device);
             loaded_model
                 .load_from(&mut store)
@@ -149,7 +158,7 @@ pub fn run_train_with_cancel(spec: &TrainingSpec, cancel: &CancelFlag) -> Result
             )?;
             let norm = dataset.norm.clone();
             let fresh =
-                StellarGnnConfig::new(GNN_INPUT_DIM, gnn_cfg.hidden_dim as usize, GNN_OUTPUT_DIM)
+                StellarGnnConfig::new(GNN_INPUT_DIM, gnn_cfg.hidden_dim as usize, model_width)
                     .init::<TrainBackend>(&device);
             (fresh, norm, dataset)
         };
@@ -169,7 +178,12 @@ pub fn run_train_with_cancel(spec: &TrainingSpec, cancel: &CancelFlag) -> Result
         GNN_INPUT_DIM
     );
     println!("Hidden dim:            {}", gnn_cfg.hidden_dim);
-    println!("Output dim:            {} (Vx, Vy, Vz)", GNN_OUTPUT_DIM);
+    let head_name = match head {
+        GnnHeadKind::Deterministic => "deterministic (Vx, Vy, Vz)",
+        GnnHeadKind::Variational => "variational (mean, logvar)",
+    };
+    println!("Output dim:            {} {head_name}", gnn_cfg.output_dim);
+    println!("KL weight:             {}", gnn_cfg.kl_weight);
     println!("Total parameters:      {}", n_params);
     println!("k-NN neighbors:        {}", gnn_cfg.knn_k);
     println!("Max group size:        {}", gnn_cfg.max_group_size);
@@ -243,7 +257,14 @@ pub fn run_train_with_cancel(spec: &TrainingSpec, cancel: &CancelFlag) -> Result
 
         while let Some((nodes, adj, targets)) = prefetcher.next_batch::<TrainBackend>(&device) {
             let predictions = model.forward(nodes, adj);
-            let loss = compute_gnn_physics_loss(predictions, targets, gnn_cfg.physics_weight);
+            // Stage 6 unified contract: the optimized total is also what
+            // selects checkpoints and what evaluation reports.
+            let loss = compute_gnn_total_loss(
+                predictions,
+                targets,
+                gnn_cfg.physics_weight,
+                gnn_cfg.kl_weight,
+            );
 
             let loss_scalar = loss.clone().into_scalar().elem::<f32>();
             let scaled_loss = loss.div_scalar(spec.grad_accum as f32);
@@ -271,12 +292,15 @@ pub fn run_train_with_cancel(spec: &TrainingSpec, cancel: &CancelFlag) -> Result
 
         let epoch_train_loss = epoch_train_loss / n_batches.max(1) as f64;
         let infer_model = model.valid();
-        let val_loss = evaluate_gnn(&infer_model, &val_ds, &device, max_nodes);
-        let phys_loss = evaluate_physics(
+        // Stage 6: checkpoint selection optimizes the same unified total
+        // as the train step (previously pure data loss while training
+        // optimized data + physics).
+        let (val_loss, phys_loss) = evaluate_totals(
             &infer_model,
             &val_ds,
             &device,
             gnn_cfg.physics_weight,
+            gnn_cfg.kl_weight,
             max_nodes,
         );
         drop(infer_model);
@@ -424,6 +448,10 @@ pub fn run_evaluate(spec: &TrainingSpec) -> Result<RunOutcome> {
         Some(p) if !p.is_empty() => std::path::PathBuf::from(p),
         _ => find_parquet()?,
     };
+    let head = GnnHeadKind::from_output_dim(gnn_cfg.output_dim as usize).expect(
+        "gnn output_dim must be 3 (deterministic) or 6 (variational), check spec validation",
+    );
+    let model_width = head.output_width();
     let output_dir = Path::new(&spec.output_dir);
     let model_path = output_dir.join(&spec.model_file);
     let norm_path = output_dir.join(&spec.norm_file);
@@ -437,7 +465,7 @@ pub fn run_evaluate(spec: &TrainingSpec) -> Result<RunOutcome> {
     let norm: GnnNormParams = serde_json::from_str(&norm_json)?;
     let mut store = BurnpackStore::from_file(model_path.to_str().unwrap());
     let mut model =
-        StellarGnnConfig::new(GNN_INPUT_DIM, gnn_cfg.hidden_dim as usize, GNN_OUTPUT_DIM)
+        StellarGnnConfig::new(GNN_INPUT_DIM, gnn_cfg.hidden_dim as usize, model_width)
             .init::<TrainBackend>(&device);
     model
         .load_from(&mut store)
@@ -455,17 +483,17 @@ pub fn run_evaluate(spec: &TrainingSpec) -> Result<RunOutcome> {
     let (_, val_ds) = dataset.split_with_seed(spec.val_frac, seed);
     let infer_model = model.valid();
     let max_nodes = spec.batch_size as usize;
-    let val_loss = evaluate_gnn(&infer_model, &val_ds, &device, max_nodes);
-    let phys_loss = evaluate_physics(
+    let (val_loss, phys_loss) = evaluate_totals(
         &infer_model,
         &val_ds,
         &device,
         gnn_cfg.physics_weight,
+        gnn_cfg.kl_weight,
         max_nodes,
     );
     drop(infer_model);
     println!("=== Read-only evaluation (no weight updates) ===");
-    println!("Validation data loss:    {val_loss:.6}");
+    println!("Validation total loss:   {val_loss:.6}");
     println!("Validation physics loss: {phys_loss:.6}");
     println!("Evaluation complete; checkpoints untouched.");
     Ok(RunOutcome::Completed)
@@ -478,6 +506,10 @@ pub fn run_benchmark(spec: &TrainingSpec, iters: u32, warmup: u32) -> Result<Run
         crate::spec::ModelConfig::GnnKinematics(cfg) => cfg.clone(),
         other => anyhow::bail!("GNN trainer requires gnn_kinematics config, got {other:?}"),
     };
+    let head = GnnHeadKind::from_output_dim(gnn_cfg.output_dim as usize).expect(
+        "gnn output_dim must be 3 (deterministic) or 6 (variational), check spec validation",
+    );
+    let model_width = head.output_width();
     let device = CudaDevice::new(spec.gpu_index as usize);
     let output_dir = Path::new(&spec.output_dir);
     let model_path = output_dir.join(&spec.model_file);
@@ -486,7 +518,7 @@ pub fn run_benchmark(spec: &TrainingSpec, iters: u32, warmup: u32) -> Result<Run
     }
     let mut store = BurnpackStore::from_file(model_path.to_str().unwrap());
     let mut loaded =
-        StellarGnnConfig::new(GNN_INPUT_DIM, gnn_cfg.hidden_dim as usize, GNN_OUTPUT_DIM)
+        StellarGnnConfig::new(GNN_INPUT_DIM, gnn_cfg.hidden_dim as usize, model_width)
             .init::<TrainBackend>(&device);
     loaded
         .load_from(&mut store)
@@ -556,47 +588,31 @@ fn save_checkpoint(
     Ok(())
 }
 
-fn evaluate_gnn(
-    model: &StellarGnn<InferBackend>,
-    dataset: &GnnDataset,
-    device: &CudaDevice,
-    max_nodes: usize,
-) -> f64 {
-    let mut prefetcher = PrefetchBatchedBatcher::new(dataset, max_nodes);
-    let mut total_loss = 0.0f64;
-    let mut n = 0usize;
-
-    while let Some((nodes, adj, targets)) = prefetcher.next_batch::<InferBackend>(device) {
-        let preds = model.forward(nodes, adj);
-        let loss = compute_gnn_loss(preds, targets);
-        let value: f32 = loss.into_scalar().elem();
-        total_loss += value as f64;
-        n += 1;
-    }
-
-    total_loss / n.max(1) as f64
-}
-
-fn evaluate_physics(
+/// Stage 6 unified evaluation: one forward per batch yields the optimized
+/// total and the physics part, so selection, train logging and reporting
+/// can never disagree. Returns `(mean_total, mean_physics)`.
+fn evaluate_totals(
     model: &StellarGnn<InferBackend>,
     dataset: &GnnDataset,
     device: &CudaDevice,
     physics_weight: f64,
+    kl_weight: f64,
     max_nodes: usize,
-) -> f64 {
+) -> (f64, f64) {
     let mut prefetcher = PrefetchBatchedBatcher::new(dataset, max_nodes);
-    let mut total_loss = 0.0f64;
+    let mut total_sum = 0.0f64;
+    let mut phys_sum = 0.0f64;
     let mut n = 0usize;
 
     while let Some((nodes, adj, targets)) = prefetcher.next_batch::<InferBackend>(device) {
         let preds = model.forward(nodes, adj);
-        let loss = compute_gnn_physics_loss(preds, targets, physics_weight);
-        let value: f32 = loss.into_scalar().elem();
-        total_loss += value as f64;
+        let (total, physics) = gnn_loss_scalars(preds, targets, physics_weight, kl_weight);
+        total_sum += total as f64;
+        phys_sum += physics as f64;
         n += 1;
     }
 
-    total_loss / n.max(1) as f64
+    (total_sum / n.max(1) as f64, phys_sum / n.max(1) as f64)
 }
 
 fn cosine_annealing(epoch: usize, total_epochs: usize, initial_lr: f64, min_lr: f64) -> f64 {

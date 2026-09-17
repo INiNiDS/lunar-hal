@@ -70,6 +70,61 @@ pub const GNN_INPUT_DIM: usize = 8;
 pub const GNN_OUTPUT_DIM: usize = 3;
 pub const GNN_VARIATIONAL_DIM: usize = 6;
 
+/// Stage 6: explicit readout-head contract for GNN-Kinematics.
+///
+/// * `Deterministic` — `[N, 3]` mean velocities `(vx, vy, vz)`.
+/// * `Variational` — `[N, 6]` mean velocities followed by per-component
+///   `logvar`; sampling goes through [`split_mean_logvar`] so train,
+///   eval and serving can never disagree on the layout.
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GnnHeadKind {
+    Deterministic,
+    Variational,
+}
+
+impl GnnHeadKind {
+    /// Maps a readout width to its head; `None` for unsupported widths.
+    pub fn from_output_dim(width: usize) -> Option<Self> {
+        match width {
+            GNN_OUTPUT_DIM => Some(GnnHeadKind::Deterministic),
+            GNN_VARIATIONAL_DIM => Some(GnnHeadKind::Variational),
+            _ => None,
+        }
+    }
+
+    pub fn output_width(&self) -> usize {
+        match self {
+            GnnHeadKind::Deterministic => GNN_OUTPUT_DIM,
+            GnnHeadKind::Variational => GNN_VARIATIONAL_DIM,
+        }
+    }
+}
+
+/// Splits a `[N, W]` readout into mean `[N, 3]` and — for the variational
+/// head — `logvar [N, 3]`, following [`GnnHeadKind`].
+pub fn split_mean_logvar<B: Backend>(
+    readout: Tensor<B, 2>,
+    head: GnnHeadKind,
+) -> (Tensor<B, 2>, Option<Tensor<B, 2>>) {
+    let [n, _] = readout.dims();
+    let mean = readout.clone().slice([0..n, 0..GNN_OUTPUT_DIM]);
+    let logvar = match head {
+        GnnHeadKind::Deterministic => None,
+        GnnHeadKind::Variational => Some(readout.slice([0..n, GNN_OUTPUT_DIM..GNN_VARIATIONAL_DIM])),
+    };
+    (mean, logvar)
+}
+
+/// Standard VAE KL of `N(mean, exp(logvar))` against `N(0, 1)`, averaged
+/// over nodes and components (normalized velocity space, so the unit
+/// prior matches the dataset scale).
+pub fn variational_kl<B: Backend>(mean: Tensor<B, 2>, logvar: Tensor<B, 2>) -> Tensor<B, 1> {
+    let one = Tensor::<B, 2>::ones_like(&logvar);
+    let kl = one + logvar.clone() - mean.square() - logvar.exp();
+    let n = kl.dims()[0] as f32 * 3.0;
+    kl.sum().mul_scalar(-0.5).div_scalar(n)
+}
+
 /// Frozen output contract of the GNN-Kinematics model.
 /// Per contract v1 the readout head must produce Cartesian velocity
 /// components `vx/vy/vz` in km/s (Galactic frame) for every star node.
@@ -143,6 +198,28 @@ mod tests {
         let output = KinematicsOutput::from_row(&[9.0, 8.0, 7.0]).unwrap();
         assert_eq!(output.as_components(), [9.0, 8.0, 7.0]);
     }
+
+    #[test]
+    fn head_contract_maps_widths() {
+        assert_eq!(
+            GnnHeadKind::from_output_dim(3),
+            Some(GnnHeadKind::Deterministic)
+        );
+        assert_eq!(
+            GnnHeadKind::from_output_dim(6),
+            Some(GnnHeadKind::Variational)
+        );
+        assert_eq!(GnnHeadKind::from_output_dim(0), None);
+        assert_eq!(GnnHeadKind::from_output_dim(4), None);
+        assert_eq!(
+            GnnHeadKind::Deterministic.output_width(),
+            GNN_OUTPUT_DIM
+        );
+        assert_eq!(
+            GnnHeadKind::Variational.output_width(),
+            GNN_VARIATIONAL_DIM
+        );
+    }
 }
 
 pub fn compute_adjacency_matrix(coords: &[[f32; 3]]) -> Vec<Vec<f32>> {
@@ -177,15 +254,22 @@ pub fn sample_stellar_dynamics<B: Backend>(
     device: &Device<B>,
 ) -> Tensor<B, 2> {
     let [num_stars, dims] = gnn_output.dims();
-
-    let mean = gnn_output.clone().narrow(1, 0, 3);
-    let log_var = gnn_output.narrow(1, 3, dims - 3);
+    let head = if dims >= GNN_VARIATIONAL_DIM {
+        GnnHeadKind::Variational
+    } else {
+        GnnHeadKind::Deterministic
+    };
+    let (mean, logvar) = split_mean_logvar(gnn_output, head);
 
     if temperature <= 0.0 {
         return mean;
     }
 
-    let std = log_var.mul_scalar(0.5_f64).exp();
+    let std = match logvar {
+        Some(logvar) => log_var_to_std(logvar),
+        // Deterministic head: unit sampling noise (no learned variance).
+        None => Tensor::<B, 2>::ones([num_stars, GNN_OUTPUT_DIM], device),
+    };
 
     let epsilon = Tensor::<B, 2>::random(
         [num_stars, 3],
@@ -196,6 +280,10 @@ pub fn sample_stellar_dynamics<B: Backend>(
     let scaled_noise = epsilon.mul(std).mul_scalar(temperature as f64);
 
     mean.add(scaled_noise)
+}
+
+fn log_var_to_std<B: Backend>(logvar: Tensor<B, 2>) -> Tensor<B, 2> {
+    logvar.mul_scalar(0.5_f64).exp()
 }
 
 pub fn compute_knn_adjacency(coords: &[[f32; 3]], k: usize) -> Vec<Vec<f32>> {

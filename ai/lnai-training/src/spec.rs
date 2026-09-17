@@ -125,10 +125,16 @@ impl Default for PinnConfig {
 pub struct GnnKinematicsConfig {
     pub knn_k: u32,
     pub hidden_dim: u32,
+    /// Readout width: 3 = deterministic `(vx,vy,vz)` head, 6 = variational
+    /// `(mean, logvar)` head (Stage 6: previously frozen to 3).
     pub output_dim: u32,
     pub max_group_size: u32,
     pub radius_pc: f32,
     pub physics_weight: f64,
+    /// KL regularizer weight for the variational head (ignored by the
+    /// deterministic head; default 0 = mean-only training).
+    #[serde(default)]
+    pub kl_weight: f64,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -268,14 +274,18 @@ impl TrainingSpec {
                 if cfg.hidden_dim == 0 {
                     errors.push("gnn hidden_dim must be >= 1".to_string());
                 }
-                if cfg.output_dim != 3 {
+                // Stage 6: two explicit heads — 3 deterministic, 6 variational.
+                if cfg.output_dim != 3 && cfg.output_dim != 6 {
                     errors.push(format!(
-                        "gnn output_dim is frozen to 3 (vx/vy/vz), got {}",
+                        "gnn output_dim must be 3 (deterministic) or 6 (variational), got {}",
                         cfg.output_dim
                     ));
                 }
                 if !cfg.physics_weight.is_finite() || cfg.physics_weight < 0.0 {
                     errors.push("gnn physics_weight must be finite and >= 0".to_string());
+                }
+                if !cfg.kl_weight.is_finite() || cfg.kl_weight < 0.0 {
+                    errors.push("gnn kl_weight must be finite and >= 0".to_string());
                 }
             }
             ModelConfig::GnnLocalization(_) => {
@@ -395,6 +405,14 @@ impl TrainingSpec {
                 {
                     argv.push("--tiles".to_string());
                     argv.push(tiles.to_string());
+                }
+                // Stage 6 variational head: opt-in trailing flags, legacy
+                // deterministic specs keep their argv byte-identical.
+                if cfg.output_dim == 6 {
+                    argv.push("--output-dim".to_string());
+                    argv.push(cfg.output_dim.to_string());
+                    argv.push("--kl-weight".to_string());
+                    argv.push(cfg.kl_weight.to_string());
                 }
                 if let Some(hook) = self.agent.as_ref() {
                     argv.push("--agent-every".to_string());
@@ -796,6 +814,7 @@ mod tests {
             max_group_size: 64,
             radius_pc: 50.0,
             physics_weight: 0.05,
+            kl_weight: 0.0,
         });
         assert!(spec.validate().is_ok());
         let argv = spec.worker_argv();
@@ -826,6 +845,7 @@ mod tests {
             max_group_size: 64,
             radius_pc: 50.0,
             physics_weight: 0.05,
+            kl_weight: 0.0,
         });
         assert!(!spec.worker_argv().iter().any(|a| a == "--agent-every"));
 

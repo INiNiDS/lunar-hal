@@ -1,8 +1,8 @@
 use burn::prelude::*;
 use burn_store::{BurnpackStore, ModuleSnapshot};
 use lnai_models::{
-    GNN_INPUT_DIM, GNN_OUTPUT_DIM, GNN_VARIATIONAL_DIM, StellarGnn, StellarGnnConfig, StellarMlp,
-    StellarMlpConfig, compute_knn_adjacency,
+    GNN_INPUT_DIM, GNN_OUTPUT_DIM, GNN_VARIATIONAL_DIM, GnnHeadKind, StellarGnn, StellarGnnConfig,
+    StellarMlp, StellarMlpConfig, compute_knn_adjacency,
 };
 #[cfg(feature = "siren")]
 use lnai_models::{SIREN_INPUT_DIM, StellarSiren, StellarSirenConfig};
@@ -204,28 +204,25 @@ pub async fn get_gnn() -> Option<Arc<GnnModel>> {
         let device: Device<B> = Default::default();
         let path_str = bpk_path.to_string_lossy();
 
-        let mut deterministic_model =
-            StellarGnnConfig::new(GNN_INPUT_DIM, 256, GNN_OUTPUT_DIM).init(&device);
-        let mut store = BurnpackStore::from_file(&*path_str);
-        if deterministic_model.load_from(&mut store).is_ok() {
-            return Some(Arc::new(GnnModel {
-                model: deterministic_model,
-                device,
-                norm,
-                variational: false,
-            }));
-        }
-
-        let mut variational_model =
-            StellarGnnConfig::new(GNN_INPUT_DIM, 256, GNN_VARIATIONAL_DIM).init(&device);
-        let mut store2 = BurnpackStore::from_file(&*path_str);
-        if variational_model.load_from(&mut store2).is_ok() {
-            return Some(Arc::new(GnnModel {
-                model: variational_model,
-                device,
-                norm,
-                variational: true,
-            }));
+        // Stage 6: the readout head is explicit — try each contracted width
+        // in order and record which head the artifact carries, instead of
+        // sniffing shapes ad hoc.
+        for width in [GNN_OUTPUT_DIM, GNN_VARIATIONAL_DIM] {
+            let head = match GnnHeadKind::from_output_dim(width) {
+                Some(head) => head,
+                None => continue,
+            };
+            let mut candidate =
+                StellarGnnConfig::new(GNN_INPUT_DIM, 256, head.output_width()).init(&device);
+            let mut store = BurnpackStore::from_file(&*path_str);
+            if candidate.load_from(&mut store).is_ok() {
+                return Some(Arc::new(GnnModel {
+                    model: candidate,
+                    device,
+                    norm,
+                    variational: head == GnnHeadKind::Variational,
+                }));
+            }
         }
 
         None

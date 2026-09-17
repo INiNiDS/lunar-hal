@@ -57,6 +57,7 @@ fn gnn_spec(output_dir: &str) -> TrainingSpec {
             max_group_size: 64,
             radius_pc: 50.0,
             physics_weight: 0.05,
+            kl_weight: 0.0,
         }),
         dataset_manifest_hash: "manifest-v1".into(),
         data_path: Some("data/clean_gnn_stars.parquet".into()),

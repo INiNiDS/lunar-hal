@@ -862,6 +862,7 @@ fn training_spec_from_opts(
                 max_group_size: opts.max_group_size as u32,
                 radius_pc: opts.radius_pc,
                 physics_weight: opts.physics_weight,
+                kl_weight: 0.0,
             }),
         ),
         CliModel::Siren => (

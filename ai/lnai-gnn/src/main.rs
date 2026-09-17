@@ -15,10 +15,11 @@ pub fn spec_from_args(args: &Args) -> TrainingSpec {
         config: ModelConfig::GnnKinematics(GnnKinematicsConfig {
             knn_k: args.knn_k as u32,
             hidden_dim: args.hidden_dim as u32,
-            output_dim: 3,
+            output_dim: args.output_dim,
             max_group_size: args.max_group_size as u32,
             radius_pc: args.radius_pc,
             physics_weight: args.physics_weight,
+            kl_weight: args.kl_weight,
         }),
         dataset_manifest_hash: String::new(),
         data_path: if args.data.is_empty() {

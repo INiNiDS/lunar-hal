@@ -48,6 +48,14 @@ pub struct Args {
     pub max_group_size: usize,
     #[arg(long, default_value_t = 50.0)]
     pub radius_pc: f32,
+    /// Stage 6: readout head — 3 = deterministic (vx,vy,vz), 6 = variational
+    /// (mean, logvar). Anything else fails spec validation.
+    #[arg(long, default_value_t = 3)]
+    pub output_dim: u32,
+    /// Stage 6: KL regularizer weight for the variational head (ignored by
+    /// the deterministic head).
+    #[arg(long, default_value_t = 0.0)]
+    pub kl_weight: f64,
     /// Explicit global seed (group build + split + shuffle).
     #[arg(long)]
     pub seed: Option<u64>,

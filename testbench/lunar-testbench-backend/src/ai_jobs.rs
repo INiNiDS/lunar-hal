@@ -54,6 +54,7 @@ pub fn training_spec_from_request(
                     max_group_size: req.max_group_size.unwrap_or(64),
                     radius_pc: req.radius_pc.unwrap_or(50.0),
                     physics_weight: req.physics_weight,
+                    kl_weight: 0.0,
                 }),
             )
         }
@@ -502,13 +503,14 @@ mod tests {
     }
 
     #[test]
-    fn gnn_output_dim_is_frozen_to_three() {
+    fn gnn_defaults_to_deterministic_head() {
         let mut req = pinn_request();
         req.model = ModelKindDto::Gnn;
         let spec = training_spec_from_request(&req).expect("valid gnn request");
         match spec.config {
             lnai_training::spec::ModelConfig::GnnKinematics(cfg) => {
                 assert_eq!(cfg.output_dim, 3);
+                assert_eq!(cfg.kl_weight, 0.0);
             }
             other => panic!("unexpected config {other:?}"),
         }
