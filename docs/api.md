@@ -18,6 +18,8 @@ The API is local-first. Examples assume `http://127.0.0.1:25255` for `lunar-back
 | `GET`, `PATCH`, `DELETE` | `/gallery/stars/{id}` | Read, edit metadata, or delete a Gallery record |
 | `GET` | `/gallery/stars/{id}/texture.png` | Return full texture content |
 | `GET` | `/gallery/stars/{id}/thumbnail` | Return a preview asset |
+| `GET` | `/version` | Service identity + exact artifact version per registry entry |
+| `POST` | `/models/reload` | Controlled model reload (409 + zero state change on invalid bundles) |
 
 The model/pipeline endpoints (`/pinn`, `/gnn`, `/sector/stars`, `/pipeline`, `/siren/*`) remain available for technical tools. Scene SSE uses a scene ID and monotonic event/revision data; clients reconnect by fetching a fresh snapshot before applying later events.
 

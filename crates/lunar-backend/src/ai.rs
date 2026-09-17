@@ -1,6 +1,11 @@
 use anyhow::Result;
 use burn::prelude::*;
 use burn_store::{BurnpackStore, ModuleSnapshot};
+use lnai_training::artifacts::{
+    RegisteredArtifact, RegistryStatus, manifest_file_name, scan_model_registry,
+    verify_manifest_against_files,
+};
+use lnai_training::spec::ModelKind;
 use lnai_models::{
     GNN_INPUT_DIM, GNN_OUTPUT_DIM, GNN_VARIATIONAL_DIM, GnnHeadKind, StellarGnn, StellarGnnConfig,
     StellarMlp, StellarMlpConfig, compute_knn_adjacency,
@@ -9,7 +14,7 @@ use lnai_models::{
 use lnai_models::{SIREN_INPUT_DIM, StellarSiren, StellarSirenConfig};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tokio::sync::OnceCell;
+use tokio::sync::{OnceCell, RwLock};
 
 use lunar_utils::env::get_lunar_models_dir;
 
@@ -240,55 +245,96 @@ pub struct GnnModel {
     pub variational: bool,
 }
 
-static GNN: OnceCell<Option<Arc<GnnModel>>> = OnceCell::const_new();
+static GNN: RwLock<Option<Arc<GnnModel>>> = RwLock::const_new(None);
 
 pub async fn get_gnn() -> Option<Arc<GnnModel>> {
-    GNN.get_or_init(|| async {
-        let models_dir = get_lunar_models_dir();
-        let norm_path = models_dir.join("stellar_gnn_norm.json");
-        let bpk_path = models_dir.join("stellar_gnn_model.bpk");
+    if let Some(cached) = GNN.read().await.clone() {
+        return Some(cached);
+    }
+    let loaded = load_gnn().await;
+    *GNN.write().await = loaded.clone();
+    loaded
+}
 
-        if !norm_path.exists() || !bpk_path.exists() {
-            println!("  GNN model files not found at: {}", models_dir.display());
+/// Stage 6.7: flat-manifest compatibility gate for the serving load path.
+/// A present manifest must parse, pin the frozen architecture line and
+/// reproduce both file hashes — otherwise the artifact is refused loudly
+/// instead of serving silent mismatch. No manifest = legacy deployment,
+/// loaded with a one-line warning (pre-Stage-6 behaviour).
+fn check_serving_manifest(
+    models_dir: &std::path::Path,
+    kind: &ModelKind,
+) -> Result<Option<lnai_training::artifacts::ArtifactManifestV1>, String> {
+    let path = models_dir.join(manifest_file_name(kind));
+    if !path.exists() {
+        return Ok(None);
+    }
+    let raw =
+        std::fs::read_to_string(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
+    let manifest: lnai_training::artifacts::ArtifactManifestV1 = serde_json::from_str(&raw)
+        .map_err(|e| format!("parse {}: {e}", path.display()))?;
+    verify_manifest_against_files(models_dir, &manifest)
+        .map_err(|e| format!("serving bundle for {} rejected: {e}", path.display()))?;
+    Ok(Some(manifest))
+}
+
+async fn load_gnn() -> Option<Arc<GnnModel>> {
+    let models_dir = get_lunar_models_dir();
+    let norm_path = models_dir.join("stellar_gnn_norm.json");
+    let bpk_path = models_dir.join("stellar_gnn_model.bpk");
+
+    if !norm_path.exists() || !bpk_path.exists() {
+        println!("  GNN model files not found at: {}", models_dir.display());
+        return None;
+    }
+
+    match check_serving_manifest(&models_dir, &ModelKind::GnnKinematics) {
+        Ok(Some(manifest)) => println!(
+            "  GNN serving manifest verified (arch {}, git {})",
+            manifest.architecture_version, manifest.git_revision
+        ),
+        Ok(None) => eprintln!(
+            "  warning: GNN serving without artifact manifest (legacy, unverified provenance)"
+        ),
+        Err(err) => {
+            eprintln!("  GNN model refused: {err}");
             return None;
         }
+    }
 
-        let norm: GnnNorm = match std::fs::read_to_string(&norm_path) {
-            Ok(json) => match serde_json::from_str(&json) {
-                Ok(n) => n,
-                Err(_) => return None,
-            },
+    let norm: GnnNorm = match std::fs::read_to_string(&norm_path) {
+        Ok(json) => match serde_json::from_str(&json) {
+            Ok(n) => n,
             Err(_) => return None,
+        },
+        Err(_) => return None,
+    };
+
+    let device: Device<B> = Default::default();
+    let path_str = bpk_path.to_string_lossy();
+
+    // Stage 6: the readout head is explicit — try each contracted width
+    // in order and record which head the artifact carries, instead of
+    // sniffing shapes ad hoc.
+    for width in [GNN_OUTPUT_DIM, GNN_VARIATIONAL_DIM] {
+        let head = match GnnHeadKind::from_output_dim(width) {
+            Some(head) => head,
+            None => continue,
         };
-
-        let device: Device<B> = Default::default();
-        let path_str = bpk_path.to_string_lossy();
-
-        // Stage 6: the readout head is explicit — try each contracted width
-        // in order and record which head the artifact carries, instead of
-        // sniffing shapes ad hoc.
-        for width in [GNN_OUTPUT_DIM, GNN_VARIATIONAL_DIM] {
-            let head = match GnnHeadKind::from_output_dim(width) {
-                Some(head) => head,
-                None => continue,
-            };
-            let mut candidate =
-                StellarGnnConfig::new(GNN_INPUT_DIM, 256, head.output_width()).init(&device);
-            let mut store = BurnpackStore::from_file(&*path_str);
-            if candidate.load_from(&mut store).is_ok() {
-                return Some(Arc::new(GnnModel {
-                    model: candidate,
-                    device,
-                    norm,
-                    variational: head == GnnHeadKind::Variational,
-                }));
-            }
+        let mut candidate =
+            StellarGnnConfig::new(GNN_INPUT_DIM, 256, head.output_width()).init(&device);
+        let mut store = BurnpackStore::from_file(&*path_str);
+        if candidate.load_from(&mut store).is_ok() {
+            return Some(Arc::new(GnnModel {
+                model: candidate,
+                device,
+                norm,
+                variational: head == GnnHeadKind::Variational,
+            }));
         }
+    }
 
-        None
-    })
-    .await
-    .clone()
+    None
 }
 
 #[derive(Clone)]
@@ -862,11 +908,18 @@ pub struct LoreCache {
     entries: Vec<LoreEntry>,
 }
 
-static LORE_CACHE: OnceCell<Option<Arc<LoreCache>>> = OnceCell::const_new();
+static LORE_CACHE: RwLock<Option<Arc<LoreCache>>> = RwLock::const_new(None);
 
 pub async fn get_lore_cache() -> Option<Arc<LoreCache>> {
-    LORE_CACHE
-        .get_or_init(|| async {
+    if let Some(cached) = LORE_CACHE.read().await.clone() {
+        return Some(cached);
+    }
+    let loaded = load_lore_cache().await;
+    *LORE_CACHE.write().await = loaded.clone();
+    loaded
+}
+
+async fn load_lore_cache() -> Option<Arc<LoreCache>> {
             let models_dir = get_lunar_models_dir();
             let path = models_dir.join("stellar_lore_cache.json");
 
@@ -894,9 +947,6 @@ pub async fn get_lore_cache() -> Option<Arc<LoreCache>> {
                 path.display()
             );
             Some(Arc::new(LoreCache { entries }))
-        })
-        .await
-        .clone()
 }
 
 impl LoreCache {
@@ -980,7 +1030,7 @@ pub fn generate_hybrid_metadata(
 }
 
 #[cfg(feature = "siren")]
-static SIREN_MODEL: OnceCell<Option<Arc<SirenModel>>> = OnceCell::const_new();
+static SIREN_MODEL: RwLock<Option<Arc<SirenModel>>> = RwLock::const_new(None);
 
 #[cfg(feature = "siren")]
 #[derive(Deserialize)]
@@ -1002,52 +1052,71 @@ pub struct SirenModel {
 
 #[cfg(feature = "siren")]
 pub async fn get_siren() -> Option<Arc<SirenModel>> {
-    SIREN_MODEL
-        .get_or_init(|| async {
-            let models_dir = get_lunar_models_dir();
-            let norm_path = models_dir.join("stellar_siren_norm.json");
-            let bpk_path = models_dir.join("stellar_siren_model.bpk");
+    if let Some(cached) = SIREN_MODEL.read().await.clone() {
+        return Some(cached);
+    }
+    let loaded = load_siren().await;
+    *SIREN_MODEL.write().await = loaded.clone();
+    loaded
+}
 
-            if !norm_path.exists() || !bpk_path.exists() {
-                println!(
-                    "  SIREN model not available (files not found in {})",
-                    models_dir.display()
-                );
+#[cfg(feature = "siren")]
+async fn load_siren() -> Option<Arc<SirenModel>> {
+    let models_dir = get_lunar_models_dir();
+    let norm_path = models_dir.join("stellar_siren_norm.json");
+    let bpk_path = models_dir.join("stellar_siren_model.bpk");
+
+    if !norm_path.exists() || !bpk_path.exists() {
+        println!(
+            "  SIREN model not available (files not found in {})",
+            models_dir.display()
+        );
+        return None;
+    }
+
+    match check_serving_manifest(&models_dir, &ModelKind::Siren) {
+        Ok(Some(manifest)) => println!(
+            "  SIREN serving manifest verified (arch {}, git {})",
+            manifest.architecture_version, manifest.git_revision
+        ),
+        Ok(None) => eprintln!(
+            "  warning: SIREN serving without artifact manifest (legacy, unverified provenance)"
+        ),
+        Err(err) => {
+            eprintln!("  SIREN model refused: {err}");
+            return None;
+        }
+    }
+
+    let norm: SirenNorm = match std::fs::read_to_string(&norm_path) {
+        Ok(json) => match serde_json::from_str(&json) {
+            Ok(n) => n,
+            Err(e) => {
+                eprintln!("  Failed to parse SIREN norm: {e}");
                 return None;
             }
+        },
+        Err(_) => return None,
+    };
 
-            let norm: SirenNorm = match std::fs::read_to_string(&norm_path) {
-                Ok(json) => match serde_json::from_str(&json) {
-                    Ok(n) => n,
-                    Err(e) => {
-                        eprintln!("  Failed to parse SIREN norm: {e}");
-                        return None;
-                    }
-                },
-                Err(_) => return None,
-            };
+    let device: Device<B> = Default::default();
+    let path_str = bpk_path.to_string_lossy();
 
-            let device: Device<B> = Default::default();
-            let path_str = bpk_path.to_string_lossy();
+    let mut model = StellarSirenConfig::new().init(&device);
+    let mut store = BurnpackStore::from_file(&*path_str);
+    if model.load_from(&mut store).is_err() {
+        return None;
+    }
 
-            let mut model = StellarSirenConfig::new().init(&device);
-            let mut store = BurnpackStore::from_file(&*path_str);
-            if model.load_from(&mut store).is_err() {
-                return None;
-            }
-
-            println!(
-                "  SIREN model loaded successfully from {}",
-                bpk_path.display()
-            );
-            Some(Arc::new(SirenModel {
-                model,
-                device,
-                norm,
-            }))
-        })
-        .await
-        .clone()
+    println!(
+        "  SIREN model loaded successfully from {}",
+        bpk_path.display()
+    );
+    Some(Arc::new(SirenModel {
+        model,
+        device,
+        norm,
+    }))
 }
 
 #[cfg(feature = "siren")]
@@ -1134,6 +1203,88 @@ pub fn siren_generate_texture(
     }
 
     pixels
+}
+
+/// Stage 6.7: fresh registry scan of the serving models directory.
+/// Always re-reads from disk so `GET /version` reports ground truth.
+pub async fn registry_snapshot() -> Vec<RegisteredArtifact> {
+    let models_dir = get_lunar_models_dir();
+    // Touch each loader's manifest gate indirectly: the scan itself
+    // validates every manifest it finds (see scan_model_registry).
+    scan_model_registry(&models_dir)
+}
+
+/// Stage 6.7 controlled reload report.
+#[derive(Debug, Clone)]
+pub struct ReloadReport {
+    /// Model kinds successfully reloaded (or confirmed missing).
+    pub reloaded: Vec<String>,
+    /// Invalid registry entries that blocked the reload; non-empty means
+    /// NO state was changed and the old models keep serving.
+    pub refused: Vec<String>,
+    pub note: String,
+}
+
+/// Stage 6.7 controlled reload: validates the registry first and only
+/// then drops the cached dir-loaded models (GNN/SIREN/lore). In-flight
+/// requests keep their `Arc` clones; the next `get_*` lazily reloads.
+/// PINN is compiled in and intentionally never reloads.
+pub async fn reload_models() -> ReloadReport {
+    let entries = registry_snapshot().await;
+    let refused: Vec<String> = entries
+        .iter()
+        .filter_map(|e| match &e.status {
+            RegistryStatus::Invalid(reason) => Some(format!("{}: {reason}", e.dir)),
+            _ => None,
+        })
+        .collect();
+    if !refused.is_empty() {
+        return ReloadReport {
+            reloaded: Vec::new(),
+            refused,
+            note: "reload refused: fix or remove invalid bundles, old models keep serving"
+                .to_string(),
+        };
+    }
+    *GNN.write().await = None;
+    *LORE_CACHE.write().await = None;
+    #[cfg(feature = "siren")]
+    {
+        *SIREN_MODEL.write().await = None;
+    }
+    // Eagerly re-verify: a reload that silently serves nothing is a
+    // failed deploy, so report per-kind load status now.
+    let mut reloaded = Vec::new();
+    reloaded.push(format!(
+        "gnn_kinematics: {}",
+        if get_gnn().await.is_some() {
+            "loaded"
+        } else {
+            "missing"
+        }
+    ));
+    reloaded.push(format!(
+        "lore_cache: {}",
+        if get_lore_cache().await.is_some() {
+            "loaded"
+        } else {
+            "missing"
+        }
+    ));
+    #[cfg(feature = "siren")]
+    reloaded.push(format!(
+        "siren: {}",
+        if get_siren().await.is_some() {
+            "loaded"
+        } else {
+            "missing"
+        }
+    ));
+    ReloadReport {
+        reloaded,
+        refused: Vec::new(),
+        note: "pinn is compiled in and never reloads".to_string(),
+    }
 }
 
 pub async fn warmup_models() {

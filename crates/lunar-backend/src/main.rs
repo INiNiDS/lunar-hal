@@ -25,6 +25,7 @@ use crate::ai::{get_siren, siren_generate_texture};
 pub mod ai;
 pub mod gallery;
 pub mod scenes;
+pub mod version;
 
 use crate::ai::PinnInputs;
 use crate::gallery::GalleryStore;
@@ -300,6 +301,8 @@ async fn main() -> Result<(), anyhow::Error> {
         )
         .route("/gallery/stars/{id}/texture.png", get(gallery::gallery_texture))
         .route("/gallery/stars/{id}/thumbnail", get(gallery::gallery_thumbnail))
+        .route("/version", get(version::version))
+        .route("/models/reload", post(version::reload))
         .layer(cors)
         .with_state(state);
 

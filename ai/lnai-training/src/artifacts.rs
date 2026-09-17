@@ -239,6 +239,208 @@ pub fn write_artifact_bundle(
         .map_err(|e| ArtifactError::ChecksumMismatch(e.to_string()))
 }
 
+/// Flat serving-layout manifest file name per model kind, for models dirs
+/// that hold several models side by side (where a single `artifact.json`
+/// would collide). Training output dirs keep `artifact.json`.
+pub fn manifest_file_name(model: &ModelKind) -> &'static str {
+    match model {
+        ModelKind::Pinn => "stellar_model.artifact.json",
+        ModelKind::GnnKinematics => "stellar_gnn_model.artifact.json",
+        ModelKind::GnnLocalization => "stellar_gnn_loc_model.artifact.json",
+        ModelKind::Siren => "stellar_siren_model.artifact.json",
+    }
+}
+
+/// Registry status of one discovered model entry (Stage 6.7).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum RegistryStatus {
+    /// Manifest present, frozen version, matching arch, weight/norm hashes
+    /// reproduce from disk.
+    Verified,
+    /// Weight + norm files present but no manifest: servable, provenance
+    /// unverified (pre-Stage-6 deployments).
+    LegacyUnverified,
+    /// Entry found but failed validation; the reason is carried along and
+    /// serving/reload paths must refuse it.
+    Invalid(String),
+}
+
+/// One model entry in a scanned models directory.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct RegisteredArtifact {
+    pub kind: ModelKind,
+    /// Directory holding the entry (`models/` for flat entries, the run
+    /// dir for `artifact.json` layouts).
+    pub dir: String,
+    pub weight_file: String,
+    pub norm_file: String,
+    pub manifest: Option<ArtifactManifestV1>,
+    pub status: RegistryStatus,
+}
+
+/// Loads `dir/artifact.json` and verifies it against itself: frozen
+/// manifest version, expected architecture line, and weight/norm SHA-256
+/// reproducing from the sibling files.
+pub fn discover_bundle(
+    dir: &std::path::Path,
+) -> Result<RegisteredArtifact, ArtifactError> {
+    let raw = std::fs::read_to_string(dir.join("artifact.json")).map_err(|_| {
+        ArtifactError::FileNotFound(format!(
+            "missing artifact.json in {}",
+            dir.display()
+        ))
+    })?;
+    let manifest: ArtifactManifestV1 = serde_json::from_str(&raw)
+        .map_err(|e| ArtifactError::DeserializationError(e.to_string()))?;
+    verify_manifest_against_files(dir, &manifest)?;
+    Ok(RegisteredArtifact {
+        kind: manifest.model_kind.clone(),
+        dir: dir.display().to_string(),
+        weight_file: weight_file_name(&manifest.model_kind).to_string(),
+        norm_file: norm_file_name(&manifest.model_kind).to_string(),
+        manifest: Some(manifest),
+        status: RegistryStatus::Verified,
+    })
+}
+
+/// Self-verification shared by [`discover_bundle`] and the serving load
+/// path: frozen version, architecture line, file hashes.
+pub fn verify_manifest_against_files(
+    dir: &std::path::Path,
+    manifest: &ArtifactManifestV1,
+) -> Result<(), ArtifactError> {
+    if manifest.version != ARTIFACT_MANIFEST_VERSION {
+        return Err(ArtifactError::IncompatibleArchitecture(format!(
+            "manifest version {} != {ARTIFACT_MANIFEST_VERSION}",
+            manifest.version
+        )));
+    }
+    let expected_arch = architecture_version(&manifest.model_kind);
+    if manifest.architecture_version != expected_arch {
+        return Err(ArtifactError::IncompatibleArchitecture(format!(
+            "arch {} != {expected_arch}",
+            manifest.architecture_version
+        )));
+    }
+    for (file, want) in [
+        (weight_file_name(&manifest.model_kind), &manifest.model_hash),
+        (norm_file_name(&manifest.model_kind), &manifest.norm_hash),
+    ] {
+        let actual = sha256_file_hex(&dir.join(file))?;
+        if &actual != want {
+            return Err(ArtifactError::ChecksumMismatch(format!(
+                "{file}: manifest {want}, actual {actual}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Best-effort kind for an unreadable/invalid manifest: reads just the
+/// `model_kind` field; falls back to `Pinn` with the real problem carried
+/// in the [`RegistryStatus::Invalid`] message.
+fn guess_manifest_kind(dir: &std::path::Path) -> ModelKind {
+    std::fs::read_to_string(dir.join("artifact.json"))
+        .ok()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+        .and_then(|v| serde_json::from_value::<ModelKind>(v["model_kind"].clone()).ok())
+        .unwrap_or(ModelKind::Pinn)
+}
+
+/// Stage 6.7 model registry: scans a models directory for servable
+/// entries. Two layouts are recognized per model kind: a run directory
+/// holding `artifact.json` (e.g. `models/gnn-v1/`), and the flat serving
+/// layout (`stellar_gnn_model.bpk` + [`manifest_file_name`]). Weight+norm
+/// files without any manifest are reported as [`RegistryStatus::LegacyUnverified`];
+/// nothing here touches disk beyond reading.
+pub fn scan_model_registry(models_dir: &std::path::Path) -> Vec<RegisteredArtifact> {
+    let mut entries = Vec::new();
+    if !models_dir.is_dir() {
+        return entries;
+    }
+    // Run-dir layout: any immediate subdir with artifact.json.
+    if let Ok(rd) = std::fs::read_dir(models_dir) {
+        let mut subdirs: Vec<_> = rd.flatten().filter(|e| e.path().is_dir()).collect();
+        subdirs.sort_by_key(|e| e.file_name());
+        for sub in subdirs {
+            let dir = sub.path();
+            if !dir.join("artifact.json").exists() {
+                continue;
+            }
+            match discover_bundle(&dir) {
+                Ok(entry) => entries.push(entry),
+                Err(err) => entries.push(RegisteredArtifact {
+                    kind: guess_manifest_kind(&dir),
+                    dir: dir.display().to_string(),
+                    weight_file: String::new(),
+                    norm_file: String::new(),
+                    manifest: None,
+                    status: RegistryStatus::Invalid(err.to_string()),
+                }),
+            }
+        }
+    }
+    // Flat serving layout, per model kind.
+    for kind in [
+        ModelKind::Pinn,
+        ModelKind::GnnKinematics,
+        ModelKind::GnnLocalization,
+        ModelKind::Siren,
+    ] {
+        let manifest_path = models_dir.join(manifest_file_name(&kind));
+        if manifest_path.exists() {
+            match std::fs::read_to_string(&manifest_path)
+                .map_err(|e| ArtifactError::FileNotFound(e.to_string()))
+                .and_then(|raw| {
+                    serde_json::from_str::<ArtifactManifestV1>(&raw)
+                        .map_err(|e| ArtifactError::DeserializationError(e.to_string()))
+                })
+                .and_then(|manifest| {
+                    verify_manifest_against_files(models_dir, &manifest)?;
+                    Ok(manifest)
+                }) {
+                Ok(manifest) => entries.push(RegisteredArtifact {
+                    kind: kind.clone(),
+                    dir: models_dir.display().to_string(),
+                    weight_file: weight_file_name(&kind).to_string(),
+                    norm_file: norm_file_name(&kind).to_string(),
+                    manifest: Some(manifest),
+                    status: RegistryStatus::Verified,
+                }),
+                Err(err) => entries.push(RegisteredArtifact {
+                    kind: kind.clone(),
+                    dir: models_dir.display().to_string(),
+                    weight_file: weight_file_name(&kind).to_string(),
+                    norm_file: norm_file_name(&kind).to_string(),
+                    manifest: None,
+                    status: RegistryStatus::Invalid(err.to_string()),
+                }),
+            }
+            continue;
+        }
+        let has_files = models_dir.join(weight_file_name(&kind)).exists()
+            && models_dir.join(norm_file_name(&kind)).exists();
+        if has_files
+            && !entries.iter().any(|e| {
+                e.kind == kind
+                    && e.status == RegistryStatus::Verified
+                    && e.dir == models_dir.display().to_string()
+            })
+        {
+            entries.push(RegisteredArtifact {
+                kind: kind.clone(),
+                dir: models_dir.display().to_string(),
+                weight_file: weight_file_name(&kind).to_string(),
+                norm_file: norm_file_name(&kind).to_string(),
+                manifest: None,
+                status: RegistryStatus::LegacyUnverified,
+            });
+        }
+    }
+    entries
+}
+
 /// Loads and validates an artifact bundle: manifest must exist, parse, be
 /// version-frozen and reference weight/norm files whose SHA-256 matches.
 pub fn validate_artifact_bundle(
@@ -395,6 +597,98 @@ mod tests {
         tampered.model_hash = "deadbeef".into();
         assert!(validate_artifact_bundle(&dir, &tampered).is_err());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn write_run_bundle(
+        dir: &std::path::Path,
+        kind: ModelKind,
+        arch: &str,
+    ) -> ArtifactManifestV1 {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(dir.join(weight_file_name(&kind)), b"weights").unwrap();
+        std::fs::write(dir.join(norm_file_name(&kind)), b"norm").unwrap();
+        let mut manifest = sample_manifest(kind);
+        manifest.architecture_version = arch.into();
+        manifest.model_hash = sha256_file_hex(&dir.join(weight_file_name(&manifest.model_kind)))
+            .unwrap();
+        manifest.norm_hash =
+            sha256_file_hex(&dir.join(norm_file_name(&manifest.model_kind))).unwrap();
+        write_artifact_bundle(dir, &manifest).expect("write bundle");
+        manifest
+    }
+
+    #[test]
+    fn registry_discovers_run_dir_flat_and_legacy_layouts() {
+        let root = tempfile::tempdir().expect("tmpdir");
+        let models = root.path();
+        // Run-dir layout with a valid bundle.
+        write_run_bundle(&models.join("gnn-v1"), ModelKind::GnnKinematics, "gnn-kinematics-v1");
+        // Flat serving layout with a valid manifest.
+        std::fs::write(models.join(weight_file_name(&ModelKind::Pinn)), b"w").unwrap();
+        std::fs::write(models.join(norm_file_name(&ModelKind::Pinn)), b"n").unwrap();
+        let mut pinn = sample_manifest(ModelKind::Pinn);
+        pinn.architecture_version = "pinn-v1".into();
+        pinn.model_hash = sha256_file_hex(&models.join(weight_file_name(&ModelKind::Pinn))).unwrap();
+        pinn.norm_hash = sha256_file_hex(&models.join(norm_file_name(&ModelKind::Pinn))).unwrap();
+        std::fs::write(
+            models.join(manifest_file_name(&ModelKind::Pinn)),
+            serde_json::to_string_pretty(&pinn).unwrap(),
+        )
+        .unwrap();
+        // Legacy files without any manifest.
+        std::fs::write(models.join(weight_file_name(&ModelKind::Siren)), b"w").unwrap();
+        std::fs::write(models.join(norm_file_name(&ModelKind::Siren)), b"n").unwrap();
+
+        let entries = scan_model_registry(models);
+        let status = |kind: &ModelKind, dir: &str| {
+            entries
+                .iter()
+                .find(|e| &e.kind == kind && e.dir.ends_with(dir))
+                .map(|e| e.status.clone())
+        };
+        assert_eq!(
+            status(&ModelKind::GnnKinematics, "gnn-v1"),
+            Some(RegistryStatus::Verified)
+        );
+        assert_eq!(
+            status(&ModelKind::Pinn, "tmp"),
+            None,
+            "flat entries carry the models dir itself"
+        );
+        assert!(
+            entries.iter().any(|e| e.kind == ModelKind::Pinn
+                && e.status == RegistryStatus::Verified
+                && e.dir == models.display().to_string()),
+            "flat manifest verifies: {entries:?}"
+        );
+        assert!(
+            entries.iter().any(|e| e.kind == ModelKind::Siren
+                && e.status == RegistryStatus::LegacyUnverified),
+            "manifest-less files report legacy: {entries:?}"
+        );
+    }
+
+    #[test]
+    fn registry_flags_tampered_weights_as_invalid() {
+        let root = tempfile::tempdir().expect("tmpdir");
+        let run = root.path().join("pinn-v1");
+        write_run_bundle(&run, ModelKind::Pinn, "pinn-v1");
+        std::fs::write(run.join(weight_file_name(&ModelKind::Pinn)), b"tampered").unwrap();
+
+        let entries = scan_model_registry(root.path());
+        assert_eq!(entries.len(), 1);
+        assert!(
+            matches!(entries[0].status, RegistryStatus::Invalid(_)),
+            "tampered weights must invalidate: {:?}",
+            entries[0].status
+        );
+        assert!(entries[0].manifest.is_none());
+    }
+
+    #[test]
+    fn registry_on_missing_dir_is_empty() {
+        let entries = scan_model_registry(std::path::Path::new("/nonexistent-models-dir-xyz"));
+        assert!(entries.is_empty());
     }
 
     #[test]
