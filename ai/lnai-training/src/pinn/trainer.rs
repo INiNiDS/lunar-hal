@@ -392,7 +392,7 @@ pub fn run_train_with_cancel(spec: &TrainingSpec, cancel: &CancelFlag) -> Result
         {
             let holdout_ds: StellarDataset<TrainBackend> =
                 StellarDataset::load(holdout_path, &device, spec.max_rows, spec.tiles.clone())?;
-            let (_, holdout_val) = holdout_ds.split_with_seed(0.0, seed);
+            let (holdout_val, _) = holdout_ds.split_with_seed(0.0, seed);
             if holdout_val.n_samples == 0 {
                 anyhow::bail!(
                     "holdout file is empty after filtering: {}",
@@ -541,7 +541,7 @@ pub fn run_evaluate(spec: &TrainingSpec) -> Result<RunOutcome> {
         {
             let holdout_ds: StellarDataset<TrainBackend> =
                 StellarDataset::load(Path::new(holdout_path), &device, None, None)?;
-            let (_, holdout_val) = holdout_ds.split_with_seed(0.0, seed);
+            let (holdout_val, _) = holdout_ds.split_with_seed(0.0, seed);
             if holdout_val.n_samples == 0 {
                 anyhow::bail!("holdout file is empty after filtering: {holdout_path}");
             }

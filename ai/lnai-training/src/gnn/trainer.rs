@@ -394,6 +394,56 @@ pub fn run_train_with_cancel(spec: &TrainingSpec, cancel: &CancelFlag) -> Result
     let _ = append_event_line(output_dir, &JobEvent::Completed { exit_code: 0 });
     write_artifact_manifest(spec, seed, &norm, best_val_loss)?;
 
+    // Stage 6.8: holdout gate for GNN (previously the spec flag was
+    // silently ignored by this trainer). Whole holdout file becomes the
+    // eval set; missing/empty is a hard error, drift warns.
+    if let Some(holdout_path) = &spec.holdout {
+        println!();
+        println!("=== Holdout Evaluation ===");
+        let holdout_path = Path::new(holdout_path);
+        if !holdout_path.exists() {
+            anyhow::bail!("holdout file not found: {}", holdout_path.display());
+        }
+        let holdout_ds = GnnDataset::load_with_norm_and_seed(
+            holdout_path,
+            norm.clone(),
+            gnn_cfg.knn_k as usize,
+            gnn_cfg.max_group_size as usize,
+            gnn_cfg.radius_pc,
+            seed,
+            spec.max_rows,
+            spec.tiles.clone(),
+        )?;
+        let (holdout_val, _) = holdout_ds.split_with_seed(0.0, seed);
+        if holdout_val.groups.is_empty() {
+            anyhow::bail!(
+                "holdout file produced no groups after filtering: {}",
+                holdout_path.display()
+            );
+        }
+        let infer_model = model.valid();
+        let (holdout_loss, holdout_phys) = evaluate_totals(
+            &infer_model,
+            &holdout_val,
+            &device,
+            gnn_cfg.physics_weight,
+            gnn_cfg.kl_weight,
+            max_nodes,
+        );
+        drop(infer_model);
+        println!("Holdout total loss:   {holdout_loss:.6}");
+        println!("Holdout physics loss: {holdout_phys:.6}");
+
+        if holdout_loss <= best_val_loss * 1.5 {
+            println!("Holdout loss is close to validation loss - model generalizes well!");
+        } else {
+            println!("WARNING: Holdout loss is significantly higher than validation loss.");
+            println!(
+                "         The model may be overfitting. Consider regularization or more data."
+            );
+        }
+    }
+
     Ok(RunOutcome::Completed)
 }
 
@@ -472,7 +522,7 @@ pub fn run_evaluate(spec: &TrainingSpec) -> Result<RunOutcome> {
         .map_err(|e| anyhow::anyhow!("failed to load model: {e}"))?;
     let dataset = GnnDataset::load_with_norm_and_seed(
         data_path.as_path(),
-        norm,
+        norm.clone(),
         gnn_cfg.knn_k as usize,
         gnn_cfg.max_group_size as usize,
         gnn_cfg.radius_pc,
@@ -495,6 +545,38 @@ pub fn run_evaluate(spec: &TrainingSpec) -> Result<RunOutcome> {
     println!("=== Read-only evaluation (no weight updates) ===");
     println!("Validation total loss:   {val_loss:.6}");
     println!("Validation physics loss: {phys_loss:.6}");
+
+    // Stage 6.8: read-only holdout gate mirrors training.
+    if let Some(holdout_path) = &spec.holdout {
+        if !Path::new(holdout_path).exists() {
+            anyhow::bail!("holdout file not found: {holdout_path}");
+        }
+        let holdout_ds = GnnDataset::load_with_norm_and_seed(
+            Path::new(holdout_path),
+            norm.clone(),
+            gnn_cfg.knn_k as usize,
+            gnn_cfg.max_group_size as usize,
+            gnn_cfg.radius_pc,
+            seed,
+            None,
+            None,
+        )?;
+        let (holdout_val, _) = holdout_ds.split_with_seed(0.0, seed);
+        if holdout_val.groups.is_empty() {
+            anyhow::bail!("holdout file is empty after filtering: {holdout_path}");
+        }
+        let infer_model = model.valid();
+        let (holdout_loss, _) = evaluate_totals(
+            &infer_model,
+            &holdout_val,
+            &device,
+            gnn_cfg.physics_weight,
+            gnn_cfg.kl_weight,
+            max_nodes,
+        );
+        drop(infer_model);
+        println!("Holdout total loss:      {holdout_loss:.6}");
+    }
     println!("Evaluation complete; checkpoints untouched.");
     Ok(RunOutcome::Completed)
 }

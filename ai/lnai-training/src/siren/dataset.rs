@@ -146,7 +146,9 @@ impl StarTexturePlan {
 /// val_star_idx)` — disjoint, covering `0..n_stars`, with
 /// `floor(n_stars * val_frac)` validation stars. Splitting whole stars
 /// (never pixels) is what keeps validation free of train leakage.
-pub(crate) fn split_star_indices(
+/// Public frozen contract: same `(n_stars, val_frac, seed)` always yields
+/// the same partition.
+pub fn split_star_indices(
     n_stars: usize,
     val_frac: f32,
     seed: u64,

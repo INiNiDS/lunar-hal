@@ -664,7 +664,9 @@ mod tests {
             root,
             &validate_spec(ModelKind::Gnn),
         ));
-        assert!(has_flag_value(&gnn_args, "--batch-size", "64"));
+        // The GNN worker names its batch budget --max-nodes (legacy flag,
+        // see EvaluationSpec::worker_argv) — not --batch-size.
+        assert!(has_flag_value(&gnn_args, "--max-nodes", "64"));
 
         let siren_args = command_args(&build_validate_command(
             root,
