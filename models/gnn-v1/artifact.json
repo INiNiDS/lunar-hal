@@ -3,7 +3,7 @@
   "model_kind": "gnn_kinematics",
   "architecture_version": "gnn-kinematics-v1",
   "model_hash": "9b229add8eec59bd63073d22071515b4c35deb2082ba7ade8828c60e384764b2",
-  "norm_hash": "9c096a72586d7329150a1429023c1c931c0ff5e3dd8961cf929350b1d30ca47d",
+  "norm_hash": "f102692905800e4fa0bf10ec5ea6b1d8a739fddbb4dbed20fb1d323d9cfb00b6",
   "feature_schema_hash": "",
   "dataset_id": "gaia_dr3",
   "dataset_version": "",

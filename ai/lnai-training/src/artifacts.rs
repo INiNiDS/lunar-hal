@@ -226,6 +226,20 @@ pub fn sha256_file_hex(path: &std::path::Path) -> Result<String, ArtifactError> 
     Ok(crate::e2e::sha256_hex(&bytes))
 }
 
+/// On-disk rendering of a norm snapshot: pretty JSON. Every trainer must
+/// write exactly this string to the norm file.
+pub fn render_norm_file<T: serde::Serialize>(norm: &T) -> String {
+    serde_json::to_string_pretty(norm).unwrap_or_else(|_| "{}".to_string())
+}
+
+/// Content hash of a norm snapshot. Stage 6 fix: this MUST be computed
+/// over [`render_norm_file`] output (hash what you write). Hashing the
+/// compact serialization while writing pretty JSON made every real
+/// bundle fail validation.
+pub fn hash_norm_rendered(rendered: &str) -> String {
+    crate::e2e::sha256_hex(rendered.as_bytes())
+}
+
 /// Atomically writes `artifact.json` next to the weights (temp + rename).
 /// Stage 5 (task 8): every training run leaves a versioned bundle whose
 /// manifest validation gates resume/serve paths.
@@ -289,14 +303,43 @@ pub fn discover_bundle(dir: &std::path::Path) -> Result<RegisteredArtifact, Arti
     let manifest: ArtifactManifestV1 = serde_json::from_str(&raw)
         .map_err(|e| ArtifactError::DeserializationError(e.to_string()))?;
     verify_manifest_against_files(dir, &manifest)?;
+    let (weight_path, norm_path) = bundle_file_paths(dir, &manifest.model_kind);
     Ok(RegisteredArtifact {
         kind: manifest.model_kind.clone(),
         dir: dir.display().to_string(),
-        weight_file: weight_file_name(&manifest.model_kind).to_string(),
-        norm_file: norm_file_name(&manifest.model_kind).to_string(),
+        weight_file: weight_path
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        norm_file: norm_path
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default(),
         manifest: Some(manifest),
         status: RegistryStatus::Verified,
     })
+}
+
+/// Resolves a bundle's weight/norm files: canonical per-kind names
+/// first, then the legacy flat names (`stellar_model.bpk` /
+/// `stellar_norm.json`) that older run dirs use regardless of kind.
+fn bundle_file_paths(
+    dir: &std::path::Path,
+    kind: &ModelKind,
+) -> (std::path::PathBuf, std::path::PathBuf) {
+    let weight = dir.join(weight_file_name(kind));
+    let weight = if weight.exists() {
+        weight
+    } else {
+        dir.join(weight_file_name(&ModelKind::Pinn))
+    };
+    let norm = dir.join(norm_file_name(kind));
+    let norm = if norm.exists() {
+        norm
+    } else {
+        dir.join(norm_file_name(&ModelKind::Pinn))
+    };
+    (weight, norm)
 }
 
 /// Self-verification shared by [`discover_bundle`] and the serving load
@@ -318,14 +361,16 @@ pub fn verify_manifest_against_files(
             manifest.architecture_version
         )));
     }
-    for (file, want) in [
-        (weight_file_name(&manifest.model_kind), &manifest.model_hash),
-        (norm_file_name(&manifest.model_kind), &manifest.norm_hash),
+    let (weight_path, norm_path) = bundle_file_paths(dir, &manifest.model_kind);
+    for (path, want) in [
+        (weight_path, &manifest.model_hash),
+        (norm_path, &manifest.norm_hash),
     ] {
-        let actual = sha256_file_hex(&dir.join(file))?;
+        let actual = sha256_file_hex(&path)?;
         if &actual != want {
             return Err(ArtifactError::ChecksumMismatch(format!(
-                "{file}: manifest {want}, actual {actual}"
+                "{}: manifest {want}, actual {actual}",
+                path.display()
             )));
         }
     }
@@ -458,14 +503,16 @@ pub fn validate_artifact_bundle(
             "artifact.json differs from the run manifest".to_string(),
         ));
     }
-    for (file, want) in [
-        (weight_file_name(&manifest.model_kind), &manifest.model_hash),
-        (norm_file_name(&manifest.model_kind), &manifest.norm_hash),
+    let (weight_path, norm_path) = bundle_file_paths(output_dir, &manifest.model_kind);
+    for (path, want) in [
+        (weight_path, &manifest.model_hash),
+        (norm_path, &manifest.norm_hash),
     ] {
-        let actual = sha256_file_hex(&output_dir.join(file))?;
+        let actual = sha256_file_hex(&path)?;
         if &actual != want {
             return Err(ArtifactError::ChecksumMismatch(format!(
-                "{file}: manifest {want}, actual {actual}"
+                "{}: manifest {want}, actual {actual}",
+                path.display()
             )));
         }
     }
@@ -685,6 +732,47 @@ mod tests {
     fn registry_on_missing_dir_is_empty() {
         let entries = scan_model_registry(std::path::Path::new("/nonexistent-models-dir-xyz"));
         assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn norm_hash_convention_matches_written_pretty_file() {
+        use crate::pinn::dataset::NormParams;
+        // Hash-what-you-write: the manifest hash must reproduce from the
+        // pretty-printed file bytes (compact serialization hashes
+        // differently and broke every real bundle once).
+        let norm = NormParams {
+            x_mean: 1.0,
+            x_std: 2.0,
+            y_mean: 3.0,
+            y_std: 4.0,
+            z_mean: 5.0,
+            z_std: 6.0,
+            bp_rp_mean: 7.0,
+            bp_rp_std: 8.0,
+            mg_mean: 9.0,
+            mg_std: 10.0,
+            log_teff_mean: 11.0,
+            log_teff_std: 12.0,
+            log_rad_mean: 13.0,
+            log_rad_std: 14.0,
+            log_mass_mean: 15.0,
+            log_mass_std: 16.0,
+            log_lum_mean: 17.0,
+            log_lum_std: 18.0,
+        };
+        let rendered = render_norm_file(&norm);
+        assert_ne!(
+            rendered,
+            serde_json::to_string(&norm).unwrap(),
+            "pretty and compact renderings must differ (else the convention is vacuous)"
+        );
+        let dir = tempfile::tempdir().expect("tmpdir");
+        let path = dir.path().join("stellar_norm.json");
+        std::fs::write(&path, &rendered).unwrap();
+        assert_eq!(
+            sha256_file_hex(&path).unwrap(),
+            hash_norm_rendered(&rendered)
+        );
     }
 
     #[test]

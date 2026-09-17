@@ -3,7 +3,7 @@
   "model_kind": "pinn",
   "architecture_version": "pinn-v1",
   "model_hash": "9f624fd9d4993658fde6f2859527a798e54bdf547528b8e5bb9461961f8758ef",
-  "norm_hash": "d6e63a8a23d314334b97c8f61d000831b14c13f45e6671fea510246749e69458",
+  "norm_hash": "93b417c745fc08bcc7fe74dbed3ec0473dd46369665be217eedff92ee63c048f",
   "feature_schema_hash": "",
   "dataset_id": "gaia_dr3",
   "dataset_version": "",

@@ -406,14 +406,15 @@ fn write_artifact_manifest(
     best_val_loss: f64,
 ) -> Result<()> {
     use crate::artifacts::{
-        ArtifactManifestV1, architecture_version, sha256_file_hex, write_artifact_bundle,
+        ArtifactManifestV1, architecture_version, hash_norm_rendered, render_norm_file,
+        sha256_file_hex, write_artifact_bundle,
     };
     use crate::spec::ModelKind;
 
     let output_dir = Path::new(&spec.output_dir);
     let model_hash = sha256_file_hex(&output_dir.join(&spec.model_file)).unwrap_or_default();
-    let norm_json = serde_json::to_string(norm).unwrap_or_default();
-    let norm_hash = crate::e2e::sha256_hex(norm_json.as_bytes());
+    // Hash what you write: the norm file on disk is pretty JSON.
+    let norm_hash = hash_norm_rendered(&render_norm_file(norm));
     let mut manifest = ArtifactManifestV1::new(
         ModelKind::Siren,
         architecture_version(&ModelKind::Siren).to_string(),
