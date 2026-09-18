@@ -1,7 +1,7 @@
 {
   "stage": 6,
   "title": "Исправить модели и serving до оптимизации",
-  "approved_code_commit": "754091aa7b0bf52fd06a63385bbbd2de2244714a",
+  "approved_code_commit": "70b0477c780d63ac588dfe2f803d57c46bfc42c8",
   "approved_at": "2026-09-18",
   "suites": [
     {
