@@ -1,0 +1,21 @@
+{
+  "version": "1.0.0",
+  "model_kind": "pinn",
+  "architecture_version": "pinn-v1",
+  "model_hash": "7c19f8dfde41f8f85df4894a79b073f4266776ff6f3751ca9f5bab5d075acdca",
+  "norm_hash": "7f2a8b841a4df9b99af8af2e78a8e0c7f2e5f659161eb349b25b94c070eea30e",
+  "feature_schema_hash": "pinn-input-x,y,z,bp_rp,g_mag-v1",
+  "dataset_id": "gaia_dr3",
+  "dataset_version": "",
+  "seed": 0,
+  "hyperparameters": {
+    "hidden_dim": 256,
+    "physics_weight": 0.1,
+    "note": "flat serving bundle pinned without retraining; hashes reproduce from disk"
+  },
+  "git_revision": "754091aa7b0bf52fd06a63385bbbd2de2244714a",
+  "backend_device": "serving",
+  "evaluation_metrics": null,
+  "created_ms": 1789729507630,
+  "localization_meta": null
+}

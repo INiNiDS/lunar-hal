@@ -3,7 +3,7 @@ use burn::prelude::*;
 use burn_store::{BurnpackStore, ModuleSnapshot};
 use lnai_models::{
     GNN_INPUT_DIM, GNN_OUTPUT_DIM, GNN_VARIATIONAL_DIM, GnnHeadKind, StellarGnn, StellarGnnConfig,
-    StellarMlp, StellarMlpConfig, compute_knn_adjacency,
+    StellarMlp, StellarMlpConfig, compute_knn_adjacency, split_mean_logvar,
 };
 #[cfg(feature = "siren")]
 use lnai_models::{SIREN_INPUT_DIM, StellarSiren, StellarSirenConfig};
@@ -362,86 +362,113 @@ fn prepare_node_data(stars: &[StarFeatures], norm: &GnnNorm) -> Vec<f32> {
     node_data
 }
 
+/// Stage 6: deterministic serving seed from the full coordinates plus
+/// the temperature bits. No wall-clock participates: the same
+/// `(stars, temperature)` always yields the same velocities, so the
+/// `temperature <= 0` path is exactly reproducible and the `> 0` path is
+/// seeded (unlike the pre-fix `SystemTime`-seeded deterministic branch).
+fn serving_rng_seed(stars: &[StarFeatures], temperature: f32) -> u64 {
+    let mut h: u64 = 0x9E3779B97F4A7C15;
+    for s in stars {
+        for c in s.coords {
+            h ^= c.to_bits() as u64;
+            h = h.wrapping_mul(0xBF58476D1CE4E5B9);
+        }
+    }
+    h ^= (temperature.to_bits() as u64).wrapping_mul(0x94D049BB133111EB);
+    h ^= (temperature * 1000.0) as u64;
+    if h == 0 { 1 } else { h }
+}
+
+/// Variational decoding over the already-split `[N, 3]` mean / `[N, 3]`
+/// logvar slices (layout comes from [`split_mean_logvar` shared with
+/// train/eval, never re-sliced here).
 fn compute_variational_velocities(
-    vals: &[f32],
+    mean_vals: &[f32],
+    logvar_vals: &[f32],
     stars: &[StarFeatures],
     norm: &GnnNorm,
     temperature: f32,
 ) -> Vec<[f32; 3]> {
     let n = stars.len();
-    let dims_per_star = GNN_VARIATIONAL_DIM;
+    debug_assert_eq!(mean_vals.len(), n * GNN_OUTPUT_DIM);
+    debug_assert_eq!(logvar_vals.len(), n * GNN_OUTPUT_DIM);
     let mut velocities = Vec::with_capacity(n);
 
-    let coords_hash = stars
-        .iter()
-        .map(|s| s.coords[0].to_bits() as u64)
-        .fold(0u64, |a, b| a ^ b);
+    if temperature <= 0.0 {
+        for i in 0..n {
+            velocities.push([
+                mean_vals[i * 3] * norm.vx_std + norm.vx_mean,
+                mean_vals[i * 3 + 1] * norm.vy_std + norm.vy_mean,
+                mean_vals[i * 3 + 2] * norm.vz_std + norm.vz_mean,
+            ]);
+        }
+        return velocities;
+    }
 
-    let mut rng = SimpleRng::new(((temperature * 1000.0) as u64).wrapping_add(coords_hash));
+    let mut rng = SimpleRng::new(serving_rng_seed(stars, temperature));
 
     for i in 0..n {
-        let base = i * dims_per_star;
-        let vx_mean = vals[base] * norm.vx_std + norm.vx_mean;
-        let vy_mean = vals[base + 1] * norm.vy_std + norm.vy_mean;
-        let vz_mean = vals[base + 2] * norm.vz_std + norm.vz_mean;
+        let vx_mean = mean_vals[i * 3] * norm.vx_std + norm.vx_mean;
+        let vy_mean = mean_vals[i * 3 + 1] * norm.vy_std + norm.vy_mean;
+        let vz_mean = mean_vals[i * 3 + 2] * norm.vz_std + norm.vz_mean;
 
-        let vx_logvar = vals[base + 3] * norm.vx_logvar_std + norm.vx_logvar_mean;
-        let vy_logvar = vals[base + 4] * norm.vy_logvar_std + norm.vy_logvar_mean;
-        let vz_logvar = vals[base + 5] * norm.vz_logvar_std + norm.vz_logvar_mean;
+        let vx_logvar = logvar_vals[i * 3] * norm.vx_logvar_std + norm.vx_logvar_mean;
+        let vy_logvar = logvar_vals[i * 3 + 1] * norm.vy_logvar_std + norm.vy_logvar_mean;
+        let vz_logvar = logvar_vals[i * 3 + 2] * norm.vz_logvar_std + norm.vz_logvar_mean;
 
-        if temperature <= 0.0 {
-            velocities.push([vx_mean, vy_mean, vz_mean]);
-        } else {
-            let vx_std = (vx_logvar * 0.5).exp();
-            let vy_std = (vy_logvar * 0.5).exp();
-            let vz_std = (vz_logvar * 0.5).exp();
+        let vx_std = (vx_logvar * 0.5).exp();
+        let vy_std = (vy_logvar * 0.5).exp();
+        let vz_std = (vz_logvar * 0.5).exp();
 
-            let vx = vx_mean + vx_std * rng.gaussian() * temperature;
-            let vy = vy_mean + vy_std * rng.gaussian() * temperature;
-            let vz = vz_mean + vz_std * rng.gaussian() * temperature;
-
-            velocities.push([vx, vy, vz]);
-        }
+        velocities.push([
+            vx_mean + vx_std * rng.gaussian() * temperature,
+            vy_mean + vy_std * rng.gaussian() * temperature,
+            vz_mean + vz_std * rng.gaussian() * temperature,
+        ]);
     }
     velocities
 }
 
+/// Deterministic decoding over the already-split `[N, 3]` mean slice.
+/// `temperature <= 0` returns the exact mean (no RNG consumed).
+/// `temperature > 0` adds seeded unit-variance noise scaled by
+/// `temperature * 0.15`: the 0.15 keeps UI-level entropy from blowing up
+/// physical dispersions (train samples `eps * temperature` in normalized
+/// space; serving denormalizes, hence the damped serving scale).
 fn compute_deterministic_velocities(
-    vals: &[f32],
+    mean_vals: &[f32],
     stars: &[StarFeatures],
     norm: &GnnNorm,
     temperature: f32,
 ) -> Vec<[f32; 3]> {
     let n = stars.len();
-    let dims_per_star = GNN_OUTPUT_DIM;
+    debug_assert_eq!(mean_vals.len(), n * GNN_OUTPUT_DIM);
     let mut velocities = Vec::with_capacity(n);
 
-    for (i, star) in stars.iter().take(n).enumerate() {
-        let base = i * dims_per_star;
-        let vx = vals[base] * norm.vx_std + norm.vx_mean;
-        let vy = vals[base + 1] * norm.vy_std + norm.vy_mean;
-        let vz = vals[base + 2] * norm.vz_std + norm.vz_mean;
-
-        if temperature > 0.0 {
-            let mut rng = SimpleRng::new(
-                ((temperature * 1000.0) as u64).wrapping_add(
-                    ((star.coords[0] * 1000.0) as u64).wrapping_add(
-                        std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_millis() as u64,
-                    ),
-                ),
-            );
-            let scale = temperature * 0.15;
+    if temperature <= 0.0 {
+        for i in 0..n {
             velocities.push([
-                vx + rng.gaussian() * norm.vx_std * scale,
-                vy + rng.gaussian() * norm.vy_std * scale,
-                vz + rng.gaussian() * norm.vz_std * scale,
+                mean_vals[i * 3] * norm.vx_std + norm.vx_mean,
+                mean_vals[i * 3 + 1] * norm.vy_std + norm.vy_mean,
+                mean_vals[i * 3 + 2] * norm.vz_std + norm.vz_mean,
             ]);
-        } else {
-            velocities.push([vx, vy, vz]);
         }
+        return velocities;
+    }
+
+    let mut rng = SimpleRng::new(serving_rng_seed(stars, temperature));
+    let scale = temperature * 0.15;
+    for i in 0..n {
+        let vx = mean_vals[i * 3] * norm.vx_std + norm.vx_mean;
+        let vy = mean_vals[i * 3 + 1] * norm.vy_std + norm.vy_mean;
+        let vz = mean_vals[i * 3 + 2] * norm.vz_std + norm.vz_mean;
+
+        velocities.push([
+            vx + rng.gaussian() * norm.vx_std * scale,
+            vy + rng.gaussian() * norm.vy_std * scale,
+            vz + rng.gaussian() * norm.vz_std * scale,
+        ]);
     }
     velocities
 }
@@ -485,19 +512,36 @@ pub fn gnn_infer(
     let adj_tensor = Tensor::<B, 2>::from_data(TensorData::new(adj_flat, [n, n]), &gnn.device);
 
     let output = gnn.model.forward(nodes, adj_tensor);
-    let data = output.into_data();
-    let vals: Vec<f32> = data.to_vec().expect("failed to convert GNN output");
+    // Stage 6: the readout layout is decoded through the shared
+    // `split_mean_logvar` contract (same function as train/eval), so
+    // serving can never disagree on mean-vs-logvar column order.
+    let head = if gnn.variational {
+        GnnHeadKind::Variational
+    } else {
+        GnnHeadKind::Deterministic
+    };
+    let (mean_t, logvar_t) = split_mean_logvar(output, head);
+    let mean_vals: Vec<f32> = mean_t
+        .into_data()
+        .to_vec()
+        .expect("failed to convert GNN mean output");
 
     if gnn.variational {
+        let logvar_vals: Vec<f32> = logvar_t
+            .expect("variational head must carry logvar")
+            .into_data()
+            .to_vec()
+            .expect("failed to convert GNN logvar output");
         Ok(compute_variational_velocities(
-            &vals,
+            &mean_vals,
+            &logvar_vals,
             stars,
             norm,
             temperature,
         ))
     } else {
         Ok(compute_deterministic_velocities(
-            &vals,
+            &mean_vals,
             stars,
             norm,
             temperature,
@@ -1427,5 +1471,55 @@ mod tests {
         assert!(gnn_infer(&gnn, &[], 1, 0.0).unwrap().is_empty());
         let err = gnn_infer(&gnn, &[dummy_star(0.0)], 1, 0.0).expect_err("single-node must fail");
         assert!(err.to_string().contains(">= 2 stars"), "{err:#}");
+    }
+
+    #[test]
+    fn serving_seed_is_deterministic_and_coordinate_sensitive() {
+        let a = vec![dummy_star(0.0), dummy_star(1.0)];
+        let b = vec![dummy_star(0.0), dummy_star(1.0)];
+        assert_eq!(serving_rng_seed(&a, 0.7), serving_rng_seed(&b, 0.7));
+        assert_eq!(serving_rng_seed(&a, 0.0), serving_rng_seed(&b, 0.0));
+        let moved = vec![dummy_star(0.0), dummy_star(2.0)];
+        assert_ne!(
+            serving_rng_seed(&a, 0.7),
+            serving_rng_seed(&moved, 0.7),
+            "seed must cover full coordinates, not just x of one star"
+        );
+        assert_ne!(
+            serving_rng_seed(&a, 0.0),
+            serving_rng_seed(&a, 0.7),
+            "seed must cover temperature"
+        );
+    }
+
+    #[test]
+    fn deterministic_decode_at_zero_temperature_returns_exact_mean() {
+        let stars = vec![dummy_star(0.0), dummy_star(1.0)];
+        let norm = dummy_gnn().norm;
+        // Identity norm: denorm(x) == x, so output must equal the split mean.
+        let mean = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let first = compute_deterministic_velocities(&mean, &stars, &norm, 0.0);
+        let second = compute_deterministic_velocities(&mean, &stars, &norm, 0.0);
+        assert_eq!(first, vec![[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]);
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn stochastic_decode_is_seeded_not_wall_clock() {
+        let stars = vec![dummy_star(0.0), dummy_star(1.0)];
+        let norm = dummy_gnn().norm;
+        let mean = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let logvar = vec![0.0; 6];
+        let a = compute_deterministic_velocities(&mean, &stars, &norm, 0.7);
+        let b = compute_deterministic_velocities(&mean, &stars, &norm, 0.7);
+        assert_eq!(a, b, "same inputs must sample identically");
+        let c = compute_variational_velocities(&mean, &logvar, &stars, &norm, 0.7);
+        let d = compute_variational_velocities(&mean, &logvar, &stars, &norm, 0.7);
+        assert_eq!(c, d, "variational path must be seeded too");
+        // Zero temperature disables sampling on both heads.
+        assert_eq!(
+            compute_variational_velocities(&mean, &logvar, &stars, &norm, 0.0),
+            vec![[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]
+        );
     }
 }

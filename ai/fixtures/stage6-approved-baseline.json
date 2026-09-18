@@ -1,8 +1,8 @@
 {
   "stage": 6,
   "title": "Исправить модели и serving до оптимизации",
-  "approved_code_commit": "1dfbca6100a9be5320a97e8717deeacd5cff57c7",
-  "approved_at": "2026-09-17",
+  "approved_code_commit": "754091aa7b0bf52fd06a63385bbbd2de2244714a",
+  "approved_at": "2026-09-18",
   "suites": [
     {
       "file": "ai/lnai-training/tests/fixture_leakage.rs",

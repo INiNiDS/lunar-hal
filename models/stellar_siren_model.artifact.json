@@ -1,0 +1,19 @@
+{
+  "version": "1.0.0",
+  "model_kind": "siren",
+  "architecture_version": "siren-v1",
+  "model_hash": "df7d3d503851238f3e8a99cf388581a29f042f8f20191bcda7ae2793b93c7fce",
+  "norm_hash": "c700765c1f7d17718b262bf578022d522b91064b892b22287804567877399093",
+  "feature_schema_hash": "siren-serving-uv,bp_rp,m_g,log_teff-v1",
+  "dataset_id": "gaia_dr3",
+  "dataset_version": "",
+  "seed": 0,
+  "hyperparameters": {
+    "note": "flat serving bundle pinned without retraining; hashes reproduce from disk"
+  },
+  "git_revision": "754091aa7b0bf52fd06a63385bbbd2de2244714a",
+  "backend_device": "serving",
+  "evaluation_metrics": null,
+  "created_ms": 1789729507630,
+  "localization_meta": null
+}

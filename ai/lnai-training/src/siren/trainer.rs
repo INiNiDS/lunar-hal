@@ -120,13 +120,16 @@ pub fn run_train_with_cancel(spec: &TrainingSpec, cancel: &CancelFlag) -> Result
         let loaded_norm: SirenNorm = serde_json::from_str(&norm_json)?;
         println!("Resuming from model: {}", model_path.display());
 
-        let (train_ds, val_ds) = SirenDataset::generate(
+        // Stage 6: resume reuses the saved normalization for the dataset
+        // so inputs match the loaded weights (never fresh stats).
+        let (train_ds, val_ds) = SirenDataset::generate_with_norm(
             data_path.as_path(),
             siren_cfg.texture_size as usize,
             siren_cfg.max_stars as usize,
             spec.val_frac,
             siren_cfg.seed,
             spec.max_rows,
+            Some(loaded_norm.clone()),
         )?;
 
         let mut store = BurnpackStore::from_file(model_path.to_str().unwrap());
@@ -466,13 +469,18 @@ pub fn run_evaluate(spec: &TrainingSpec) -> Result<RunOutcome> {
         .load_from(&mut store)
         .map_err(|e| anyhow::anyhow!("failed to load model: {e}"))?;
     let infer = loaded.valid();
-    let (train_ds, val_ds) = SirenDataset::generate(
+    // Stage 6: read-only evaluation normalizes with the saved snapshot
+    // (the weights were trained against it), never with fresh stats.
+    let saved_norm_json = std::fs::read_to_string(&norm_path)?;
+    let saved_norm: SirenNorm = serde_json::from_str(&saved_norm_json)?;
+    let (train_ds, val_ds) = SirenDataset::generate_with_norm(
         data_path.as_path(),
         siren_cfg.texture_size as usize,
         siren_cfg.max_stars as usize,
         spec.val_frac,
         siren_cfg.seed,
         None,
+        Some(saved_norm),
     )?;
     drop(train_ds);
     let val_loss = evaluate_infer(
@@ -487,7 +495,6 @@ pub fn run_evaluate(spec: &TrainingSpec) -> Result<RunOutcome> {
     println!("=== Read-only evaluation (no weight updates) ===");
     println!("Validation data loss: {val_loss:.6}");
     println!("Evaluation complete; checkpoints untouched.");
-    let _ = norm_path;
     Ok(RunOutcome::Completed)
 }
 

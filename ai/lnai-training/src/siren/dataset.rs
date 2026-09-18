@@ -166,6 +166,32 @@ impl SirenDataset {
         seed: u64,
         max_rows: Option<u64>,
     ) -> Result<(Self, Self)> {
+        Self::generate_with_norm(
+            parquet_path,
+            texture_size,
+            max_stars,
+            val_frac,
+            seed,
+            max_rows,
+            None,
+        )
+    }
+
+    /// Stage 6: norm-reusing generation. Resume and read-only evaluation
+    /// must normalize with the saved snapshot instead of recomputing fresh
+    /// stats from whatever parquet happens to be on disk — otherwise the
+    /// inputs no longer match the weights. `None` computes fresh stats
+    /// (fresh training); `Some` reuses the provided snapshot for the whole
+    /// split so train/resume/eval cannot disagree.
+    pub fn generate_with_norm(
+        parquet_path: &Path,
+        texture_size: usize,
+        max_stars: usize,
+        val_frac: f32,
+        seed: u64,
+        max_rows: Option<u64>,
+        existing_norm: Option<SirenNorm>,
+    ) -> Result<(Self, Self)> {
         let (df, n_total) = read_filtered_parquet(parquet_path, max_rows)?;
         println!("Loaded {} filtered stars from parquet", n_total);
 
@@ -177,8 +203,17 @@ impl SirenDataset {
         stars.truncate(n_stars);
         println!("Using {} stars (max_stars={})", n_stars, max_stars);
 
-        let norm = compute_norm(&stars);
-        print_norm(&norm);
+        let norm = match existing_norm {
+            Some(reused) => {
+                println!("Using provided SIREN normalization snapshot (resume/eval path)");
+                reused
+            }
+            None => {
+                let computed = compute_norm(&stars);
+                print_norm(&computed);
+                computed
+            }
+        };
 
         let u_coords = generate_uv_grid(texture_size);
         let n_pixels = texture_size * texture_size;

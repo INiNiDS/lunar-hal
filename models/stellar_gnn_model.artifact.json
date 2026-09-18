@@ -1,0 +1,21 @@
+{
+  "version": "1.0.0",
+  "model_kind": "gnn_kinematics",
+  "architecture_version": "gnn-kinematics-v1",
+  "model_hash": "e46c8caecfe95ff78c50bb643810e7ee3102ce2ac9dc65e91081a44a5816d922",
+  "norm_hash": "4b5effc3035e59c7d1ae72b40588e75a1ba0da58b35f7df9597decd38d123c59",
+  "feature_schema_hash": "gnn-serving-pinn-derived-log_teff,log_rad,log_mass,log_lum,mg,x,y,z-v1",
+  "dataset_id": "gaia_dr3",
+  "dataset_version": "",
+  "seed": 0,
+  "hyperparameters": {
+    "hidden_dim": 256,
+    "output_dim": "3-or-6-head",
+    "note": "flat serving bundle pinned without retraining; serving decodes via split_mean_logvar"
+  },
+  "git_revision": "754091aa7b0bf52fd06a63385bbbd2de2244714a",
+  "backend_device": "serving",
+  "evaluation_metrics": null,
+  "created_ms": 1789729507630,
+  "localization_meta": null
+}
