@@ -1,7 +1,6 @@
 use lunar_stellar_core::sector::{
-    CHUNK_SIZE_PC, INNER_EXCLUSION_PC, MAX_CACHED_CHUNKS, MAX_CONCURRENT_FETCHES,
-    PX_PER_PC, chunk_center, chunk_distance_sq, evict_excess_cache, sectors_to_fetch,
-    visible_chunks,
+    CHUNK_SIZE_PC, INNER_EXCLUSION_PC, MAX_CACHED_CHUNKS, MAX_CONCURRENT_FETCHES, PX_PER_PC,
+    chunk_center, chunk_distance_sq, evict_excess_cache, sectors_to_fetch, visible_chunks,
 };
 use lunar_stellar_core::{StellarScene, StellarSceneConfig};
 use lunar_structures::ResponseStar;
@@ -176,7 +175,10 @@ fn scene_claim_reserves_one_atomic_batch() {
     let scene = StellarScene::with_config(StellarSceneConfig::new("http://localhost:18080"));
     let first = scene.claim_sectors_to_fetch((4096.0, 4096.0));
     assert_eq!(first.len(), MAX_CONCURRENT_FETCHES);
-    assert_eq!(scene.snapshot().sector_loading.len(), MAX_CONCURRENT_FETCHES);
+    assert_eq!(
+        scene.snapshot().sector_loading.len(),
+        MAX_CONCURRENT_FETCHES
+    );
     assert!(scene.claim_sectors_to_fetch((4096.0, 4096.0)).is_empty());
 }
 

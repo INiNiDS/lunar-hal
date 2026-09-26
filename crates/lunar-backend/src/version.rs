@@ -3,9 +3,12 @@
 
 use axum::{Json, http::StatusCode, response::IntoResponse};
 use lnai_training::artifacts::{RegisteredArtifact, RegistryStatus};
+use lnai_training::spec::ModelKind;
 use serde::Serialize;
 
-use crate::ai::{ReloadReport, registry_snapshot, reload_models};
+use crate::ai::{
+    LoadedModelIdentity, ReloadReport, loaded_model_identities, registry_snapshot, reload_models,
+};
 
 #[derive(Serialize)]
 pub struct ModelVersionInfo {
@@ -16,9 +19,12 @@ pub struct ModelVersionInfo {
     pub status: String,
     pub manifest_version: Option<String>,
     pub architecture_version: Option<String>,
+    pub model_hash: Option<String>,
+    pub norm_hash: Option<String>,
     pub git_revision: Option<String>,
     pub created_ms: Option<u64>,
     pub evaluation_metrics: Option<serde_json::Value>,
+    pub release_blockers: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -27,29 +33,47 @@ pub struct VersionResponse {
     pub git_revision: String,
     pub models_dir: String,
     pub models: Vec<ModelVersionInfo>,
+    pub active_models: Vec<LoadedModelIdentity>,
 }
 
 fn status_slug(status: &RegistryStatus) -> String {
     match status {
         RegistryStatus::Verified => "verified".to_string(),
+        RegistryStatus::ReleaseBlocked(_) => "release_blocked".to_string(),
         RegistryStatus::LegacyUnverified => "legacy_unverified".to_string(),
         RegistryStatus::Invalid(reason) => format!("invalid: {reason}"),
     }
 }
 
+fn kind_slug(kind: &ModelKind) -> &'static str {
+    match kind {
+        ModelKind::Pinn => "pinn",
+        ModelKind::GnnKinematics => "gnn_kinematics",
+        ModelKind::GnnLocalization => "gnn_localization",
+        ModelKind::Siren => "siren",
+    }
+}
+
 fn entry_info(entry: RegisteredArtifact) -> ModelVersionInfo {
     let manifest = entry.manifest;
+    let release_blockers = match &entry.status {
+        RegistryStatus::ReleaseBlocked(blockers) => blockers.clone(),
+        _ => Vec::new(),
+    };
     ModelVersionInfo {
-        kind: format!("{:?}", entry.kind).to_lowercase(),
+        kind: kind_slug(&entry.kind).to_string(),
         dir: entry.dir,
         weight_file: entry.weight_file,
         norm_file: entry.norm_file,
         status: status_slug(&entry.status),
         manifest_version: manifest.as_ref().map(|m| m.version.clone()),
         architecture_version: manifest.as_ref().map(|m| m.architecture_version.clone()),
+        model_hash: manifest.as_ref().map(|m| m.model_hash.clone()),
+        norm_hash: manifest.as_ref().map(|m| m.norm_hash.clone()),
         git_revision: manifest.as_ref().map(|m| m.git_revision.clone()),
         created_ms: manifest.as_ref().map(|m| m.created_ms),
         evaluation_metrics: manifest.as_ref().and_then(|m| m.evaluation_metrics.clone()),
+        release_blockers,
     }
 }
 
@@ -57,32 +81,15 @@ fn entry_info(entry: RegisteredArtifact) -> ModelVersionInfo {
 /// every registry entry (exit gate: "API показывает точную artifact
 /// version").
 pub async fn version() -> Json<VersionResponse> {
-    let entries = registry_snapshot().await;
+    let models = registry_snapshot()
+        .await
+        .into_iter()
+        .map(entry_info)
+        .collect();
+    let active_models = loaded_model_identities().await;
     let models_dir = lunar_utils::env::get_lunar_models_dir()
         .display()
         .to_string();
-    // PINN is compiled in: report the embedded bytes' hashes as its
-    // exact version (it can never drift from the binary).
-    let mut models = vec![ModelVersionInfo {
-        kind: "pinn".to_string(),
-        dir: "<embedded>".to_string(),
-        weight_file: "stellar_model.bpk".to_string(),
-        norm_file: "stellar_norm.json".to_string(),
-        status: "embedded".to_string(),
-        manifest_version: None,
-        architecture_version: Some(
-            lnai_training::artifacts::architecture_version(&lnai_training::spec::ModelKind::Pinn)
-                .to_string(),
-        ),
-        git_revision: Some(
-            option_env!("LUNAR_AI_GIT_REV")
-                .unwrap_or("unknown")
-                .to_string(),
-        ),
-        created_ms: None,
-        evaluation_metrics: None,
-    }];
-    models.extend(entries.into_iter().map(entry_info));
     Json(VersionResponse {
         service: "lunar-backend".to_string(),
         git_revision: option_env!("LUNAR_AI_GIT_REV")
@@ -90,6 +97,7 @@ pub async fn version() -> Json<VersionResponse> {
             .to_string(),
         models_dir,
         models,
+        active_models,
     })
 }
 
@@ -131,12 +139,18 @@ mod tests {
         assert_eq!(body.service, "lunar-backend");
         assert!(!body.git_revision.is_empty());
         assert!(!body.models_dir.is_empty());
-        // PINN is always reported (embedded); dir-loaded kinds appear
-        // when their files exist in the models dir.
-        assert!(body.models.iter().any(|m| m.kind == "pinn"));
         for m in &body.models {
             assert!(!m.kind.is_empty());
             assert!(!m.status.is_empty());
+            if matches!(m.status.as_str(), "verified" | "release_blocked") {
+                assert!(m.model_hash.is_some());
+                assert!(m.norm_hash.is_some());
+            }
+        }
+        for model in &body.active_models {
+            assert!(!model.kind.is_empty());
+            assert_eq!(model.model_hash.len(), 64);
+            assert_eq!(model.norm_hash.len(), 64);
         }
     }
 }

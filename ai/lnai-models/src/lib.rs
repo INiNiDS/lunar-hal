@@ -7,8 +7,9 @@ pub use pinn::*;
 pub mod gnn;
 #[cfg(feature = "gnn")]
 pub use gnn::{
-    GNN_INPUT_DIM, GNN_OUTPUT_DIM, GNN_VARIATIONAL_DIM, GcnLayer, GnnHeadKind, KinematicsOutput,
-    StellarGnn, StellarGnnConfig, compute_adjacency_matrix, compute_knn_adjacency,
+    DeterministicGnnHead, GNN_INPUT_DIM, GNN_OUTPUT_DIM, GNN_VARIATIONAL_DIM, GcnLayer,
+    GnnHeadKind, GraphBatch, KinematicsOutput, StellarGnn, StellarGnnConfig, VariationalGnnHead,
+    compute_adjacency_matrix, compute_knn_adjacency, compute_sparse_knn_graph,
     sample_stellar_dynamics, split_mean_logvar, variational_kl,
 };
 
@@ -22,4 +23,9 @@ pub use siren::{
 #[cfg(feature = "localization")]
 pub mod localization;
 #[cfg(feature = "localization")]
-pub use localization::{LocalizationOutput, StarCandidate};
+pub use localization::{
+    GNN_LOC_DEFAULT_MAX_SLOTS, GNN_LOC_INPUT_DIM, GNN_LOC_MASKED_OUTPUT_DIM, GNN_LOC_SLOT_DIM,
+    LocalizationOutput, NoGraphMlpBaseline, NoGraphMlpConfig, StarCandidate,
+    StellarGnnLocalization, StellarGnnLocalizationConfig, density_poisson_baseline,
+    knn_interpolation_baseline,
+};

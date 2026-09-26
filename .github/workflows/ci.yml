@@ -65,8 +65,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: ai-cpu-${{ hashFiles('Cargo.lock') }}
-      # One command regenerates the frozen fixture, proves leakage-free
-      # integrity and runs all correctness suites with JSON reports.
+      # The fixture is synthetic; these suites cover contracts/surrogates and
+      # leakage logic, not the quality of trained serving checkpoints.
       - run: scripts/e2e-ai.sh
       - run: cargo clippy -p lnai-data -p lnai-training --all-targets
       - uses: actions/upload-artifact@v4

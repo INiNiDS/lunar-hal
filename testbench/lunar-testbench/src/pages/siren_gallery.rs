@@ -5,13 +5,61 @@
 //! save the texture before it appears here.
 
 use dioxus::prelude::*;
+use serde::{Deserialize, Serialize};
 
 use crate::api::{
     self, CreateGalleryStarRequest, GallerySource, GalleryStar, ResponseStar, StarModelInputs,
     UpdateGalleryStarRequest,
 };
 use crate::os::state::{is_window_lifecycle_visible, use_window_lifecycle};
-use crate::os::{use_os_state, WindowLifecycle};
+use crate::os::{
+    AppSnapshot, WindowLifecycle, use_os_state, use_window_instance_id,
+    use_window_instance_snapshot,
+};
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct SirenGallerySnapshot {
+    pub selected: Option<GalleryStar>,
+    pub sort: String,
+    pub refresh_tick: u32,
+    pub status: Option<String>,
+    pub busy: bool,
+    pub name: String,
+    pub bp_rp: f32,
+    pub g_mag: f32,
+    pub temperature: f32,
+    pub tags: String,
+}
+
+impl Default for SirenGallerySnapshot {
+    fn default() -> Self {
+        Self {
+            selected: None,
+            sort: "updated_desc".to_string(),
+            refresh_tick: 0,
+            status: None,
+            busy: false,
+            name: "Generated star".to_string(),
+            bp_rp: 0.85,
+            g_mag: 4.83,
+            temperature: 5778.0,
+            tags: "generated, siren".to_string(),
+        }
+    }
+}
+
+impl AppSnapshot for SirenGallerySnapshot {
+    fn capture_snapshot(&self) -> serde_json::Value {
+        serde_json::to_value(self).unwrap_or(serde_json::Value::Null)
+    }
+
+    fn hydrate_snapshot(&mut self, payload: &serde_json::Value) -> Result<(), String> {
+        let snap: SirenGallerySnapshot = serde_json::from_value(payload.clone())
+            .map_err(|e| format!("SirenGallery hydration failed: {e}"))?;
+        *self = snap;
+        Ok(())
+    }
+}
 
 fn gallery_request_id() -> String {
     format!("gallery-ui-{}", js_sys::Date::now())
@@ -43,28 +91,66 @@ fn parse_tags(value: &str) -> Vec<String> {
 
 #[component]
 pub fn SirenGallery() -> Element {
+    let initial = use_window_instance_snapshot::<SirenGallerySnapshot>().unwrap_or_default();
     let mut os = use_os_state();
     let mut records = use_signal(Vec::<GalleryStar>::new);
-    let mut selected = use_signal(|| None::<GalleryStar>);
+    let mut selected = use_signal(|| initial.selected.clone());
     let mut query = use_signal(String::new);
-    let mut sort = use_signal(|| "updated_desc".to_string());
-    let mut refresh_tick = use_signal(|| 0_u32);
-    let mut status = use_signal(|| None::<String>);
-    let mut busy = use_signal(|| false);
+    let mut sort = use_signal(|| initial.sort.clone());
+    let mut refresh_tick = use_signal(|| initial.refresh_tick);
+    let mut status = use_signal(|| initial.status.clone());
+    let mut busy = use_signal(|| initial.busy);
     let lifecycle = use_window_lifecycle();
     let is_blocked = lifecycle
         .map(|signal| *signal.read() == WindowLifecycle::Blocked)
         .unwrap_or(false);
 
-    let mut name = use_signal(|| "Generated star".to_string());
-    let mut bp_rp = use_signal(|| 0.85_f32);
-    let mut g_mag = use_signal(|| 4.83_f32);
-    let mut temperature = use_signal(|| 5778.0_f32);
-    let mut tags = use_signal(|| "generated, siren".to_string());
+    let mut name = use_signal(|| initial.name.clone());
+    let mut bp_rp = use_signal(|| initial.bp_rp);
+    let mut g_mag = use_signal(|| initial.g_mag);
+    let mut temperature = use_signal(|| initial.temperature);
+    let mut tags = use_signal(|| initial.tags.clone());
 
-    let mut detail_name = use_signal(String::new);
-    let mut detail_tags = use_signal(String::new);
-    let mut detail_notes = use_signal(String::new);
+    let mut detail_name = use_signal(|| {
+        initial
+            .selected
+            .as_ref()
+            .map(display_name)
+            .unwrap_or_default()
+    });
+    let mut detail_tags = use_signal(|| {
+        initial
+            .selected
+            .as_ref()
+            .map(|r| r.tags.join(", "))
+            .unwrap_or_default()
+    });
+    let mut detail_notes = use_signal(|| {
+        initial
+            .selected
+            .as_ref()
+            .and_then(|r| r.notes.clone())
+            .unwrap_or_default()
+    });
+
+    use_effect(move || {
+        let snap = SirenGallerySnapshot {
+            selected: selected(),
+            sort: sort(),
+            refresh_tick: refresh_tick(),
+            status: status(),
+            busy: busy(),
+            name: name(),
+            bp_rp: bp_rp(),
+            g_mag: g_mag(),
+            temperature: temperature(),
+            tags: tags(),
+        };
+        if let Some(inst_id) = use_window_instance_id() {
+            os.register_instance_snapshot(&inst_id, snap.capture_snapshot());
+        }
+        os.register_app_snapshot("siren_gallery", snap.capture_snapshot());
+    });
 
     let listing_lifecycle = lifecycle;
     use_resource(move || {
@@ -134,7 +220,9 @@ pub fn SirenGallery() -> Element {
                     detail_notes.set(record.notes.clone().unwrap_or_default());
                     selected.set(Some(record));
                     refresh_tick.set(refresh_tick().wrapping_add(1));
-                    status.set(Some("Texture generated and saved to the persistent Gallery.".into()));
+                    status.set(Some(
+                        "Texture generated and saved to the persistent Gallery.".into(),
+                    ));
                 }
                 Err(error) => status.set(Some(error)),
             }
@@ -268,5 +356,30 @@ pub fn SirenGallery() -> Element {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_siren_gallery_snapshot_capture_and_hydration() {
+        let original = SirenGallerySnapshot {
+            selected: None,
+            sort: "name".into(),
+            refresh_tick: 5,
+            status: Some("saved".into()),
+            busy: false,
+            name: "Supernova 1987A".into(),
+            bp_rp: 1.45,
+            g_mag: 6.2,
+            temperature: 8500.0,
+            tags: "blue-supergiant, tested".into(),
+        };
+        let payload = original.capture_snapshot();
+        let mut restored = SirenGallerySnapshot::default();
+        restored.hydrate_snapshot(&payload).unwrap();
+        assert_eq!(restored, original);
     }
 }

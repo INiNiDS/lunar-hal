@@ -6,7 +6,7 @@ use crate::os::use_os_state;
 
 /// One equal-width slot in the service rack.
 ///
-/// Interaction follows the WebOS spec: the first press on a stopped service
+/// Interaction follows the Lunar-OS spec: the first press on a stopped service
 /// starts it, and once it is running the same press opens its log window.
 /// Stop/restart live in a hover-revealed corner cluster so the resting state
 /// stays clean instead of looking like an admin panel.

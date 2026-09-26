@@ -25,9 +25,11 @@ use crate::AppState;
 
 struct JobHandle {
     cancel: CancellationToken,
+    pid: Option<u32>,
 }
 
 pub struct JobRegistry {
+    db: crate::db::Database,
     jobs: RwLock<HashMap<String, Arc<RwLock<Job>>>>,
     channels: RwLock<HashMap<String, broadcast::Sender<JobEvent>>>,
     handles: RwLock<HashMap<String, JobHandle>>,
@@ -52,32 +54,77 @@ pub enum JobEvent {
 }
 
 impl JobRegistry {
-    pub fn new() -> Arc<Self> {
+    pub fn new(db: crate::db::Database) -> Arc<Self> {
+        let _ = db.mark_interrupted_jobs();
+        let mut initial_jobs = HashMap::new();
+        if let Ok(jobs) = db.list_jobs() {
+            for j in jobs {
+                initial_jobs.insert(j.id.clone(), Arc::new(RwLock::new(j)));
+            }
+        }
         Arc::new(Self {
-            jobs: RwLock::new(HashMap::new()),
+            db,
+            jobs: RwLock::new(initial_jobs),
             channels: RwLock::new(HashMap::new()),
             handles: RwLock::new(HashMap::new()),
         })
     }
 
+    pub fn new_in_memory() -> Arc<Self> {
+        let db = crate::db::Database::open_in_memory().expect("in-memory db");
+        Self::new(db)
+    }
+
+    pub fn db(&self) -> &crate::db::Database {
+        &self.db
+    }
+
     pub fn list(&self) -> Vec<Job> {
-        self.jobs
+        let in_mem: Vec<Job> = self
+            .jobs
             .read()
             .values()
             .map(|j| j.read().clone())
-            .collect()
+            .collect();
+        if !in_mem.is_empty() {
+            return in_mem;
+        }
+        self.db.list_jobs().unwrap_or_default()
     }
 
     pub fn get(&self, id: &str) -> Option<Job> {
-        self.jobs.read().get(id).map(|j| j.read().clone())
+        if let Some(j) = self.jobs.read().get(id) {
+            return Some(j.read().clone());
+        }
+        self.db.get_job(id).ok().flatten()
     }
 
     pub fn cancel(&self, id: &str) -> Result<()> {
         if let Some(h) = self.handles.read().get(id) {
             h.cancel.cancel();
+            #[cfg(unix)]
+            if let Some(pid) = h.pid {
+                unsafe {
+                    libc::kill(-(pid as i32), libc::SIGKILL);
+                    libc::kill(pid as i32, libc::SIGKILL);
+                }
+            }
+            if let Some(job_arc) = self.jobs.read().get(id) {
+                let mut j = job_arc.write();
+                j.status = JobStatus::Cancelled;
+                j.finished_ms = Some(now_ms());
+                let _ = self.db.upsert_job(&j, None);
+            }
+            Ok(())
+        } else if let Ok(Some(mut j)) = self.db.get_job(id) {
+            if j.status == JobStatus::Running || j.status == JobStatus::Queued {
+                j.status = JobStatus::Cancelled;
+                j.finished_ms = Some(now_ms());
+                let _ = self.db.upsert_job(&j, None);
+            }
             Ok(())
         } else {
-            Err(anyhow!("no running handle for job {id}"))
+            Err(anyhow!("no running handle or stored job for {id}"))
         }
     }
 
@@ -89,6 +136,9 @@ impl JobRegistry {
         cmd.stderr(Stdio::piped());
         cmd.stdin(Stdio::null());
 
+        #[cfg(unix)]
+        cmd.process_group(0);
+
         let cancel = CancellationToken::new();
         let cancel_for_handle = cancel.clone();
         let cancel_for_task = cancel.clone();
@@ -96,8 +146,11 @@ impl JobRegistry {
         let mut child: Child = cmd
             .spawn()
             .map_err(|e| anyhow!("failed to spawn process: {e}"))?;
+        let pid = child.id();
         job.started_ms = Some(now_ms());
         job.status = JobStatus::Running;
+
+        let _ = self.db.upsert_job(&job, None);
 
         let job_arc = Arc::new(RwLock::new(job));
         self.jobs.write().insert(id.clone(), job_arc.clone());
@@ -106,6 +159,7 @@ impl JobRegistry {
             id.clone(),
             JobHandle {
                 cancel: cancel_for_handle,
+                pid,
             },
         );
 
@@ -124,6 +178,7 @@ impl JobRegistry {
             job_arc_for_task.clone(),
             tx_clone.clone(),
             Some(model_kind.clone()),
+            registry.db.clone(),
         ));
         let stderr_task = tokio::spawn(read_stream(
             stderr,
@@ -131,6 +186,7 @@ impl JobRegistry {
             job_arc_for_task.clone(),
             tx_clone.clone(),
             None,
+            registry.db.clone(),
         ));
 
         tokio::spawn(async move {
@@ -153,6 +209,13 @@ impl JobRegistry {
                     JobStatus::Failed
                 }
                 None => {
+                    #[cfg(unix)]
+                    if let Some(p) = pid {
+                        unsafe {
+                            libc::kill(-(p as i32), libc::SIGTERM);
+                            libc::kill(p as i32, libc::SIGTERM);
+                        }
+                    }
                     let kill_error = child
                         .kill()
                         .await
@@ -186,6 +249,7 @@ impl JobRegistry {
                 let mut j = job_arc_for_task.write();
                 j.status = status.clone();
                 j.finished_ms = Some(now_ms());
+                let _ = registry.db.upsert_job(&j, None);
             }
 
             registry.handles.write().remove(&id_for_task);
@@ -232,6 +296,7 @@ async fn process_line(
     job_arc: &Arc<RwLock<Job>>,
     tx: &broadcast::Sender<JobEvent>,
     model_kind: &Option<ModelKind>,
+    db: &crate::db::Database,
 ) {
     let kind = determine_line_kind(default_kind, &raw);
     let entry = LogEntry {
@@ -245,8 +310,10 @@ async fn process_line(
     {
         let mut j = job_arc.write();
         maybe_update_best_loss(&mut j, &metric);
+        let job_snap = j.clone();
         drop(j);
         let _ = tx.send(JobEvent::Metric { metric });
+        let _ = db.upsert_job(&job_snap, None);
     }
 
     {
@@ -262,6 +329,7 @@ async fn read_stream<R: tokio::io::AsyncRead + Unpin + Send + 'static>(
     job_arc: Arc<RwLock<Job>>,
     tx: broadcast::Sender<JobEvent>,
     model_kind: Option<ModelKind>,
+    db: crate::db::Database,
 ) {
     let Some(mut reader) = reader else {
         return;
@@ -275,7 +343,7 @@ async fn read_stream<R: tokio::io::AsyncRead + Unpin + Send + 'static>(
             Ok(_) => {}
         }
         let raw = line.trim_end_matches(['\r', '\n']).to_string();
-        process_line(raw, &default_kind, &job_arc, &tx, &model_kind).await;
+        process_line(raw, &default_kind, &job_arc, &tx, &model_kind, &db).await;
     }
 }
 
@@ -315,7 +383,7 @@ fn parse_epoch_line(model: &ModelKind, line: &str) -> Option<EpochMetric> {
         }
     }
     let expected = match model {
-        ModelKind::Pinn | ModelKind::Gnn => 4,
+        ModelKind::Pinn | ModelKind::Gnn | ModelKind::GnnLocalization => 4,
         ModelKind::Siren => 3,
     };
     if pipe_count < expected {
@@ -384,6 +452,7 @@ fn build_train_command(workspace_root: &Path, spec: &TrainSpec) -> Command {
         ModelKind::Pinn => ModelKindDto::Pinn,
         ModelKind::Gnn => ModelKindDto::Gnn,
         ModelKind::Siren => ModelKindDto::Siren,
+        ModelKind::GnnLocalization => ModelKindDto::GnnLocalization,
     };
     let req = TrainingRequest {
         model,
@@ -398,11 +467,13 @@ fn build_train_command(workspace_root: &Path, spec: &TrainSpec) -> Command {
         holdout: spec.holdout.clone(),
         gpu_index: spec.gpu_index,
         knn_k: spec.knn_k,
-        hidden_dim: spec.hidden_dim,
+        hidden_dim: spec.hidden_dim.or(spec.latent_dim),
         max_group_size: None,
-        radius_pc: None,
+        radius_pc: spec.radius.map(|r| r as f32),
         texture_size: spec.texture_size,
         max_stars: spec.max_stars,
+        max_slots: spec.max_slots,
+        mask_ratio: spec.mask_ratio.map(|m| m as f32),
         seed: None,
         dataset_manifest_hash: None,
         patience: spec.patience,
@@ -424,6 +495,7 @@ fn build_validate_command(workspace_root: &Path, spec: &ValidateSpec) -> Command
         ModelKind::Pinn => ModelKindDto::Pinn,
         ModelKind::Gnn => ModelKindDto::Gnn,
         ModelKind::Siren => ModelKindDto::Siren,
+        ModelKind::GnnLocalization => ModelKindDto::GnnLocalization,
     };
     let req = EvaluationRequest {
         model,
@@ -441,11 +513,13 @@ fn build_validate_command(workspace_root: &Path, spec: &ValidateSpec) -> Command
         ModelKind::Pinn => "stellar_model.bpk",
         ModelKind::Gnn => "stellar_gnn_model.bpk",
         ModelKind::Siren => "stellar_siren_model.bpk",
+        ModelKind::GnnLocalization => "stellar_gnn_loc_model.bpk",
     };
     let norm = match spec.model {
         ModelKind::Pinn => "stellar_norm.json",
         ModelKind::Gnn => "stellar_gnn_norm.json",
         ModelKind::Siren => "stellar_siren_norm.json",
+        ModelKind::GnnLocalization => "stellar_gnn_loc_norm.json",
     };
     crate::ai_jobs::evaluate_command_from_spec(&eval, None, kind, norm)
 }
@@ -548,7 +622,7 @@ mod tests {
     fn train_spec(model: ModelKind) -> TrainSpec {
         let (knn_k, hidden_dim, texture_size, max_stars) = match model {
             ModelKind::Pinn => (None, None, None, None),
-            ModelKind::Gnn => (Some(7), Some(128), None, None),
+            ModelKind::Gnn | ModelKind::GnnLocalization => (Some(7), Some(128), None, None),
             ModelKind::Siren => (None, None, Some(96), Some(500)),
         };
         TrainSpec {
@@ -570,13 +644,17 @@ mod tests {
             patience: 12,
             grad_accum: 4,
             clip_grad_norm: 0.8,
+            radius: None,
+            max_slots: None,
+            mask_ratio: None,
+            latent_dim: None,
         }
     }
 
     fn validate_spec(model: ModelKind) -> ValidateSpec {
         let (hidden_dim, knn_k, texture_size, max_stars) = match model {
             ModelKind::Pinn => (None, None, None, None),
-            ModelKind::Gnn => (Some(128), Some(7), None, None),
+            ModelKind::Gnn | ModelKind::GnnLocalization => (Some(128), Some(7), None, None),
             ModelKind::Siren => (None, None, Some(96), Some(500)),
         };
         ValidateSpec {
@@ -590,6 +668,8 @@ mod tests {
             knn_k,
             texture_size,
             max_stars,
+            radius: None,
+            max_slots: None,
         }
     }
 
@@ -678,7 +758,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn cancellation_terminates_running_child() {
-        let registry = JobRegistry::new();
+        let registry = JobRegistry::new_in_memory();
         let mut command = Command::new("sleep");
         command.arg("30");
         let job = Job::new(

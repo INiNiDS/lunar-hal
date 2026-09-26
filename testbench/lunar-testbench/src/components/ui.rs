@@ -310,6 +310,7 @@ pub fn NumberFieldU32(label: String, value: Signal<u32>) -> Element {
             span { class: "field-label", "{label}" }
             input {
                 r#type: "number",
+                aria_label: "{label}",
                 value: "{value()}",
                 oninput: move |e| {
                     if let Ok(v) = e.value().parse::<u32>() {
@@ -328,6 +329,7 @@ pub fn NumberFieldF64(label: String, value: Signal<f64>, step: f64) -> Element {
             span { class: "field-label", "{label}" }
             input {
                 r#type: "number",
+                aria_label: "{label}",
                 step: "{step}",
                 value: "{value()}",
                 oninput: move |e| {
@@ -346,6 +348,7 @@ pub fn TextField(label: String, value: Signal<String>) -> Element {
         div { class: "field",
             span { class: "field-label", "{label}" }
             input {
+                aria_label: "{label}",
                 value: "{value()}",
                 oninput: move |e| value.set(e.value()),
             }

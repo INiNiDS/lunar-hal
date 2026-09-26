@@ -1,0 +1,92 @@
+{
+  "stage": 7,
+  "title": "Оптимизировать существующие модели и inference",
+  "approved_at": "2026-09-19",
+  "release_qualification": "not_qualified",
+  "evidence_scope": {
+    "trained_checkpoint_quality": false,
+    "hardware_provenance_attached": false,
+    "raw_performance_report_attached": false,
+    "note": "Parity and smoke suites use seeded/untrained models; historical latency and speedup fields lack reproducible hardware/run metadata."
+  },
+  "optimizations": [
+    {
+      "model": "pinn",
+      "feature": "fourier_frequency_cache",
+      "description": "Device-resident cached Fourier frequency buffer with fused broadcast multiply, eliminating per-forward frequency rebuilds and tensor copies.",
+      "before_ms": null,
+      "after_ms": null,
+      "speedup": null,
+      "allocations_saved_per_forward": null,
+      "measurement_status": "not_available",
+      "parity_diff": 0.0
+    },
+    {
+      "model": "gnn",
+      "feature": "sparse_edge_representation",
+      "description": "CSR GraphBatch representation and sparse message passing forward_sparse, scaling O(E) instead of dense O(N^2).",
+      "dense_forward_ms": null,
+      "sparse_forward_ms": null,
+      "speedup": null,
+      "peak_memory_reduction": null,
+      "measurement_status": "not_available",
+      "parity_tolerance": 0.0001
+    },
+    {
+      "model": "gnn",
+      "feature": "fast_knn_and_graph_cache",
+      "description": "Linear-time partial selection k-NN algorithm and thread-safe immutable GraphCache avoiding redundant reconstruction on static sectors.",
+      "cache_hit_latency_ms": null,
+      "measurement_status": "not_available",
+      "reconstruction_avoided": true
+    },
+    {
+      "model": "siren",
+      "feature": "chunked_texture_inference",
+      "description": "forward_chunked with bounded chunk size (1024-4096 rows), bounding peak VRAM during high-resolution texture generation.",
+      "memory_bound_bytes": "chunk_size * input_dim * sizeof(f32)",
+      "parity_diff": 0.0
+    },
+    {
+      "component": "lunar-backend",
+      "feature": "bounded_worker_dynamic_batching",
+      "description": "Bounded channel worker per device (capacity 1024) with backpressure and 5ms dynamic batching window.",
+      "max_dynamic_batch": 256,
+      "backpressure_active": true
+    }
+  ],
+  "suites": [
+    {
+      "file": "ai/lnai-training/tests/fourier_cache_parity.rs",
+      "status": "passed"
+    },
+    {
+      "file": "ai/lnai-training/tests/gnn_sparse_parity.rs",
+      "status": "passed"
+    },
+    {
+      "file": "ai/lnai-training/tests/pinn_sweep.rs",
+      "status": "passed"
+    },
+    {
+      "file": "ai/lnai-training/tests/profile_breakdown.rs",
+      "status": "passed"
+    },
+    {
+      "file": "ai/lnai-training/tests/stage7_baseline.rs",
+      "status": "passed"
+    }
+  ],
+  "gates": {
+    "finite": "all model outputs, metrics, and residuals strictly finite",
+    "deterministic": "all cached, sparse, and chunked inference operations reproduce identically across repeated evaluations",
+    "parity": "Fourier cache bitwise identical (diff == 0.0); GNN sparse vs dense diff < 1e-4; SIREN chunked bitwise identical",
+    "accuracy_gate": "not evaluated on trained checkpoints; synthetic/untrained sweeps are not a model-quality gate"
+  },
+  "exit_gate": {
+    "performance_improved": "not_verified: historical speedup values lack hardware identity and raw benchmark output",
+    "accuracy_calibration": "not_verified: parity tests do not evaluate trained checkpoint accuracy",
+    "peak_memory_bounded": "implementation paths exist, but no reproducible peak-memory report is attached",
+    "p95_p99_documented": "not_verified: synthetic profiling budgets are not a reproducible serving-profile report"
+  }
+}

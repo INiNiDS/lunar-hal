@@ -1,10 +1,11 @@
-//! The WebOS shell: a single-room desktop scene (lamp + desktop launchers + dock +
+//! The Lunar-OS shell: a single-room desktop scene (lamp + desktop launchers + dock +
 //! floating windows) that replaces the old sidebar/router navigation. See
 //! `state.rs` for the shared reactive state.
 //!
 //! There is deliberately no separate taskbar: the dock is the single place that
 //! lists apps, shows which ones are open, and restores minimized windows.
 
+pub mod app_host;
 pub mod category_lamp;
 pub mod desktop;
 pub mod dock;
@@ -12,21 +13,27 @@ pub mod lamp;
 pub mod led;
 pub mod log_window;
 pub mod manifest;
+pub mod ram;
 pub mod room;
 pub mod service_settings;
+pub mod snapshot;
 pub mod state;
-pub mod window;
-pub mod window_manager;
-pub mod app_host;
-pub mod ram;
 pub mod state_inventory;
 pub mod viewport;
-pub mod snapshot;
+pub mod window;
+pub mod window_manager;
 
-pub use ram::{LunarOsRamEntryV1, RamEntryState};
+pub use ram::{
+    LunarOsRamEntry, LunarOsRamEntryV1, LunarOsRamStore, RamEntryState, RamLifecycleState,
+};
+pub use snapshot::{AppSnapshot, AppSnapshotEnvelopeV1, WindowGeometry, WindowSnapshotV1};
 
 pub use room::Room;
-pub use state::{BootPhase, DragKind, OsState, WindowState, use_os_state, WindowRuntimeContext, WindowLifecycle};
+pub use state::{
+    BootPhase, DragKind, OsState, WindowLifecycle, WindowRuntimeContext, WindowState, use_os_state,
+    use_window_instance_id, use_window_instance_snapshot, use_window_lifecycle, use_window_runtime,
+    use_window_snapshot_payload,
+};
 
 /// Current browser viewport size in CSS pixels, used for maximize/snap math.
 /// Falls back to a reasonable desktop default if unavailable.

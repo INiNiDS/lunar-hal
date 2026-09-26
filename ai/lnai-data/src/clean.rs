@@ -216,17 +216,22 @@ fn mat_vec(m: &[[f64; 3]; 3], v: &[f64; 3]) -> [f64; 3] {
 
 /// Galactic-frame Cartesian position in parsecs, when parallax allows it.
 pub fn galactic_position_pc(ra_deg: f64, dec_deg: f64, parallax_mas: f64) -> Option<[f32; 3]> {
-    if parallax_mas <= 0.0 {
+    if parallax_mas <= 0.0
+        || !parallax_mas.is_finite()
+        || !ra_deg.is_finite()
+        || !dec_deg.is_finite()
+    {
         return None;
     }
     let d_pc = 1000.0 / parallax_mas;
     let r = icrs_unit_vector(ra_deg, dec_deg);
     let g = mat_vec(&ICRS_TO_GALACTIC, &r);
-    Some([
-        ((g[0] * d_pc) as f32),
+    let position = [
+        (g[0] * d_pc) as f32,
         (g[1] * d_pc) as f32,
         (g[2] * d_pc) as f32,
-    ])
+    ];
+    position.iter().all(|v| v.is_finite()).then_some(position)
 }
 
 /// Galactic-frame Cartesian velocity in km/s from proper motion + radial
@@ -279,12 +284,11 @@ pub fn clean_records(mut records: Vec<StarRecord>, policy: &CleanPolicy) -> Vec<
             (Some(ruwe), Some(aen)) => {
                 (ruwe as f64) < policy.max_ruwe
                     && (aen as f64) < policy.max_astrometric_excess_noise
-                    && r.ra_deg.is_finite()
-                    && r.dec_deg.is_finite()
             }
             (Some(ruwe), None) => (ruwe as f64) < policy.max_ruwe,
             _ => false,
-        };
+        } && r.ra_deg.is_finite()
+            && r.dec_deg.is_finite();
         r.x_pc = None;
         r.y_pc = None;
         r.z_pc = None;
@@ -312,6 +316,7 @@ pub fn clean_records(mut records: Vec<StarRecord>, policy: &CleanPolicy) -> Vec<
                 }
             }
         }
+        r.is_valid &= r.x_pc.is_some() && r.y_pc.is_some() && r.z_pc.is_some();
     }
     dedup_by_source_id(records)
 }

@@ -1,12 +1,63 @@
 use dioxus::prelude::*;
+use serde::{Deserialize, Serialize};
 
 use crate::api::{self, LogLevel};
-use crate::os::use_os_state;
+use crate::os::{AppSnapshot, use_os_state, use_window_instance_id, use_window_instance_snapshot};
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct LogWindowSnapshot {
+    pub service: String,
+    pub scroll_offset: f64,
+}
+
+impl Default for LogWindowSnapshot {
+    fn default() -> Self {
+        Self {
+            service: String::new(),
+            scroll_offset: 0.0,
+        }
+    }
+}
+
+impl AppSnapshot for LogWindowSnapshot {
+    fn capture_snapshot(&self) -> serde_json::Value {
+        serde_json::to_value(self).unwrap_or(serde_json::Value::Null)
+    }
+
+    fn hydrate_snapshot(&mut self, payload: &serde_json::Value) -> Result<(), String> {
+        let snap: LogWindowSnapshot = serde_json::from_value(payload.clone())
+            .map_err(|e| format!("LogWindow hydration failed: {e}"))?;
+        *self = snap;
+        Ok(())
+    }
+}
 
 /// Terminal-style log viewer hosted inside a normal OS window.
 #[component]
 pub fn LogWindow(service: String) -> Element {
     let mut os = use_os_state();
+    let initial =
+        use_window_instance_snapshot::<LogWindowSnapshot>().unwrap_or_else(|| LogWindowSnapshot {
+            service: service.clone(),
+            scroll_offset: 0.0,
+        });
+    let scroll_offset = use_signal(|| initial.scroll_offset);
+    let app_id = format!("log:{service}");
+
+    {
+        let svc_for_snapshot = service.clone();
+        use_effect(move || {
+            let snap = LogWindowSnapshot {
+                service: svc_for_snapshot.clone(),
+                scroll_offset: scroll_offset(),
+            };
+            if let Some(inst_id) = use_window_instance_id() {
+                os.register_instance_snapshot(&inst_id, snap.capture_snapshot());
+            }
+            os.register_app_snapshot(&app_id, snap.capture_snapshot());
+        });
+    }
+
     let svc = service.clone();
 
     use_effect(move || {

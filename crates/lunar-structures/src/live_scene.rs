@@ -105,7 +105,15 @@ pub struct ClearSceneRequest {
 #[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum FrontendUiEvent {
-    Selection { scene_id: String, star_id: Option<u32> },
-    DragStarted { scene_id: String, star_id: u32 },
-    FocusRequested { scene_id: String },
+    Selection {
+        scene_id: String,
+        star_id: Option<u32>,
+    },
+    DragStarted {
+        scene_id: String,
+        star_id: u32,
+    },
+    FocusRequested {
+        scene_id: String,
+    },
 }

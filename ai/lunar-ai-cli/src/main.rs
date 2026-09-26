@@ -876,10 +876,15 @@ fn training_spec_from_opts(
             }),
         ),
     };
+    let dataset_manifest_hash = if opts.dataset_manifest_hash.trim().is_empty() {
+        lnai_training::artifacts::dataset_fingerprint(&data_path)?
+    } else {
+        opts.dataset_manifest_hash.to_string()
+    };
     let spec = TrainingSpec {
         model,
         config,
-        dataset_manifest_hash: opts.dataset_manifest_hash.to_string(),
+        dataset_manifest_hash,
         data_path: Some(data_path.display().to_string()),
         epochs: opts.epochs as u32,
         batch_size: opts.batch_size as u32,
@@ -909,9 +914,7 @@ fn training_spec_from_opts(
             ),
             CliModel::Pinn | CliModel::Siren => {
                 if opts.agent_every.is_some_and(|n| n > 0) || opts.agent_dry_run {
-                    println!(
-                        "note: epoch-watch agent is GNN-only for now; ignoring agent flags"
-                    );
+                    println!("note: epoch-watch agent is GNN-only for now; ignoring agent flags");
                 }
                 None
             }
@@ -950,7 +953,12 @@ fn agent_hook_from_opts(
 /// Spawns `opencode run` (default build agent, full tools) pointed at a
 /// stopped training output dir. Prints the agent's verdict and exits with
 /// ITS exit code; fixing happens inside the agent session.
-fn run_agent_fix(dir: &str, model: &str, message: Option<String>, auto_approve: bool) -> Result<()> {
+fn run_agent_fix(
+    dir: &str,
+    model: &str,
+    message: Option<String>,
+    auto_approve: bool,
+) -> Result<()> {
     use std::process::Command;
     let output_dir = PathBuf::from(dir);
     if !output_dir.join("events.ndjson").exists() {
@@ -974,12 +982,16 @@ fn run_agent_fix(dir: &str, model: &str, message: Option<String>, auto_approve: 
          train command to restart from scratch.",
         out = output_dir.display(),
     );
-    println!("Spawning fixer agent (model {model}) over {} ...", output_dir.display());
+    println!(
+        "Spawning fixer agent (model {model}) over {} ...",
+        output_dir.display()
+    );
     if auto_approve {
         println!("NOTE: --auto-approve is on: the agent may edit files and run commands.");
     }
     let mut cmd = Command::new("opencode");
-    cmd.args(["run", "--model", model, "--dir", "."]).arg(&prompt);
+    cmd.args(["run", "--model", model, "--dir", "."])
+        .arg(&prompt);
     if auto_approve {
         cmd.arg("--auto");
     }
@@ -1103,6 +1115,10 @@ fn run_train(opts: &TrainOptions<'_>) -> Result<()> {
         worker_spec.resume_from = Some(output_path.display().to_string());
     }
     let mut cmd = Command::new(&worker);
+    cmd.env(
+        "LUNAR_AI_DATASET_MANIFEST_HASH",
+        &worker_spec.dataset_manifest_hash,
+    );
     for arg in worker_spec.worker_argv() {
         // worker_argv carries `--data ""` when unset; the resolved path wins.
         if arg.is_empty() {
@@ -1154,11 +1170,16 @@ fn run_evaluate_cmd(
     let data_path = resolve_data_path(data)
         .ok()
         .map(|p| p.display().to_string());
+    let dataset_manifest_hash = data_path
+        .as_deref()
+        .map(|path| lnai_training::artifacts::dataset_fingerprint(Path::new(path)))
+        .transpose()?
+        .unwrap_or_default();
     let spec = EvaluationSpec {
         model: kind,
         artifact_hash: sha256_file(&output_path.join(model_file).display().to_string())
             .unwrap_or_default(),
-        dataset_manifest_hash: String::new(),
+        dataset_manifest_hash,
         data_path,
         batch_size: batch_size as u32,
         output_dir: output_dir.to_string(),
@@ -1168,6 +1189,10 @@ fn run_evaluate_cmd(
         .map_err(|errs| anyhow!("invalid evaluation spec: {}", errs.join("; ")))?;
     let worker = find_lnai_binary(None, model)?;
     let mut cmd = Command::new(&worker);
+    cmd.env(
+        "LUNAR_AI_DATASET_MANIFEST_HASH",
+        &spec.dataset_manifest_hash,
+    );
     for arg in spec.worker_argv(holdout) {
         if arg.is_empty() {
             continue;
@@ -2261,12 +2286,7 @@ fn collect_gaia_sample_rows_from_parquet(
         let series = df
             .column("source_id")
             .map_err(|_| anyhow!("column source_id required"))?;
-        Ok(series
-            .str()?
-            .iter()
-            .flatten()
-            .map(String::from)
-            .collect())
+        Ok(series.str()?.iter().flatten().map(String::from).collect())
     };
 
     let ra = col_req_f64("ra_deg")?;

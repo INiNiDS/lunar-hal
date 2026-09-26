@@ -86,7 +86,7 @@ pub fn crossmatch_candidate(
     gaia_id_of_candidate: Option<&str>,
     candidate_position: (f64, f64),
     candidate_epoch_year: f64,
-    candidate_pm: (Option<f64>, Option<f64>),
+    _candidate_pm: (Option<f64>, Option<f64>),
     gaia_rows: &[CrossmatchCandidate<'_>],
     tolerance_arcsec: f64,
 ) -> CrossmatchOutcome {

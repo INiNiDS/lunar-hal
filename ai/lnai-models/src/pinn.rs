@@ -1,6 +1,9 @@
 use burn::nn::{LayerNorm, LayerNormConfig, Linear, LinearConfig};
 use burn::prelude::*;
+use std::any::Any;
+use std::collections::HashMap;
 use std::f32::consts::PI;
+use std::sync::{Mutex, OnceLock};
 
 pub const FOURIER_LEVELS: usize = 8;
 pub const FOURIER_DIM: usize = 3 * 2 * FOURIER_LEVELS;
@@ -28,6 +31,56 @@ pub fn fourier_encode<B: Backend>(xyz: Tensor<B, 2>, num_levels: usize) -> Tenso
     }
 
     Tensor::cat(all_features, 1)
+}
+
+/// Stage 7: device-resident cache of the Fourier frequency row `[1, L]`.
+/// The frequencies depend only on `num_levels`, so rebuilding them per
+/// forward wastes a host allocation plus a host→device copy on every
+/// call. One buffer per (backend, device, levels) is shared by all
+/// forwards. Deliberately kept outside [`StellarMlp`]: a module field
+/// would change the checkpoint layout and invalidate existing `.bpk`
+/// artifacts, while this cache is purely a performance detail.
+static FOURIER_FREQ_CACHE: OnceLock<Mutex<HashMap<String, Box<dyn Any + Send>>>> = OnceLock::new();
+
+fn fourier_freq_row<B>(device: &B::Device, num_levels: usize) -> Tensor<B, 2>
+where
+    B: Backend,
+    Tensor<B, 2>: Send + 'static,
+{
+    let key = format!("{}|{num_levels}|{:?}", std::any::type_name::<B>(), device);
+    let cache = FOURIER_FREQ_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut guard = cache.lock().expect("fourier freq cache poisoned");
+    if let Some(hit) = guard
+        .get(&key)
+        .and_then(|b| b.downcast_ref::<Tensor<B, 2>>())
+    {
+        return hit.clone();
+    }
+    let freqs: Vec<f32> = (0..num_levels).map(|l| 2f32.powi(l as i32) * PI).collect();
+    let row = Tensor::<B, 1>::from_data(TensorData::new(freqs, [num_levels]), device)
+        .reshape([1, num_levels]);
+    guard.insert(key, Box::new(row.clone()));
+    row
+}
+
+/// Stage 7: cached-buffer Fourier encoding, numerically identical to
+/// [`fourier_encode`] (same row-major `[sin..., cos...]` layout per
+/// coordinate) but with one broadcast multiply instead of a per-dim
+/// loop, no per-call frequency rebuild, and no tensor clones.
+pub fn fourier_encode_cached<B>(xyz: Tensor<B, 2>, num_levels: usize) -> Tensor<B, 2>
+where
+    B: Backend,
+    Tensor<B, 2>: Send + 'static,
+{
+    let device = xyz.device();
+    let [batch, _] = xyz.dims();
+    let freq_row = fourier_freq_row::<B>(&device, num_levels);
+    // [N,3] -> [3N,1], one broadcast multiply -> [3N,L].
+    let flat = xyz.reshape([batch * 3, 1]);
+    let scaled = flat * freq_row;
+    let sin_f = scaled.clone().sin();
+    let cos_f = scaled.cos();
+    Tensor::cat(vec![sin_f, cos_f], 1).reshape([batch, 3 * 2 * num_levels])
 }
 
 #[derive(Module, Debug)]
@@ -93,12 +146,19 @@ impl<B: Backend> StellarMlp<B> {
     /// # Shapes
     ///   - Input [batch_size, 5]: (x, y, z, bp_rp, M_G) where M_G = g_mag - 5*log10(d) + 5
     ///   - Output [batch_size, 4]: (log10_teff, log10_rad, log10_mass, log10_lum) in normalized space
-    pub fn forward(&self, xs: Tensor<B, 2>) -> Tensor<B, 2> {
+    ///
+    /// Stage 7: Fourier features come from the device-resident cache
+    /// ([`fourier_encode_cached`]); numerics are identical to the legacy
+    /// [`fourier_encode`] path (pinned by unit test).
+    pub fn forward(&self, xs: Tensor<B, 2>) -> Tensor<B, 2>
+    where
+        Tensor<B, 2>: Send + 'static,
+    {
         let [batch, _] = xs.dims();
         let xyz = xs.clone().slice([0..batch, 0..3]);
         let cond = xs.slice([0..batch, 3..5]);
 
-        let fourier = fourier_encode(xyz, FOURIER_LEVELS);
+        let fourier = fourier_encode_cached(xyz, FOURIER_LEVELS);
         let mlp_input = Tensor::cat(vec![fourier, cond], 1);
 
         let h1 = burn::tensor::activation::silu(self.ln1.forward(self.fc1.forward(mlp_input)));

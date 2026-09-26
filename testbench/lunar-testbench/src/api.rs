@@ -174,9 +174,9 @@ async fn get_ok(base: &str, path: &str) -> Result<(), String> {
 
 pub use lunar_structures::{
     ClearSceneRequest, CreateGalleryStarRequest, CreateSceneStarRequest, CreateStarSceneRequest,
-    GalleryListResponse, GallerySource, GalleryStar, GenerateSceneStarsRequest,
-    LiveSceneSnapshot, ResponseStar, StarModelInputs, StarSceneListResponse,
-    UpdateGalleryStarRequest, UpdateSceneStarRequest,
+    GalleryListResponse, GallerySource, GalleryStar, GenerateSceneStarsRequest, LiveSceneSnapshot,
+    ResponseStar, StarModelInputs, StarSceneListResponse, UpdateGalleryStarRequest,
+    UpdateSceneStarRequest,
 };
 
 pub use lunar_structures_testbench::{
@@ -397,6 +397,42 @@ pub async fn start_train(spec: &TrainSpec) -> Result<Job, String> {
 
 pub async fn start_validate(spec: &ValidateSpec) -> Result<Job, String> {
     post_json(&get_testbench_url(), "/jobs/validate", spec).await
+}
+
+pub async fn start_training(
+    req: &lunar_structures_testbench::typed::TrainingRequest,
+) -> Result<Job, String> {
+    post_json(&get_testbench_url(), "/jobs/training", req).await
+}
+
+pub async fn start_evaluation(
+    req: &lunar_structures_testbench::typed::EvaluationRequest,
+) -> Result<Job, String> {
+    post_json(&get_testbench_url(), "/jobs/evaluation", req).await
+}
+
+pub async fn start_benchmark(
+    req: &lunar_structures_testbench::typed::BenchmarkRequest,
+) -> Result<Job, String> {
+    post_json(&get_testbench_url(), "/jobs/benchmark", req).await
+}
+
+pub async fn list_reports() -> Result<Vec<lunar_structures_testbench::ReportRecord>, String> {
+    get_json(&get_testbench_url(), "/reports").await
+}
+
+pub async fn get_report(id: &str) -> Result<lunar_structures_testbench::ReportRecord, String> {
+    get_json(&get_testbench_url(), &format!("/reports/{id}")).await
+}
+
+pub async fn create_report(
+    payload: &serde_json::Value,
+) -> Result<lunar_structures_testbench::ReportRecord, String> {
+    post_json(&get_testbench_url(), "/reports", payload).await
+}
+
+pub fn job_events_url(id: &str) -> String {
+    format!("{}/jobs/events/{id}", get_testbench_url())
 }
 
 pub async fn cancel_job(id: &str) -> Result<(), String> {
@@ -642,7 +678,6 @@ pub async fn backend_proxy(
     }
     serde_json::from_str(&text).map_err(err_to_string)
 }
-
 
 async fn patch_json<B: Serialize, T: DeserializeOwned>(
     base: &str,

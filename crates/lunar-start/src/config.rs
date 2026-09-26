@@ -255,7 +255,6 @@ pub mod presets {
             cfg.apply_values(defaults.to_values());
             cfg
         }
-
     }
 
     impl LauncherConfig {
@@ -301,7 +300,6 @@ pub mod presets {
         pub fn for_frontend() -> Self {
             Self::new(workspace_root()).with_service(ServiceConfig::frontend())
         }
-
     }
 }
 

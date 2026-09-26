@@ -35,12 +35,8 @@ pub const AP_COVERAGE_FILE: &str = "ap_coverage.json";
 pub const AP_ENRICHED_FILE: &str = "enriched.parquet";
 
 /// Astrophysical-parameter output columns (canonical names, all nullable).
-pub const AP_OUTPUT_COLUMNS: [&str; 4] = [
-    "teff_gspphot",
-    "radius_gspphot",
-    "mass_flame",
-    "lum_flame",
-];
+pub const AP_OUTPUT_COLUMNS: [&str; 4] =
+    ["teff_gspphot", "radius_gspphot", "mass_flame", "lum_flame"];
 
 /// ADQL for one ID chunk. `source_id` is returned as varchar so the join key
 /// matches the canonical parquet byte-for-byte (no int/string juggling).
@@ -91,8 +87,8 @@ impl ApChunkManifest {
     }
 
     pub fn load(path: &Path) -> Result<Self, String> {
-        let raw =
-            std::fs::read_to_string(path).map_err(|e| format!("read manifest {}: {e}", path.display()))?;
+        let raw = std::fs::read_to_string(path)
+            .map_err(|e| format!("read manifest {}: {e}", path.display()))?;
         serde_json::from_str(&raw).map_err(|e| format!("parse manifest {}: {e}", path.display()))
     }
 
@@ -209,12 +205,10 @@ fn write_ap_part(path: &Path, rows: &[ApRow]) -> Result<(), String> {
     ]
     .map_err(|e| format!("build AP part frame: {e}"))?;
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+        std::fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
     }
     let tmp = path.with_extension("tmp");
-    let file =
-        std::fs::File::create(&tmp).map_err(|e| format!("create {}: {e}", tmp.display()))?;
+    let file = std::fs::File::create(&tmp).map_err(|e| format!("create {}: {e}", tmp.display()))?;
     ParquetWriter::new(file)
         .finish(&mut df)
         .map_err(|e| format!("write AP part {}: {e}", tmp.display()))?;
@@ -304,14 +298,13 @@ fn fetch_chunk_with_retry(
     for attempt in 1..=attempts {
         match fetch_ap_post(client, sync_url, user, pass, &query, &csv_path) {
             Ok(()) => {
-                let text = std::fs::read_to_string(&csv_path)
-                    .map_err(|e| format!("read TAP csv: {e}"))?;
+                let text =
+                    std::fs::read_to_string(&csv_path).map_err(|e| format!("read TAP csv: {e}"))?;
                 match parse_ap_csv(&text) {
                     Ok(rows) => {
                         if rows.len() as u64 > ids.len() as u64 {
-                            last_err = format!(
-                                "chunk {idx}: server returned more rows than requested"
-                            );
+                            last_err =
+                                format!("chunk {idx}: server returned more rows than requested");
                         } else {
                             let n = rows.len() as u64;
                             write_ap_part(&part_path_by_dir(parts_dir, idx), &rows)?;
@@ -377,11 +370,7 @@ fn fetch_ap_post(
 fn short_err(e: &dyn std::fmt::Display) -> String {
     let s = e.to_string();
     if s.len() > 300 {
-        format!(
-            "{}...[truncated {} chars]",
-            &s[..300],
-            s.len() - 300
-        )
+        format!("{}...[truncated {} chars]", &s[..300], s.len() - 300)
     } else {
         s
     }
@@ -477,9 +466,9 @@ pub fn run_enrich_ap(cfg: &ApEnrichConfig) -> Result<ApCoverageReport, String> {
             total_chunks,
         )
     };
-    manifest.completed_chunks.retain(|&i| {
-        i < total_chunks && part_path(&cfg.out_dir, i).exists()
-    });
+    manifest
+        .completed_chunks
+        .retain(|&i| i < total_chunks && part_path(&cfg.out_dir, i).exists());
     manifest.failed_chunks.retain(|&i| i < total_chunks);
     manifest.save(&manifest_path)?;
 
@@ -487,7 +476,11 @@ pub fn run_enrich_ap(cfg: &ApEnrichConfig) -> Result<ApCoverageReport, String> {
         let pending: Vec<u64> = (0..total_chunks)
             .filter(|i| !manifest.is_complete(*i))
             .collect();
-        println!("AP enrich: {} chunks pending, {} already done", pending.len(), manifest.completed_chunks.len());
+        println!(
+            "AP enrich: {} chunks pending, {} already done",
+            pending.len(),
+            manifest.completed_chunks.len()
+        );
         if !pending.is_empty() {
             let sync_url = cfg
                 .sync_url
@@ -605,8 +598,8 @@ pub fn run_enrich_ap(cfg: &ApEnrichConfig) -> Result<ApCoverageReport, String> {
     )
     .with_column(col("source_id").cast(DataType::String));
 
-    let canon_lf = scan_one_parquet(&cfg.data_path)?
-        .with_column(col("source_id").cast(DataType::String));
+    let canon_lf =
+        scan_one_parquet(&cfg.data_path)?.with_column(col("source_id").cast(DataType::String));
 
     let join_output = cfg
         .join_output

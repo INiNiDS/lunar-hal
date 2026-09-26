@@ -1,9 +1,10 @@
-pub mod artifacts;
 pub mod agent;
+pub mod artifacts;
 pub mod e2e;
 pub mod evaluation;
 pub mod events;
 pub mod gnn;
+pub mod localization;
 pub mod metrics;
 pub mod pinn;
 pub mod report;

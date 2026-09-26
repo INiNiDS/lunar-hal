@@ -5,8 +5,8 @@
 //! base URL, the client is constructed by [`Game`].
 
 use lunar_structures::{
-    CreateStarSceneRequest, GnnResponse, PipelineRequest, PipelineResponse, RandomStarRequest,
-    RandomStarResponse, SectorRequest, LiveSceneSnapshot, StarScene, StarSceneListResponse,
+    CreateStarSceneRequest, GnnResponse, LiveSceneSnapshot, PipelineRequest, PipelineResponse,
+    RandomStarRequest, RandomStarResponse, SectorRequest, StarScene, StarSceneListResponse,
 };
 use lunar_utils::env::get_url;
 use parking_lot::RwLock;

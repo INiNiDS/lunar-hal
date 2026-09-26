@@ -36,10 +36,20 @@ pub fn AppHost(window_id: u64, app_id: String, minimized: bool, title: String) -
         }
     });
 
+    let snapshot_payload = os
+        .windows
+        .read()
+        .iter()
+        .find(|w| w.id == window_id)
+        .and_then(|w| w.snapshot_payload.clone());
+
+    let instance_id = format!("win-{}", window_id);
     use_context_provider(|| WindowRuntimeContext {
         window_id,
+        instance_id,
         app_id: app_id.clone(),
         lifecycle,
+        snapshot_payload,
     });
 
     rsx! {

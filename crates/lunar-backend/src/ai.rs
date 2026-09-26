@@ -1,9 +1,10 @@
-use anyhow::Result;
+use anyhow::{Context, Result, bail};
 use burn::prelude::*;
 use burn_store::{BurnpackStore, ModuleSnapshot};
 use lnai_models::{
-    GNN_INPUT_DIM, GNN_OUTPUT_DIM, GNN_VARIATIONAL_DIM, GnnHeadKind, StellarGnn, StellarGnnConfig,
-    StellarMlp, StellarMlpConfig, compute_knn_adjacency, split_mean_logvar,
+    GNN_INPUT_DIM, GNN_LOC_INPUT_DIM, GNN_OUTPUT_DIM, GNN_VARIATIONAL_DIM, GnnHeadKind, StellarGnn,
+    StellarGnnConfig, StellarGnnLocalization, StellarGnnLocalizationConfig, StellarMlp,
+    StellarMlpConfig, density_poisson_baseline, split_mean_logvar,
 };
 #[cfg(feature = "siren")]
 use lnai_models::{SIREN_INPUT_DIM, StellarSiren, StellarSirenConfig};
@@ -11,7 +12,12 @@ use lnai_training::artifacts::{
     RegisteredArtifact, RegistryStatus, manifest_file_name, scan_model_registry,
     verify_manifest_against_files,
 };
+use lnai_training::localization::LocalizationNorm;
 use lnai_training::spec::ModelKind;
+use lunar_structures::{
+    LocalizationRequest, LocalizationResponse, LocalizedStarWithPhysics, PinnResponse,
+    PipelineLocalizePhysicsRequest, PipelineLocalizePhysicsResponse, StarCandidate,
+};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::{OnceCell, RwLock};
@@ -31,9 +37,6 @@ type B = burn::backend::Metal;
     feature = "rocm"
 ))]
 type B = burn::backend::Rocm;
-
-static PINN_MODEL: &[u8] = include_bytes!("../../../models/stellar_model.bpk");
-static STELLAR_NORM: &str = include_str!("../../../models/stellar_norm.json");
 
 #[derive(Deserialize)]
 pub struct StellarNorm {
@@ -60,34 +63,96 @@ pub struct StellarNorm {
 pub struct PinnModel {
     pub model: StellarMlp<B>,
     pub device: Device<B>,
-    pub(crate) norm: StellarNorm,
+    pub norm: StellarNorm,
+    pub model_hash: String,
+    pub norm_hash: String,
 }
 
-static PINN: OnceCell<Arc<PinnModel>> = OnceCell::const_new();
+static PINN: RwLock<Option<Arc<PinnModel>>> = RwLock::const_new(None);
 
-pub async fn get_pinn() -> Arc<PinnModel> {
-    PINN.get_or_init(|| async {
-        let device: Device<B> = Default::default();
-        let model = load_pinn(&device);
-        let norm: StellarNorm =
-            serde_json::from_str(STELLAR_NORM).expect("failed to parse stellar_norm.json");
-        Arc::new(PinnModel {
-            model,
-            device,
-            norm,
-        })
-    })
-    .await
-    .clone()
+pub async fn get_pinn() -> Result<Arc<PinnModel>> {
+    if let Some(pinn) = PINN.read().await.clone() {
+        return Ok(pinn);
+    }
+    let mut current = PINN.write().await;
+    if let Some(pinn) = current.as_ref() {
+        return Ok(pinn.clone());
+    }
+    let pinn = load_pinn(&get_lunar_models_dir())?;
+    *current = Some(pinn.clone());
+    Ok(pinn)
 }
 
-fn load_pinn(device: &Device<B>) -> StellarMlp<B> {
-    let mut model = StellarMlpConfig::new().init(device);
-    let mut store = BurnpackStore::from_static(PINN_MODEL);
+fn load_pinn(models_dir: &std::path::Path) -> Result<Arc<PinnModel>> {
+    let manifest =
+        check_serving_manifest(models_dir, &ModelKind::Pinn).map_err(anyhow::Error::msg)?;
+    let norm: StellarNorm =
+        serde_json::from_slice(&std::fs::read(models_dir.join("stellar_norm.json"))?)?;
+    let device: Device<B> = Default::default();
+    let mut model = StellarMlpConfig::new().init(&device);
+    let path = models_dir.join("stellar_model.bpk");
+    let mut store = BurnpackStore::from_file(&*path.to_string_lossy());
     model
         .load_from(&mut store)
-        .expect("failed to load stellar model from burnpack");
-    model
+        .context("failed to load PINN model from burnpack")?;
+    verify_manifest_against_files(models_dir, &manifest)?;
+    Ok(Arc::new(PinnModel {
+        model,
+        device,
+        norm,
+        model_hash: manifest.model_hash,
+        norm_hash: manifest.norm_hash,
+    }))
+}
+
+pub async fn loaded_pinn_hashes() -> Option<(String, String)> {
+    PINN.read()
+        .await
+        .as_ref()
+        .map(|pinn| (pinn.model_hash.clone(), pinn.norm_hash.clone()))
+}
+
+#[derive(Clone, Serialize)]
+pub struct LoadedModelIdentity {
+    pub kind: &'static str,
+    pub model_hash: String,
+    pub norm_hash: String,
+}
+
+pub async fn loaded_model_identities() -> Vec<LoadedModelIdentity> {
+    let mut active = Vec::new();
+    if let Some((model_hash, norm_hash)) = loaded_pinn_hashes().await {
+        active.push(LoadedModelIdentity {
+            kind: "pinn",
+            model_hash,
+            norm_hash,
+        });
+    }
+    if let Some(gnn) = GNN.read().await.as_ref() {
+        active.push(LoadedModelIdentity {
+            kind: "gnn_kinematics",
+            model_hash: gnn.model_hash.clone(),
+            norm_hash: gnn.norm_hash.clone(),
+        });
+    }
+    if localization_enabled() {
+        if let Some(loc) = GNN_LOCALIZATION.read().await.as_ref() {
+            active.push(LoadedModelIdentity {
+                kind: "gnn_localization",
+                model_hash: loc.model_hash.clone(),
+                norm_hash: loc.norm_hash.clone(),
+            });
+        }
+    }
+    #[cfg(feature = "siren")]
+    if let Some(siren) = SIREN_MODEL.read().await.as_ref() {
+        active.push(LoadedModelIdentity {
+            kind: "siren",
+            model_hash: siren.model_hash.clone(),
+            norm_hash: siren.norm_hash.clone(),
+        });
+    }
+    active
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -184,16 +249,139 @@ pub fn pinn_infer_batch(
         .collect()
 }
 
-pub async fn infer_pinn_batch_async(inputs: Vec<PinnInputs>) -> Vec<[f32; 4]> {
+/// Stage 7: Bounded worker per device with backpressure and short dynamic batching window.
+struct PinnRequest {
+    inputs: Vec<PinnInputs>,
+    responder: tokio::sync::oneshot::Sender<Result<Vec<[f32; 4]>, String>>,
+}
+
+static PINN_QUEUE: OnceCell<tokio::sync::mpsc::Sender<PinnRequest>> = OnceCell::const_new();
+
+const PINN_QUEUE_CAPACITY: usize = 1024;
+const DYNAMIC_BATCH_WINDOW: std::time::Duration = std::time::Duration::from_millis(5);
+const MAX_DYNAMIC_BATCH_SIZE: usize = 256;
+
+async fn get_pinn_queue() -> tokio::sync::mpsc::Sender<PinnRequest> {
+    PINN_QUEUE
+        .get_or_init(|| async {
+            let (tx, mut rx) = tokio::sync::mpsc::channel::<PinnRequest>(PINN_QUEUE_CAPACITY);
+            tokio::spawn(async move {
+                let mut pending = None;
+                while let Some(first_req) = match pending.take() {
+                    Some(req) => Some(req),
+                    None => rx.recv().await,
+                } {
+                    let mut batch_inputs = first_req.inputs;
+                    let mut responders = vec![(batch_inputs.len(), first_req.responder)];
+
+                    // Dynamic batching window: collect pending requests up to window or max size
+                    let deadline = tokio::time::Instant::now() + DYNAMIC_BATCH_WINDOW;
+                    while batch_inputs.len() < MAX_DYNAMIC_BATCH_SIZE {
+                        let timeout =
+                            deadline.saturating_duration_since(tokio::time::Instant::now());
+                        if timeout.is_zero() {
+                            break;
+                        }
+                        tokio::select! {
+                            biased;
+                            Some(req) = rx.recv() => {
+                                let count = req.inputs.len();
+                                if batch_inputs.len() + count > MAX_DYNAMIC_BATCH_SIZE {
+                                    pending = Some(req);
+                                    break;
+                                }
+                                batch_inputs.extend(req.inputs);
+                                responders.push((count, req.responder));
+                                if batch_inputs.len() >= MAX_DYNAMIC_BATCH_SIZE {
+                                    break;
+                                }
+                            }
+                            _ = tokio::time::sleep(timeout) => {
+                                break;
+                            }
+                        }
+                    }
+
+                    // Execute single batched forward pass on device
+                    let pinn_ref = match get_pinn().await {
+                        Ok(pinn) => pinn,
+                        Err(err) => {
+                            for (_, responder) in responders {
+                                let _ =
+                                    responder.send(Err(format!("PINN model unavailable: {err:#}")));
+                            }
+                            continue;
+                        }
+                    };
+                    let outputs = tokio::task::spawn_blocking(move || {
+                        pinn_infer_batch(
+                            &pinn_ref.model,
+                            &pinn_ref.device,
+                            &pinn_ref.norm,
+                            &batch_inputs,
+                        )
+                    })
+                    .await
+                    .map_err(|err| format!("PINN worker failed: {err}"))
+                    .and_then(|rows| {
+                        if rows.len() != responders.iter().map(|(count, _)| count).sum::<usize>() {
+                            Err("PINN worker returned an incomplete batch".to_string())
+                        } else {
+                            Ok(rows)
+                        }
+                    });
+
+                    // Distribute outputs back to each responder
+                    let mut offset = 0;
+                    for (count, responder) in responders {
+                        let slice = outputs
+                            .as_ref()
+                            .map(|rows| rows[offset..offset + count].to_vec())
+                            .map_err(Clone::clone);
+                        offset += count;
+                        let _ = responder.send(slice);
+                    }
+                }
+            });
+            tx
+        })
+        .await
+        .clone()
+}
+
+pub async fn infer_pinn_batch_async(inputs: Vec<PinnInputs>) -> Result<Vec<[f32; 4]>> {
     if inputs.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
-    let pinn = get_pinn().await;
-    tokio::task::spawn_blocking(move || {
-        pinn_infer_batch(&pinn.model, &pinn.device, &pinn.norm, &inputs)
+    if inputs.len() > MAX_DYNAMIC_BATCH_SIZE {
+        bail!("PINN request exceeds the maximum batch size of {MAX_DYNAMIC_BATCH_SIZE}");
+    }
+    let queue = get_pinn_queue().await;
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    enqueue_pinn_request(
+        &queue,
+        PinnRequest {
+            inputs,
+            responder: tx,
+        },
+    )?;
+    rx.await
+        .context("PINN worker stopped without responding")?
+        .map_err(anyhow::Error::msg)
+}
+
+fn enqueue_pinn_request(
+    queue: &tokio::sync::mpsc::Sender<PinnRequest>,
+    request: PinnRequest,
+) -> Result<()> {
+    queue.try_send(request).map_err(|err| match err {
+        tokio::sync::mpsc::error::TrySendError::Full(_) => {
+            anyhow::anyhow!("PINN queue is full; retry the request later")
+        }
+        tokio::sync::mpsc::error::TrySendError::Closed(_) => {
+            anyhow::anyhow!("PINN worker is unavailable")
+        }
     })
-    .await
-    .unwrap_or_default()
 }
 
 fn default_one() -> f32 {
@@ -243,6 +431,8 @@ pub struct GnnModel {
     pub device: Device<B>,
     pub norm: GnnNorm,
     pub variational: bool,
+    pub model_hash: String,
+    pub norm_hash: String,
 }
 
 static GNN: RwLock<Option<Arc<GnnModel>>> = RwLock::const_new(None);
@@ -256,26 +446,42 @@ pub async fn get_gnn() -> Option<Arc<GnnModel>> {
     loaded
 }
 
-/// Stage 6.7: flat-manifest compatibility gate for the serving load path.
-/// A present manifest must parse, pin the frozen architecture line and
-/// reproduce both file hashes — otherwise the artifact is refused loudly
-/// instead of serving silent mismatch. No manifest = legacy deployment,
-/// loaded with a one-line warning (pre-Stage-6 behaviour).
+/// Serving gate: a bundle needs a matching manifest, intact files, complete
+/// provenance, and a passing spatial-holdout evaluation.
 fn check_serving_manifest(
     models_dir: &std::path::Path,
     kind: &ModelKind,
-) -> Result<Option<lnai_training::artifacts::ArtifactManifestV1>, String> {
+) -> Result<lnai_training::artifacts::ArtifactManifestV1, String> {
     let path = models_dir.join(manifest_file_name(kind));
     if !path.exists() {
-        return Ok(None);
+        return Err(format!(
+            "serving bundle for {} has no artifact manifest",
+            path.display()
+        ));
     }
     let raw =
         std::fs::read_to_string(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
     let manifest: lnai_training::artifacts::ArtifactManifestV1 =
         serde_json::from_str(&raw).map_err(|e| format!("parse {}: {e}", path.display()))?;
+    if &manifest.model_kind != kind {
+        return Err(format!(
+            "serving bundle for {} declares model kind {:?}, expected {:?}",
+            path.display(),
+            manifest.model_kind,
+            kind
+        ));
+    }
     verify_manifest_against_files(models_dir, &manifest)
         .map_err(|e| format!("serving bundle for {} rejected: {e}", path.display()))?;
-    Ok(Some(manifest))
+    let blockers = manifest.release_blockers();
+    if !blockers.is_empty() {
+        return Err(format!(
+            "serving bundle for {} is not release-approved; missing evidence: {}",
+            path.display(),
+            blockers.join(", ")
+        ));
+    }
+    Ok(manifest)
 }
 
 async fn load_gnn() -> Option<Arc<GnnModel>> {
@@ -288,19 +494,19 @@ async fn load_gnn() -> Option<Arc<GnnModel>> {
         return None;
     }
 
-    match check_serving_manifest(&models_dir, &ModelKind::GnnKinematics) {
-        Ok(Some(manifest)) => println!(
-            "  GNN serving manifest verified (arch {}, git {})",
-            manifest.architecture_version, manifest.git_revision
-        ),
-        Ok(None) => eprintln!(
-            "  warning: GNN serving without artifact manifest (legacy, unverified provenance)"
-        ),
+    let manifest = match check_serving_manifest(&models_dir, &ModelKind::GnnKinematics) {
+        Ok(manifest) => {
+            println!(
+                "  GNN serving manifest verified (arch {}, git {})",
+                manifest.architecture_version, manifest.git_revision
+            );
+            manifest
+        }
         Err(err) => {
             eprintln!("  GNN model refused: {err}");
             return None;
         }
-    }
+    };
 
     let norm: GnnNorm = match std::fs::read_to_string(&norm_path) {
         Ok(json) => match serde_json::from_str(&json) {
@@ -325,16 +531,265 @@ async fn load_gnn() -> Option<Arc<GnnModel>> {
             StellarGnnConfig::new(GNN_INPUT_DIM, 256, head.output_width()).init(&device);
         let mut store = BurnpackStore::from_file(&*path_str);
         if candidate.load_from(&mut store).is_ok() {
+            let after_load = check_serving_manifest(&models_dir, &ModelKind::GnnKinematics).ok()?;
+            if after_load.model_hash != manifest.model_hash
+                || after_load.norm_hash != manifest.norm_hash
+            {
+                return None;
+            }
             return Some(Arc::new(GnnModel {
                 model: candidate,
                 device,
                 norm,
                 variational: head == GnnHeadKind::Variational,
+                model_hash: manifest.model_hash,
+                norm_hash: manifest.norm_hash,
             }));
         }
     }
 
     None
+}
+
+pub struct LocalizationModel {
+    pub model: StellarGnnLocalization<B>,
+    pub device: Device<B>,
+    pub norm: LocalizationNorm,
+    pub model_hash: String,
+    pub norm_hash: String,
+}
+
+static GNN_LOCALIZATION: RwLock<Option<Arc<LocalizationModel>>> = RwLock::const_new(None);
+
+pub async fn get_localization() -> Option<Arc<LocalizationModel>> {
+    if !localization_enabled() {
+        return None;
+    }
+    if let Some(cached) = GNN_LOCALIZATION.read().await.clone() {
+        return Some(cached);
+    }
+    let loaded = load_localization().await;
+    *GNN_LOCALIZATION.write().await = loaded.clone();
+    loaded
+}
+
+fn localization_enabled() -> bool {
+    std::env::var("LUNAR_AI_ENABLE_LOCALIZATION").as_deref() == Ok("1")
+}
+
+async fn load_localization() -> Option<Arc<LocalizationModel>> {
+    let models_dir = get_lunar_models_dir();
+    let norm_path = models_dir.join("stellar_gnn_loc_norm.json");
+    let bpk_path = models_dir.join("stellar_gnn_loc_model.bpk");
+
+    if !norm_path.exists() || !bpk_path.exists() {
+        return None;
+    }
+
+    let manifest = match check_serving_manifest(&models_dir, &ModelKind::GnnLocalization) {
+        Ok(manifest) => {
+            println!(
+                "  GNN Localization serving manifest verified (arch {}, git {})",
+                manifest.architecture_version, manifest.git_revision
+            );
+            manifest
+        }
+        Err(err) => {
+            eprintln!("  GNN Localization model refused: {err}");
+            return None;
+        }
+    };
+
+    let norm: LocalizationNorm = match std::fs::read_to_string(&norm_path) {
+        Ok(json) => match serde_json::from_str(&json) {
+            Ok(n) => n,
+            Err(_) => return None,
+        },
+        Err(_) => return None,
+    };
+
+    let device: Device<B> = Default::default();
+    let path_str = bpk_path.to_string_lossy();
+
+    let mut candidate = StellarGnnLocalizationConfig::new()
+        .with_input_dim(GNN_LOC_INPUT_DIM)
+        .with_hidden_dim(128)
+        .with_max_slots(norm.max_slots as usize)
+        .init(&device);
+    let mut store = BurnpackStore::from_file(&*path_str);
+    if candidate.load_from(&mut store).is_ok() {
+        let after_load = check_serving_manifest(&models_dir, &ModelKind::GnnLocalization).ok()?;
+        if after_load.model_hash != manifest.model_hash
+            || after_load.norm_hash != manifest.norm_hash
+        {
+            return None;
+        }
+        return Some(Arc::new(LocalizationModel {
+            model: candidate,
+            device,
+            norm,
+            model_hash: manifest.model_hash,
+            norm_hash: manifest.norm_hash,
+        }));
+    }
+
+    None
+}
+
+pub async fn predict_localization_neighbors(req: &LocalizationRequest) -> LocalizationResponse {
+    let seed = req.seed.unwrap_or(42);
+    let radius_pc = req.radius_pc.max(1.0);
+    let max_slots = req.max_slots.unwrap_or(16).clamp(1, 64) as usize;
+    let version = req.version.clone().unwrap_or_else(|| "1.0.0".to_string());
+    let anchor_pos = [req.anchor_x, req.anchor_y, req.anchor_z];
+
+    if let Some(loc_model) = get_localization().await {
+        let mut visible = Vec::new();
+        visible.push(lnai_training::localization::LocalStar {
+            source_id: "anchor".to_string(),
+            ra_deg: 0.0,
+            dec_deg: 0.0,
+            x: req.anchor_x,
+            y: req.anchor_y,
+            z: req.anchor_z,
+            bp_rp: 1.0,
+            g_mag: 15.0,
+            ruwe: 1.0,
+            is_visible: true,
+        });
+
+        for (i, v) in req.visible_neighbors.iter().enumerate() {
+            visible.push(lnai_training::localization::LocalStar {
+                source_id: v.source_id.clone().unwrap_or_else(|| format!("vis_{i}")),
+                ra_deg: 0.0,
+                dec_deg: 0.0,
+                x: v.x_pc,
+                y: v.y_pc,
+                z: v.z_pc,
+                bp_rp: v.bp_rp.unwrap_or(1.0),
+                g_mag: v.g_mag.unwrap_or(15.0),
+                ruwe: v.ruwe.unwrap_or(1.0),
+                is_visible: true,
+            });
+        }
+
+        let graph = lnai_training::localization::build_visible_graph_batch(&visible, 6);
+        let node_feats = lnai_training::localization::build_visible_node_features(
+            anchor_pos, &visible, radius_pc,
+        );
+        let node_tensor = Tensor::<B, 2>::from_data(
+            TensorData::new(node_feats, [visible.len(), GNN_LOC_INPUT_DIM]),
+            &loc_model.device,
+        );
+
+        let slots = loc_model.model.forward_slots_sparse(node_tensor, &graph, 0);
+        let decoded = loc_model.model.decode_candidates(&slots, radius_pc, 0.35);
+
+        let candidates: Vec<StarCandidate> = decoded
+            .candidates
+            .into_iter()
+            .take(max_slots)
+            .map(|c| StarCandidate {
+                existence_prob: c.existence_prob,
+                relative_position: c.relative_position,
+                covariance: c.covariance,
+                bp_rp: c.bp_rp,
+                g_mag: c.g_mag,
+            })
+            .collect();
+
+        LocalizationResponse {
+            candidates,
+            anchor_position: anchor_pos,
+            radius_pc,
+            version,
+            seed,
+            model_used: "gnn-localization-v1".to_string(),
+        }
+    } else {
+        let density = 0.0004;
+        let poisson = density_poisson_baseline(radius_pc, density, seed);
+        let candidates: Vec<StarCandidate> = poisson
+            .candidates
+            .into_iter()
+            .take(max_slots)
+            .map(|c| StarCandidate {
+                existence_prob: c.existence_prob,
+                relative_position: c.relative_position,
+                covariance: c.covariance,
+                bp_rp: c.bp_rp,
+                g_mag: c.g_mag,
+            })
+            .collect();
+
+        LocalizationResponse {
+            candidates,
+            anchor_position: anchor_pos,
+            radius_pc,
+            version,
+            seed,
+            model_used: "baseline-poisson-generator".to_string(),
+        }
+    }
+}
+
+pub async fn predict_localize_physics_pipeline(
+    req: &PipelineLocalizePhysicsRequest,
+) -> Result<PipelineLocalizePhysicsResponse> {
+    let loc_req = LocalizationRequest {
+        anchor_x: req.anchor_x,
+        anchor_y: req.anchor_y,
+        anchor_z: req.anchor_z,
+        radius_pc: req.radius_pc,
+        max_slots: req.max_slots,
+        seed: req.seed,
+        version: req.version.clone(),
+        visible_neighbors: req.visible_neighbors.clone(),
+    };
+    let loc_res = predict_localization_neighbors(&loc_req).await;
+
+    let mut pinn_inputs = Vec::with_capacity(loc_res.candidates.len());
+    let mut abs_positions = Vec::with_capacity(loc_res.candidates.len());
+
+    for cand in &loc_res.candidates {
+        let abs_pos = [
+            req.anchor_x + cand.relative_position[0],
+            req.anchor_y + cand.relative_position[1],
+            req.anchor_z + cand.relative_position[2],
+        ];
+        abs_positions.push(abs_pos);
+        pinn_inputs.push(PinnInputs {
+            position: abs_pos,
+            bp_rp: cand.bp_rp.unwrap_or(0.8),
+            g_mag: cand.g_mag.unwrap_or(15.0),
+        });
+    }
+
+    let pinn_outputs = infer_pinn_batch_async(pinn_inputs).await?;
+
+    let mut stars = Vec::with_capacity(loc_res.candidates.len());
+    for (i, cand) in loc_res.candidates.into_iter().enumerate() {
+        let row = pinn_outputs[i];
+        let physics = Some(PinnResponse {
+            temperature_k: row[0],
+            radius_solar: row[1],
+            mass_solar: row[2],
+            luminosity_solar: row[3],
+        });
+        stars.push(LocalizedStarWithPhysics {
+            candidate: cand,
+            absolute_position: abs_positions[i],
+            physics,
+        });
+    }
+
+    Ok(PipelineLocalizePhysicsResponse {
+        stars,
+        anchor_position: [req.anchor_x, req.anchor_y, req.anchor_z],
+        radius_pc: req.radius_pc,
+        version: loc_res.version,
+        seed: loc_res.seed,
+    })
 }
 
 #[derive(Clone)]
@@ -498,20 +953,16 @@ pub fn gnn_infer(
     let knn_k = knn_k.max(1).min(n);
 
     let coords: Vec<[f32; 3]> = stars.iter().map(|s| s.coords).collect();
-    let adj = compute_knn_adjacency(&coords, knn_k);
-
-    let mut adj_flat = Vec::with_capacity(n * n);
-    for row in &adj {
-        adj_flat.extend_from_slice(row);
-    }
+    // Stage 7: sparse GNN inference over cached immutable graph.
+    // Avoids allocating and transferring dense N×N adjacency matrices.
+    let graph = lnai_training::gnn::GraphCache::get_or_build(&coords, knn_k);
 
     let node_data = prepare_node_data(stars, norm);
 
     let nodes =
         Tensor::<B, 2>::from_data(TensorData::new(node_data, [n, GNN_INPUT_DIM]), &gnn.device);
-    let adj_tensor = Tensor::<B, 2>::from_data(TensorData::new(adj_flat, [n, n]), &gnn.device);
 
-    let output = gnn.model.forward(nodes, adj_tensor);
+    let output = gnn.model.forward_sparse(nodes, &graph);
     // Stage 6: the readout layout is decoded through the shared
     // `split_mean_logvar` contract (same function as train/eval), so
     // serving can never disagree on mean-vs-logvar column order.
@@ -1097,6 +1548,8 @@ pub struct SirenModel {
     pub model: StellarSiren<B>,
     pub device: Device<B>,
     pub norm: SirenNorm,
+    pub model_hash: String,
+    pub norm_hash: String,
 }
 
 #[cfg(feature = "siren")]
@@ -1123,19 +1576,19 @@ async fn load_siren() -> Option<Arc<SirenModel>> {
         return None;
     }
 
-    match check_serving_manifest(&models_dir, &ModelKind::Siren) {
-        Ok(Some(manifest)) => println!(
-            "  SIREN serving manifest verified (arch {}, git {})",
-            manifest.architecture_version, manifest.git_revision
-        ),
-        Ok(None) => eprintln!(
-            "  warning: SIREN serving without artifact manifest (legacy, unverified provenance)"
-        ),
+    let manifest = match check_serving_manifest(&models_dir, &ModelKind::Siren) {
+        Ok(manifest) => {
+            println!(
+                "  SIREN serving manifest verified (arch {}, git {})",
+                manifest.architecture_version, manifest.git_revision
+            );
+            manifest
+        }
         Err(err) => {
             eprintln!("  SIREN model refused: {err}");
             return None;
         }
-    }
+    };
 
     let norm: SirenNorm = match std::fs::read_to_string(&norm_path) {
         Ok(json) => match serde_json::from_str(&json) {
@@ -1156,6 +1609,10 @@ async fn load_siren() -> Option<Arc<SirenModel>> {
     if model.load_from(&mut store).is_err() {
         return None;
     }
+    let after_load = check_serving_manifest(&models_dir, &ModelKind::Siren).ok()?;
+    if after_load.model_hash != manifest.model_hash || after_load.norm_hash != manifest.norm_hash {
+        return None;
+    }
 
     println!(
         "  SIREN model loaded successfully from {}",
@@ -1165,6 +1622,8 @@ async fn load_siren() -> Option<Arc<SirenModel>> {
         model,
         device,
         norm,
+        model_hash: manifest.model_hash,
+        norm_hash: manifest.norm_hash,
     }))
 }
 
@@ -1219,36 +1678,36 @@ pub fn siren_generate_texture(
     let n_mg = (m_g - siren.norm.mg_mean) / siren.norm.mg_std;
     let n_teff = (log_teff - siren.norm.log_teff_mean) / siren.norm.log_teff_std;
 
-    let total = (width * height) as usize;
-    let mut input_data = Vec::with_capacity(total * SIREN_INPUT_DIM);
-
-    for y in 0..height {
-        let v = -1.0 + 2.0 * (y as f32) / height.saturating_sub(1).max(1) as f32;
-        for x in 0..width {
-            let u = -1.0 + 2.0 * (x as f32) / width.saturating_sub(1).max(1) as f32;
-            input_data.push(u);
-            input_data.push(v);
-            input_data.push(n_bp);
-            input_data.push(n_mg);
-            input_data.push(n_teff);
-        }
-    }
-
-    let input = Tensor::<B, 2>::from_data(
-        TensorData::new(input_data, [total, SIREN_INPUT_DIM]),
-        &siren.device,
-    );
-    let output = siren.model.forward(input);
-    let data = output.into_data();
-    let vals: Vec<f32> = data
-        .to_vec()
-        .expect("failed to convert SIREN texture output");
-
+    const TEXTURE_CHUNK_PIXELS: usize = 8192;
+    let total = width as usize * height as usize;
     let mut pixels = Vec::with_capacity(total * 3);
-    for i in 0..total {
-        pixels.push((vals[i * 3].clamp(0.0, 1.0) * 255.0) as u8);
-        pixels.push((vals[i * 3 + 1].clamp(0.0, 1.0) * 255.0) as u8);
-        pixels.push((vals[i * 3 + 2].clamp(0.0, 1.0) * 255.0) as u8);
+    for start in (0..total).step_by(TEXTURE_CHUNK_PIXELS) {
+        let count = (total - start).min(TEXTURE_CHUNK_PIXELS);
+        let mut input_data = Vec::with_capacity(count * SIREN_INPUT_DIM);
+        for i in start..start + count {
+            let x = (i % width as usize) as f32;
+            let y = (i / width as usize) as f32;
+            input_data.extend_from_slice(&[
+                -1.0 + 2.0 * x / width.saturating_sub(1).max(1) as f32,
+                -1.0 + 2.0 * y / height.saturating_sub(1).max(1) as f32,
+                n_bp,
+                n_mg,
+                n_teff,
+            ]);
+        }
+        let input = Tensor::<B, 2>::from_data(
+            TensorData::new(input_data, [count, SIREN_INPUT_DIM]),
+            &siren.device,
+        );
+        let vals: Vec<f32> = siren
+            .model
+            .forward(input)
+            .into_data()
+            .to_vec()
+            .expect("failed to convert SIREN texture output");
+        for value in vals {
+            pixels.push((value.clamp(0.0, 1.0) * 255.0) as u8);
+        }
     }
 
     pixels
@@ -1274,17 +1733,25 @@ pub struct ReloadReport {
     pub note: String,
 }
 
-/// Stage 6.7 controlled reload: validates the registry first and only
-/// then drops the cached dir-loaded models (GNN/SIREN/lore). In-flight
-/// requests keep their `Arc` clones; the next `get_*` lazily reloads.
-/// PINN is compiled in and intentionally never reloads.
+/// Validates the replacement PINN before swapping it into the live cache.
+/// Requests already holding an `Arc` finish with their original weights.
 pub async fn reload_models() -> ReloadReport {
     let entries = registry_snapshot().await;
+    let serving_dir = get_lunar_models_dir().display().to_string();
     let refused: Vec<String> = entries
         .iter()
-        .filter_map(|e| match &e.status {
-            RegistryStatus::Invalid(reason) => Some(format!("{}: {reason}", e.dir)),
-            _ => None,
+        .filter(|entry| entry.dir == serving_dir)
+        .filter_map(|entry| match &entry.status {
+            RegistryStatus::Verified => None,
+            RegistryStatus::ReleaseBlocked(blockers) => Some(format!(
+                "{:?}: release blocked ({})",
+                entry.kind,
+                blockers.join(", ")
+            )),
+            RegistryStatus::LegacyUnverified => {
+                Some(format!("{:?}: artifact manifest required", entry.kind))
+            }
+            RegistryStatus::Invalid(reason) => Some(format!("{:?}: {reason}", entry.kind)),
         })
         .collect();
     if !refused.is_empty() {
@@ -1295,15 +1762,27 @@ pub async fn reload_models() -> ReloadReport {
                 .to_string(),
         };
     }
+    let pinn = match load_pinn(&get_lunar_models_dir()) {
+        Ok(pinn) => pinn,
+        Err(err) => {
+            return ReloadReport {
+                reloaded: Vec::new(),
+                refused: vec![format!("pinn: {err:#}")],
+                note: "reload refused: existing models keep serving".to_string(),
+            };
+        }
+    };
+    *PINN.write().await = Some(pinn);
     *GNN.write().await = None;
     *LORE_CACHE.write().await = None;
+    *GNN_LOCALIZATION.write().await = None;
     #[cfg(feature = "siren")]
     {
         *SIREN_MODEL.write().await = None;
     }
     // Eagerly re-verify: a reload that silently serves nothing is a
     // failed deploy, so report per-kind load status now.
-    let mut reloaded = Vec::new();
+    let mut reloaded = vec!["pinn: loaded".to_string()];
     reloaded.push(format!(
         "gnn_kinematics: {}",
         if get_gnn().await.is_some() {
@@ -1332,27 +1811,33 @@ pub async fn reload_models() -> ReloadReport {
     ReloadReport {
         reloaded,
         refused: Vec::new(),
-        note: "pinn is compiled in and never reloads".to_string(),
+        note: "PINN swapped after validation; other models refreshed".to_string(),
     }
 }
 
 pub async fn warmup_models() {
-    let pinn = get_pinn().await;
-    println!("  PINN model loaded, warming up GPU shaders...");
-    tokio::task::spawn_blocking(move || {
-        let _ = pinn_infer(
-            &pinn.model,
-            &pinn.device,
-            &pinn.norm,
-            PinnInputs {
-                position: [0.0, 0.0, 0.0],
-                bp_rp: 1.0,
-                g_mag: 10.0,
-            },
-        );
-    })
-    .await
-    .ok();
+    match get_pinn().await {
+        Ok(pinn) => {
+            println!("  PINN model loaded, warming up GPU shaders...");
+            if let Err(err) = tokio::task::spawn_blocking(move || {
+                let _ = pinn_infer(
+                    &pinn.model,
+                    &pinn.device,
+                    &pinn.norm,
+                    PinnInputs {
+                        position: [0.0, 0.0, 0.0],
+                        bp_rp: 1.0,
+                        g_mag: 10.0,
+                    },
+                );
+            })
+            .await
+            {
+                eprintln!("  PINN warmup failed: {err}");
+            }
+        }
+        Err(err) => eprintln!("  PINN model unavailable: {err:#}"),
+    }
 
     if let Some(gnn) = get_gnn().await {
         let gnn_arc = gnn.clone();
@@ -1407,12 +1892,50 @@ pub async fn warmup_models() {
         .ok();
     }
 
+    let _ = get_localization().await;
+
     println!("  All models warmed up and ready.");
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn full_pinn_queue_rejects_work_without_running_fallback() {
+        let (queue, _worker) = tokio::sync::mpsc::channel(1);
+        for attempt in 0..2 {
+            let (responder, _response) = tokio::sync::oneshot::channel();
+            let result = enqueue_pinn_request(
+                &queue,
+                PinnRequest {
+                    inputs: Vec::new(),
+                    responder,
+                },
+            );
+            if attempt == 0 {
+                assert!(result.is_ok());
+            } else {
+                assert!(result.unwrap_err().to_string().contains("queue is full"));
+            }
+        }
+    }
+
+    #[test]
+    fn closed_pinn_queue_reports_unavailable() {
+        let (queue, worker) = tokio::sync::mpsc::channel(1);
+        drop(worker);
+        let (responder, _response) = tokio::sync::oneshot::channel();
+        let error = enqueue_pinn_request(
+            &queue,
+            PinnRequest {
+                inputs: Vec::new(),
+                responder,
+            },
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("worker is unavailable"));
+    }
 
     fn dummy_gnn() -> GnnModel {
         let device: Device<B> = Default::default();
@@ -1451,6 +1974,8 @@ mod tests {
                 vz_logvar_std: 1.0,
             },
             variational: false,
+            model_hash: String::new(),
+            norm_hash: String::new(),
         }
     }
 
@@ -1521,5 +2046,82 @@ mod tests {
             compute_variational_velocities(&mean, &logvar, &stars, &norm, 0.0),
             vec![[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]
         );
+    }
+
+    #[test]
+    fn serving_manifest_requires_bound_release_evidence() {
+        use lnai_training::artifacts::{
+            ArtifactManifestV1, architecture_version, expected_feature_schema_hash, norm_file_name,
+            sha256_file_hex, weight_file_name,
+        };
+
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock")
+            .as_nanos();
+        let models_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target")
+            .join(format!("serving-manifest-test-{nonce}"));
+        std::fs::create_dir_all(&models_dir).expect("create test model directory");
+        let kind = ModelKind::Pinn;
+        let weight_path = models_dir.join(weight_file_name(&kind));
+        let norm_path = models_dir.join(norm_file_name(&kind));
+        std::fs::write(&weight_path, b"test-weights").unwrap();
+        std::fs::write(&norm_path, b"test-normalization").unwrap();
+
+        let mut manifest = ArtifactManifestV1::new(
+            kind.clone(),
+            architecture_version(&kind).to_string(),
+            sha256_file_hex(&weight_path).unwrap(),
+            sha256_file_hex(&norm_path).unwrap(),
+            expected_feature_schema_hash(&kind).unwrap().to_string(),
+            "gaia_dr3".into(),
+            "dataset-manifest-v1".into(),
+            42,
+            serde_json::json!({}),
+            "test-revision".into(),
+            "cpu".into(),
+        );
+        let manifest_path = models_dir.join(manifest_file_name(&kind));
+        std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        let blocked = check_serving_manifest(&models_dir, &kind).unwrap_err();
+        assert!(blocked.contains("spatial_holdout_evaluation"), "{blocked}");
+
+        let report_file = format!("{}_spatial_holdout_report.json", kind.slug());
+        let report_path = models_dir.join(&report_file);
+        let report_bytes = serde_json::to_vec_pretty(&serde_json::json!({
+            "passed": true,
+            "gate_version": "test-release-gate-v1",
+            "model_kind": kind.clone(),
+            "architecture_version": manifest.architecture_version.clone(),
+            "model_hash": manifest.model_hash.clone(),
+            "norm_hash": manifest.norm_hash.clone(),
+            "dataset_id": manifest.dataset_id.clone(),
+            "dataset_version": manifest.dataset_version.clone(),
+            "feature_schema_hash": manifest.feature_schema_hash.clone(),
+            "metrics": { "fixture_metric": 0.0 }
+        }))
+        .unwrap();
+        std::fs::write(&report_path, &report_bytes).unwrap();
+        let report_sha256 = sha256_file_hex(&report_path).unwrap();
+        manifest.evaluation_metrics = Some(serde_json::json!({
+            "spatial_holdout": {
+                "passed": true,
+                "model_hash": manifest.model_hash.clone(),
+                "norm_hash": manifest.norm_hash.clone(),
+                "dataset_id": manifest.dataset_id.clone(),
+                "dataset_version": manifest.dataset_version.clone(),
+                "feature_schema_hash": manifest.feature_schema_hash.clone(),
+                "report_file": report_file,
+                "report_sha256": report_sha256
+            }
+        }));
+        std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        check_serving_manifest(&models_dir, &kind)
+            .expect("bound passing report should be accepted");
+        std::fs::write(&report_path, b"tampered report").unwrap();
+        let rejected = check_serving_manifest(&models_dir, &kind).unwrap_err();
+        assert!(rejected.contains("checksum mismatch"), "{rejected}");
+        std::fs::remove_dir_all(models_dir).expect("remove test bundle");
     }
 }

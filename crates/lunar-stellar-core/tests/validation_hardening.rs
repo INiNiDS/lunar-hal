@@ -7,13 +7,15 @@
 use lunar_stellar_core::validation::{
     ValidationError, limits, validate_bp_rp, validate_center_x, validate_center_y,
     validate_center_z, validate_entropy, validate_g_mag, validate_pipeline, validate_response_star,
-    validate_response_stars, validate_search_radius, validate_sector_key, validate_temperature,
-    validate_scene, validate_scene_id, validate_scene_name, validate_scene_summary, validate_zoom,
+    validate_response_stars, validate_scene, validate_scene_id, validate_scene_name,
+    validate_scene_summary, validate_search_radius, validate_sector_key, validate_temperature,
+    validate_zoom,
 };
 use lunar_stellar_core::{StellarScene, StellarSceneError};
 use lunar_structures::{
-    CreateStarSceneRequest, GnnResponse, PinnResponse, PipelineRequest, PipelineResponse, ResponseStar,
-    SirenTextureResponse, StellarMetadata, StarScene, StarSceneListResponse, StarSceneSummary,
+    CreateStarSceneRequest, GnnResponse, PinnResponse, PipelineRequest, PipelineResponse,
+    ResponseStar, SirenTextureResponse, StarScene, StarSceneListResponse, StarSceneSummary,
+    StellarMetadata,
 };
 
 // --- pure validators ---------------------------------------------------------

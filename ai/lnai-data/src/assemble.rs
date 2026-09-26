@@ -19,6 +19,115 @@ pub struct AssembleReport {
     pub holdout_rows: u64,
 }
 
+/// Checks the union of verified half-open shard rectangles, not their status
+/// counts. The stock query requires all-sky coverage; custom queries are
+/// checked within the outer bounds represented by their manifest shards.
+pub fn validate_shard_coverage(manifest: &DatasetManifestV1) -> Result<(), String> {
+    let shards = &manifest.shards;
+    if shards.is_empty() {
+        return Err("coverage: manifest contains no shards".into());
+    }
+    for shard in shards {
+        let (ra, dec) = (shard.ra_range, shard.dec_range);
+        if !ra.0.is_finite()
+            || !ra.1.is_finite()
+            || !dec.0.is_finite()
+            || !dec.1.is_finite()
+            || ra.0 >= ra.1
+            || dec.0 >= dec.1
+            || ra.0 < 0.0
+            || ra.1 > 360.0
+            || dec.0 < -90.0
+            || dec.1 > 90.0
+        {
+            return Err(format!(
+                "coverage: invalid bounds for shard {}: RA {ra:?} Dec {dec:?}",
+                shard.shard_id
+            ));
+        }
+    }
+    let stock_query =
+        manifest.query_hash == crate::collector::CollectConfig::default().query_hash();
+    let ra_start = if stock_query {
+        0.0
+    } else {
+        shards
+            .iter()
+            .map(|s| s.ra_range.0)
+            .fold(f32::INFINITY, f32::min)
+    };
+    let ra_end = if stock_query {
+        360.0
+    } else {
+        shards
+            .iter()
+            .map(|s| s.ra_range.1)
+            .fold(f32::NEG_INFINITY, f32::max)
+    };
+    let dec_start = if stock_query {
+        -90.0
+    } else {
+        shards
+            .iter()
+            .map(|s| s.dec_range.0)
+            .fold(f32::INFINITY, f32::min)
+    };
+    let dec_end = if stock_query {
+        90.0
+    } else {
+        shards
+            .iter()
+            .map(|s| s.dec_range.1)
+            .fold(f32::NEG_INFINITY, f32::max)
+    };
+    let mut edges = vec![ra_start, ra_end];
+    for s in shards {
+        edges.extend([s.ra_range.0, s.ra_range.1]);
+    }
+    edges.sort_by(f32::total_cmp);
+    edges.dedup();
+
+    let mut gaps = 0usize;
+    let mut examples = Vec::new();
+    for pair in edges.windows(2) {
+        let (left, right) = (pair[0], pair[1]);
+        if left >= right || left < ra_start || right > ra_end {
+            continue;
+        }
+        let mut intervals: Vec<(f32, f32)> = shards
+            .iter()
+            .filter(|s| {
+                s.status == ShardStatus::Verified && s.ra_range.0 <= left && s.ra_range.1 >= right
+            })
+            .map(|s| s.dec_range)
+            .collect();
+        intervals.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut covered = dec_start;
+        for (lo, hi) in intervals {
+            if lo > covered {
+                gaps += 1;
+                if examples.len() < 8 {
+                    examples.push(format!("RA [{left},{right}) Dec [{covered},{lo})"));
+                }
+            }
+            covered = covered.max(hi);
+        }
+        if covered < dec_end {
+            gaps += 1;
+            if examples.len() < 8 {
+                examples.push(format!("RA [{left},{right}) Dec [{covered},{dec_end})"));
+            }
+        }
+    }
+    if gaps > 0 {
+        return Err(format!(
+            "coverage: {gaps} uncovered sky rectangles in RA [{ra_start},{ra_end}) Dec [{dec_start},{dec_end}); examples: {}. Check failed/missing shards before assembly (no data was written)",
+            examples.join(", ")
+        ));
+    }
+    Ok(())
+}
+
 fn col_f32(records: &[StarRecord], get: fn(&StarRecord) -> Option<f32>) -> Float32Chunked {
     records.iter().map(|r| get(r)).collect::<Float32Chunked>()
 }
@@ -71,19 +180,155 @@ fn write_parquet(df: &DataFrame, path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn view_columns(df: &DataFrame, view: &SchemaView) -> Result<DataFrame, String> {
-    // GNN-Localization's neighbor fields are produced by a later spatial step;
-    // the core localization view carries anchor identification + photometry.
+fn model_view_plan(mut lf: LazyFrame, view: &SchemaView) -> Result<LazyFrame, String> {
+    let schema = lf
+        .collect_schema()
+        .map_err(|e| format!("view {view:?}: schema: {e}"))?;
     let mut names = required_columns_for_view(view);
-    names.retain(|n| {
-        (*n).starts_with("neighbor")
-            || (*n).starts_with("rel_")
-            || *n == "is_visible"
-            || df.column(*n).is_ok()
+    let needed: &[&str] = match view {
+        SchemaView::Pinn => &["x_pc", "y_pc", "z_pc", "bp_rp", "mag_g"],
+        SchemaView::GnnKinematics => &[
+            "x_pc",
+            "y_pc",
+            "z_pc",
+            "bp_rp",
+            "mag_g",
+            "mag_bp",
+            "mag_rp",
+            "ruwe",
+            "radial_velocity_kms",
+            "vx_kms",
+            "vy_kms",
+            "vz_kms",
+        ],
+        SchemaView::Siren => &["x_pc", "y_pc", "z_pc", "bp_rp", "mag_g", "ruwe"],
+        _ => return Err(format!("view {view:?}: not a standalone model view")),
+    };
+    let ap = ["teff_gspphot", "radius_gspphot", "mass_flame", "lum_flame"];
+    if *view == SchemaView::Pinn && ap.iter().any(|n| schema.contains(n)) {
+        if let Some(missing) = ap.iter().find(|n| !schema.contains(n)) {
+            return Err(format!(
+                "view Pinn: incomplete AP enrichment, missing {missing}"
+            ));
+        }
+        names.extend(ap);
+    }
+    if !schema.contains("bp_rp") {
+        if !schema.contains("mag_bp") || !schema.contains("mag_rp") {
+            return Err(format!("view {view:?}: bp_rp or mag_bp/mag_rp required"));
+        }
+        lf = lf.with_columns([(col("mag_bp") - col("mag_rp"))
+            .cast(DataType::Float32)
+            .alias("bp_rp")]);
+    }
+    names.extend(needed);
+    if schema.contains("spatial_tile") {
+        names.push("spatial_tile");
+    }
+    if schema.contains("split") {
+        names.push("split");
+    }
+    names.sort_unstable();
+    names.dedup();
+    let missing = names.iter().find(|n| *n != &"bp_rp" && !schema.contains(n));
+    if let Some(name) = missing {
+        return Err(format!("view {view:?}: missing column {name}"));
+    }
+    let mut lf = lf.select(names.iter().map(|n| col(*n)).collect::<Vec<_>>());
+    let mut predicate = col("is_valid").eq(lit(true));
+    for name in needed {
+        predicate = predicate
+            .and(col(*name).is_not_null())
+            .and(col(*name).is_finite());
+    }
+    if *view == SchemaView::GnnKinematics {
+        for name in ["parallax_mas", "pm_ra_mas_yr", "pm_dec_mas_yr"] {
+            predicate = predicate
+                .and(col(name).is_not_null())
+                .and(col(name).is_finite());
+        }
+    }
+    if *view == SchemaView::Pinn && schema.contains("teff_gspphot") {
+        for name in ap {
+            predicate = predicate
+                .and(col(name).is_not_null())
+                .and(col(name).is_finite());
+        }
+    }
+    lf = lf.filter(predicate);
+    Ok(lf)
+}
+
+#[cfg(test)]
+fn view_columns(df: &DataFrame, view: &SchemaView) -> Result<DataFrame, String> {
+    model_view_plan(df.clone().lazy(), view)?
+        .collect()
+        .map_err(|e| format!("view {view:?}: {e}"))
+}
+
+/// Regenerates the three model views from an existing canonical parquet,
+/// including one enriched with AP targets. Does not edit the source parquet.
+pub fn assemble_model_views_from_parquet(
+    canonical_path: &Path,
+) -> Result<Vec<(SchemaView, PathBuf)>, String> {
+    let dir = canonical_path
+        .parent()
+        .ok_or("canonical parquet has no parent directory")?;
+    let views = write_standard_views(canonical_path, dir)?;
+    write_views_provenance(canonical_path, &views)?;
+    Ok(views)
+}
+
+fn write_standard_views(
+    canonical_path: &Path,
+    dir: &Path,
+) -> Result<Vec<(SchemaView, PathBuf)>, String> {
+    let mut views = Vec::new();
+    for (view, name) in [
+        (SchemaView::Pinn, "pinn"),
+        (SchemaView::GnnKinematics, "gnn_kinematics"),
+        (SchemaView::Siren, "siren"),
+    ] {
+        let path = dir.join(format!("view_{name}.parquet"));
+        let lf = model_view_plan(scan_parquet_plan(&[canonical_path.to_path_buf()])?, &view)?;
+        sink_parquet_streaming(lf, &path)?;
+        views.push((view, path));
+    }
+    Ok(views)
+}
+
+fn write_views_provenance(
+    canonical_path: &Path,
+    views: &[(SchemaView, PathBuf)],
+) -> Result<(), String> {
+    let mut entries = Vec::new();
+    for (view, path) in views {
+        entries.push(serde_json::json!({
+            "view": view,
+            "file": path.file_name().and_then(|n| n.to_str()),
+            "rows": count_parquet_rows(path)?,
+            "sha256": crate::integrity::sha256_file(path)?,
+        }));
+    }
+    let metadata = serde_json::json!({
+        "generator_version": "1.0.0",
+        "schema_version": crate::schema::DATASET_SCHEMA_VERSION,
+        "canonical_schema_hash": crate::integrity::schema_hash(),
+        "source_file": canonical_path.file_name().and_then(|n| n.to_str()),
+        "source_sha256": crate::integrity::sha256_file(canonical_path)?,
+        "views": entries,
     });
-    let _ = view; // keep signature stable for future per-view transforms
-    df.select(names)
-        .map_err(|e| format!("view {view:?}: missing columns: {e}"))
+    let target = canonical_path
+        .parent()
+        .ok_or("canonical parquet has no parent directory")?
+        .join("views_manifest.json");
+    let tmp = target.with_extension("json.tmp");
+    std::fs::write(
+        &tmp,
+        serde_json::to_vec_pretty(&metadata).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| format!("write {}: {e}", tmp.display()))?;
+    std::fs::rename(&tmp, &target).map_err(|e| format!("publish {}: {e}", target.display()))
 }
 
 /// Loads and cleans every verified shard CSV from a collection directory.
@@ -308,6 +553,7 @@ pub fn assemble_dataset_streaming(
     if verified.is_empty() {
         return Err("no verified shards to assemble".into());
     }
+    validate_shard_coverage(manifest)?;
     std::fs::create_dir_all(out_dir).map_err(|e| e.to_string())?;
     // Contract from the in-memory build: everything lands in
     // `<out_dir>/assembled/` (canonical + views + parts staging).
@@ -384,25 +630,7 @@ pub fn assemble_dataset_streaming(
     // file built from the capped candidate buffer (identical to the in-memory
     // selection: first LOCALIZATION_KNN_SAMPLE_CAP valid positioned rows in
     // shard order).
-    let mut view_paths = Vec::new();
-    for view in [
-        SchemaView::Pinn,
-        SchemaView::GnnKinematics,
-        SchemaView::Siren,
-    ] {
-        let ext = match view {
-            SchemaView::Pinn => "pinn",
-            SchemaView::GnnKinematics => "gnn_kinematics",
-            SchemaView::Siren => "siren",
-            SchemaView::Base | SchemaView::GnnLocalization => unreachable!(),
-        };
-        let path = assembled_dir.join(format!("view_{ext}.parquet"));
-        let names = required_columns_for_view(&view);
-        let lf = scan_parquet_plan(std::slice::from_ref(&canonical_path))?
-            .select(names.iter().map(|n| col(*n)).collect::<Vec<_>>());
-        sink_parquet_streaming(lf, &path)?;
-        view_paths.push((view, path));
-    }
+    let mut view_paths = write_standard_views(&canonical_path, &assembled_dir)?;
 
     let pairs = build_localization_pairs(&knn_candidates);
     if !pairs.is_empty() {
@@ -427,6 +655,7 @@ pub fn assemble_dataset_streaming(
             "parquet merge row mismatch: expected {total_rows}, got {rows_written}"
         ));
     }
+    write_views_provenance(&canonical_path, &view_paths)?;
 
     // Manifest checkpoint: the global checksum covers the canonical dataset;
     // shard checksums already cover the raw inputs.
@@ -510,6 +739,11 @@ pub fn assemble_dataset(
     manifest: &mut DatasetManifestV1,
     records: &[StarRecord],
 ) -> Result<AssembleReport, String> {
+    if !manifest.shards.is_empty()
+        && manifest.query_hash == crate::collector::CollectConfig::default().query_hash()
+    {
+        validate_shard_coverage(manifest)?;
+    }
     if records.is_empty() {
         return Err("no records to assemble".into());
     }
@@ -519,9 +753,8 @@ pub fn assemble_dataset(
     let canonical_path = out_dir.join("canonical.parquet");
     write_parquet(&canonical, &canonical_path)?;
 
-    // Model views (excluding Base): pinn / gnn_kinematics / siren straight
-    // from required columns; gnn_localization additionally gets its pairs file.
-    let mut view_paths = Vec::new();
+    // Model views (excluding Base) share the streaming projector.
+    let mut view_paths = write_standard_views(&canonical_path, out_dir)?;
 
     // GNN-Localization: anchors + deterministic k-NN pairs stored as their own
     // typed tables joined by stable source IDs at training time.
@@ -539,23 +772,6 @@ pub fn assemble_dataset(
         let pairs_path = out_dir.join("gnn_localization_neighbors.parquet");
         write_parquet(&pair_df, &pairs_path)?;
         view_paths.push((SchemaView::GnnLocalization, pairs_path));
-    }
-
-    for view in [
-        SchemaView::Pinn,
-        SchemaView::GnnKinematics,
-        SchemaView::Siren,
-    ] {
-        let frame = view_columns(&canonical, &view)?;
-        let ext = match view {
-            SchemaView::Pinn => "pinn",
-            SchemaView::GnnKinematics => "gnn_kinematics",
-            SchemaView::Siren => "siren",
-            SchemaView::Base | SchemaView::GnnLocalization => unreachable!(),
-        };
-        let path = out_dir.join(format!("view_{ext}.parquet"));
-        write_parquet(&frame, &path)?;
-        view_paths.push((view, path));
     }
 
     let mut counts = [0u64; 3];
@@ -577,6 +793,7 @@ pub fn assemble_dataset(
     if round_trip.height() != canonical.height() {
         return Err("parquet round-trip row mismatch".into());
     }
+    write_views_provenance(&canonical_path, &view_paths)?;
 
     // Manifest checkpoint: the global checksum covers the canonical dataset;
     // shard checksums already cover the raw inputs.
@@ -778,13 +995,15 @@ mod tests {
         manifest
             .shards
             .push(ShardState::new("shard".into(), (0.0, 1.0), (-90.0, 90.0)));
-        assert!(assemble_dataset_streaming(
-            dir.path(),
-            &mut manifest,
-            &CleanPolicy::default(),
-            StreamingAssembleOptions::default(),
-        )
-        .is_err());
+        assert!(
+            assemble_dataset_streaming(
+                dir.path(),
+                &mut manifest,
+                &CleanPolicy::default(),
+                StreamingAssembleOptions::default(),
+            )
+            .is_err()
+        );
     }
 
     fn records_fixture_clone(recs: &[StarRecord]) -> Vec<StarRecord> {

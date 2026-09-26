@@ -3,6 +3,12 @@
   "title": "Исправить модели и serving до оптимизации",
   "approved_code_commit": "70b0477c780d63ac588dfe2f803d57c46bfc42c8",
   "approved_at": "2026-09-18",
+  "release_qualification": "not_qualified",
+  "evidence_scope": {
+    "real_checkpoint_evaluation": false,
+    "production_release_eligible": false,
+    "note": "Passed suites establish code contracts and deterministic synthetic/surrogate behavior, not the quality of trained serving checkpoints."
+  },
   "suites": [
     {
       "file": "ai/lnai-training/tests/fixture_leakage.rs",
@@ -36,19 +42,19 @@
     },
     {
       "file": "ai/lnai-training/tests/stage6_baseline.rs",
-      "tests": 5,
+      "tests": 6,
       "status": "passed",
       "note": "living pin of this record plus finite/deterministic/split/spec gates"
     }
   ],
   "gates": {
-    "finite": "per_target_metrics finite (pinn_accuracy), vx/vy/vz finite (chain), spec rejects non-finite lr/weights",
-    "deterministic": "pinn_accuracy again==metrics, effective_train_seed path-independent, seeded chain reproduces exactly",
-    "holdout": "trainers bail on missing/empty holdout (pinn/gnn/siren), evaluation holdout_non_empty gate, 1.5x drift warning"
+    "finite": "synthetic/surrogate metrics are finite; this does not evaluate trained serving checkpoints",
+    "deterministic": "contract tests reproduce seeded synthetic/untrained paths; no trained-checkpoint determinism report is attached",
+    "holdout": "training requires a holdout input, but this baseline contains no real spatial-holdout checkpoint evaluation"
   },
   "exit_gate": {
-    "finite_deterministic_holdout": "pass",
-    "api_artifact_version": "GET /version reports exact artifact version per registry entry (verified in version_reports_service_and_model_rows)",
-    "chained_report_no_synthetic_noise": "pass (pinn_gnn_chain derives GNN nodes from PINN outputs, seeded)"
+    "finite_deterministic_holdout": "contract checks pass; trained-checkpoint spatial holdout quality is not evaluated",
+    "api_artifact_version": "registry integrity and active loaded hashes are exposed; this is artifact identity evidence, not model quality",
+    "chained_report_no_synthetic_noise": "not established: the chain suite uses seeded untrained weights and cannot qualify trained models"
   }
 }

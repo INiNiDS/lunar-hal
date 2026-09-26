@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Stage 3 performance foundation:
+# Stage 3 implementation microbenchmarks (not trained-checkpoint quality):
 #   * CPU criterion benches (preprocessing/k-NN, PINN/SIREN/GNN forward)
 #   * report-only baseline with natural-noise estimate over N identical runs
+#     (results need hardware/run provenance before they can qualify a release).
 #   * `--gpu` additionally compiles the synchronized CUDA harness
 #     (nightly/manual GPU runner only; still report-only).
 #

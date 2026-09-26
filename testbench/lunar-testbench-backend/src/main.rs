@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use anyhow::Result;
 use axum::{
     Router,
@@ -8,16 +6,18 @@ use axum::{
 use lunar_utils::env::{DEFAULT_TESTBENCH_HOST, DEFAULT_TESTBENCH_PORT, resolve_port};
 use tower_http::cors::{Any, CorsLayer};
 
-pub mod ai_jobs;
-pub mod data_jobs;
-pub mod jobs;
-pub mod system;
+use lunar_testbench_backend::jobs::JobRegistry;
+use lunar_testbench_backend::{AppState, ai_jobs, data_jobs, db, jobs, reports, system};
 
-use crate::jobs::JobRegistry;
-
-#[derive(Clone)]
-pub struct AppState {
-    pub registry: Arc<JobRegistry>,
+pub async fn cancel_job_by_path(
+    axum::extract::State(state): axum::extract::State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Result<axum::Json<()>, String> {
+    state
+        .registry
+        .cancel(&id)
+        .map(|_| axum::Json(()))
+        .map_err(|e| e.to_string())
 }
 
 #[tokio::main]
@@ -32,7 +32,10 @@ async fn main() -> Result<()> {
     );
     let host = DEFAULT_TESTBENCH_HOST;
 
-    let registry = JobRegistry::new();
+    let ws = jobs::workspace_root();
+    let db_path = ws.join("data").join("testbench.db");
+    let db = db::Database::open(db_path)?;
+    let registry = JobRegistry::new(db);
     let state = AppState { registry };
 
     let cors = CorsLayer::new()
@@ -48,11 +51,21 @@ async fn main() -> Result<()> {
             "/jobs/cancel",
             post(jobs::cancel_job).get(jobs::cancel_job_by_query),
         )
+        .route(
+            "/jobs/cancel/{id}",
+            post(cancel_job_by_path).get(cancel_job_by_path),
+        )
         // Stage 5 canonical typed routes (task 10).
         .route("/jobs/training", post(ai_jobs::start_training))
         .route("/jobs/evaluation", post(ai_jobs::start_evaluation))
         .route("/jobs/benchmark", post(ai_jobs::start_benchmark))
         .route("/jobs/events/{id}", get(ai_jobs::job_typed_events))
+        // Stage 10 reports routes.
+        .route(
+            "/reports",
+            get(reports::list_reports).post(reports::create_report),
+        )
+        .route("/reports/{id}", get(reports::get_report))
         // Compatibility aliases: old routes stay, but spawn through the
         // same typed spec path (no separate implementation).
         .route("/jobs/train", post(jobs::start_train))

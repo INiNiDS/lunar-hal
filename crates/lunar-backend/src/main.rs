@@ -1,6 +1,8 @@
 use axum::{
     Json, Router,
     extract::Query,
+    http::{StatusCode, header},
+    response::IntoResponse,
     routing::{get, patch, post},
 };
 use lunar_utils::*;
@@ -9,9 +11,16 @@ use std::sync::Arc;
 use tokio::sync::broadcast;
 use tower_http::cors::{Any, CorsLayer};
 
-use crate::ai::{
-    RandomStellarInputs, generate_hybrid_metadata, generate_random_inputs, get_lore_cache,
-    get_pinn, warmup_models,
+use lunar_backend::{
+    AppState,
+    ai::{
+        self, PinnInputs, generate_hybrid_metadata, generate_random_inputs, get_lore_cache,
+        get_pinn, warmup_models,
+    },
+    gallery::{self, GalleryStore},
+    generate_siren_pixels,
+    scenes::{self, SceneStore, calculate_absolute_magnitude, infer_pinn_async},
+    texture_dimensions_valid, version,
 };
 use lunar_structures::{
     PinnResponse, PipelineRequest, PipelineResponse, RandomStarRequest, RandomStarResponse,
@@ -19,43 +28,15 @@ use lunar_structures::{
 };
 use lunar_utils::env::{get_gallery_dir, get_host, get_port, get_scenes_dir};
 
-#[cfg(feature = "siren")]
-use crate::ai::{get_siren, siren_generate_texture};
-
-pub mod ai;
-pub mod gallery;
-pub mod scenes;
-pub mod version;
-
-use crate::ai::PinnInputs;
-use crate::gallery::GalleryStore;
-use crate::scenes::{SceneStore, calculate_absolute_magnitude, infer_pinn_async};
-use lunar_structures::SceneEvent;
-
-#[derive(Clone)]
-pub struct AppState {
-    pub scenes: Arc<SceneStore>,
-    pub gallery: Arc<GalleryStore>,
-    pub scene_events: broadcast::Sender<SceneEvent>,
-}
-
-
-pub(crate) async fn generate_siren_pixels(
-    width: u32,
-    height: u32,
-    bp_rp: f32,
-    m_g: f32,
-    log_teff: f32,
-) -> Option<Vec<u8>> {
-    let siren = get_siren().await?;
-    tokio::task::spawn_blocking(move || {
-        siren_generate_texture(&siren, width, height, bp_rp, m_g, log_teff)
-    })
-    .await
-    .ok()
-}
-
-async fn siren_texture(Json(payload): Json<SirenTextureRequest>) -> Json<SirenTextureResponse> {
+async fn siren_texture(
+    Json(payload): Json<SirenTextureRequest>,
+) -> Result<Json<SirenTextureResponse>, (StatusCode, String)> {
+    if !texture_dimensions_valid(payload.width, payload.height) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "invalid texture dimensions".to_string(),
+        ));
+    }
     let pixels = generate_siren_pixels(
         payload.width,
         payload.height,
@@ -64,13 +45,16 @@ async fn siren_texture(Json(payload): Json<SirenTextureRequest>) -> Json<SirenTe
         payload.log_teff,
     )
     .await
-    .unwrap_or_else(|| vec![0; (payload.width as usize) * (payload.height as usize) * 3]);
+    .ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "SIREN model unavailable".to_string(),
+    ))?;
 
-    Json(SirenTextureResponse {
+    Ok(Json(SirenTextureResponse {
         width: payload.width,
         height: payload.height,
         pixels,
-    })
+    }))
 }
 
 #[derive(Deserialize)]
@@ -82,25 +66,34 @@ struct SirenPngParams {
     temperature_k: Option<f32>,
 }
 
-async fn siren_png(Query(params): Query<SirenPngParams>) -> Vec<u8> {
+async fn siren_png(
+    Query(params): Query<SirenPngParams>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
     let w = params.width.unwrap_or(256);
     let h = params.height.unwrap_or(256);
+    if !texture_dimensions_valid(w, h) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "invalid texture dimensions".to_string(),
+        ));
+    }
     let bp_rp = params.bp_rp.unwrap_or(1.5);
     let m_g = params.m_g.unwrap_or(5.0);
     let teff = params.temperature_k.unwrap_or(5778.0);
 
     let log_teff = if teff > 0.0 { teff.log10() } else { 3.75 };
 
-    let Some(rgb) = generate_siren_pixels(w, h, bp_rp, m_g, log_teff).await else {
-        let mut png = vec![0u8; 8];
-        png[0] = 0x89;
-        png[1] = 0x50;
-        png[2] = 0x4E;
-        png[3] = 0x47;
-        return png;
-    };
+    let rgb = generate_siren_pixels(w, h, bp_rp, m_g, log_teff)
+        .await
+        .ok_or((
+            StatusCode::SERVICE_UNAVAILABLE,
+            "SIREN model unavailable".to_string(),
+        ))?;
 
-    encode_rgb_png(&rgb, w, h)
+    Ok((
+        [(header::CONTENT_TYPE, "image/png")],
+        encode_rgb_png(&rgb, w, h),
+    ))
 }
 
 async fn description(Json(payload): Json<StarDescriptionPayload>) -> Json<StarLore> {
@@ -127,13 +120,22 @@ async fn description(Json(payload): Json<StarDescriptionPayload>) -> Json<StarLo
     })
 }
 
-async fn pipeline_handler(Json(payload): Json<PipelineRequest>) -> Json<PipelineResponse> {
+async fn pipeline_handler(
+    Json(payload): Json<PipelineRequest>,
+) -> Result<Json<PipelineResponse>, (StatusCode, String)> {
+    if !texture_dimensions_valid(payload.texture_size, payload.texture_size) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "invalid texture dimensions".to_string(),
+        ));
+    }
     let [teff, rad, mass, lum] = infer_pinn_async(PinnInputs {
         position: [payload.x_pc, payload.y_pc, payload.z_pc],
         bp_rp: payload.bp_rp,
         g_mag: payload.g_mag,
     })
-    .await;
+    .await
+    .map_err(|err| (StatusCode::SERVICE_UNAVAILABLE, err.to_string()))?;
 
     let m_g = calculate_absolute_magnitude(payload.x_pc, payload.y_pc, payload.z_pc, payload.g_mag);
     let log_teff = if teff > 0.0 { teff.log10() } else { 3.75 };
@@ -146,9 +148,10 @@ async fn pipeline_handler(Json(payload): Json<PipelineRequest>) -> Json<Pipeline
         log_teff,
     )
     .await
-    .unwrap_or_else(|| {
-        vec![0; (payload.texture_size as usize) * (payload.texture_size as usize) * 3]
-    });
+    .ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "SIREN model unavailable".to_string(),
+    ))?;
 
     let siren_texture = SirenTextureResponse {
         width: payload.texture_size,
@@ -166,7 +169,7 @@ async fn pipeline_handler(Json(payload): Json<PipelineRequest>) -> Json<Pipeline
         lore.as_deref(),
     );
 
-    Json(PipelineResponse {
+    Ok(Json(PipelineResponse {
         pinn: PinnResponse {
             temperature_k: teff,
             radius_solar: rad,
@@ -175,29 +178,33 @@ async fn pipeline_handler(Json(payload): Json<PipelineRequest>) -> Json<Pipeline
         },
         siren: siren_texture,
         metadata: meta,
-    })
+    }))
 }
 
-async fn random_star(Json(payload): Json<RandomStarRequest>) -> Json<RandomStarResponse> {
+async fn random_star(
+    Json(payload): Json<RandomStarRequest>,
+) -> Result<Json<RandomStarResponse>, (StatusCode, String)> {
     let entropy = payload.entropy_temperature;
-    let pinn = get_pinn().await;
+    let pinn = get_pinn()
+        .await
+        .map_err(|err| (StatusCode::SERVICE_UNAVAILABLE, err.to_string()))?;
 
     let inputs = tokio::task::spawn_blocking(move || generate_random_inputs(entropy, &pinn.norm))
         .await
-        .unwrap_or(RandomStellarInputs {
-            x_pc: 0.0,
-            y_pc: 0.0,
-            z_pc: 0.0,
-            bp_rp: 1.0,
-            g_mag: 10.0,
-        });
+        .map_err(|err| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                format!("PINN inputs unavailable: {err}"),
+            )
+        })?;
 
     let [teff, rad, mass, lum] = infer_pinn_async(PinnInputs {
         position: [inputs.x_pc, inputs.y_pc, inputs.z_pc],
         bp_rp: inputs.bp_rp,
         g_mag: inputs.g_mag,
     })
-    .await;
+    .await
+    .map_err(|err| (StatusCode::SERVICE_UNAVAILABLE, err.to_string()))?;
 
     let lore = get_lore_cache().await;
 
@@ -231,14 +238,30 @@ async fn random_star(Json(payload): Json<RandomStarRequest>) -> Json<RandomStarR
         velocity_vector: vel,
     };
 
-    Json(RandomStarResponse {
+    Ok(Json(RandomStarResponse {
         bp_rp: inputs.bp_rp,
         g_mag: inputs.g_mag,
         x_pc: inputs.x_pc,
         y_pc: inputs.y_pc,
         z_pc: inputs.z_pc,
         star,
-    })
+    }))
+}
+
+async fn localization_neighbors_handler(
+    Json(payload): Json<lunar_structures::LocalizationRequest>,
+) -> Json<lunar_structures::LocalizationResponse> {
+    let res = ai::predict_localization_neighbors(&payload).await;
+    Json(res)
+}
+
+async fn localize_physics_pipeline_handler(
+    Json(payload): Json<lunar_structures::PipelineLocalizePhysicsRequest>,
+) -> Result<Json<lunar_structures::PipelineLocalizePhysicsResponse>, (StatusCode, String)> {
+    let res = ai::predict_localize_physics_pipeline(&payload)
+        .await
+        .map_err(|err| (StatusCode::SERVICE_UNAVAILABLE, err.to_string()))?;
+    Ok(Json(res))
 }
 
 #[tokio::main]
@@ -275,6 +298,14 @@ async fn main() -> Result<(), anyhow::Error> {
         .route("/siren/texture", post(siren_texture))
         .route("/siren/png", get(siren_png))
         .route("/pipeline", post(pipeline_handler))
+        .route(
+            "/localization/neighbors",
+            post(localization_neighbors_handler),
+        )
+        .route(
+            "/pipeline/localize-physics",
+            post(localize_physics_pipeline_handler),
+        )
         .route("/scenes", get(scenes::list_scenes))
         .route("/scenes/create", post(scenes::create_scene))
         .route(
@@ -282,7 +313,10 @@ async fn main() -> Result<(), anyhow::Error> {
             get(scenes::get_scene).delete(scenes::delete_scene),
         )
         .route("/scenes/{id}/events", get(scenes::scene_events))
-        .route("/scenes/{id}/stars/generate", post(scenes::generate_scene_stars))
+        .route(
+            "/scenes/{id}/stars/generate",
+            post(scenes::generate_scene_stars),
+        )
         .route("/scenes/{id}/stars", post(scenes::create_scene_star))
         .route(
             "/scenes/{id}/stars/{star_id}",
@@ -299,8 +333,14 @@ async fn main() -> Result<(), anyhow::Error> {
                 .patch(gallery::update_gallery_star)
                 .delete(gallery::delete_gallery_star),
         )
-        .route("/gallery/stars/{id}/texture.png", get(gallery::gallery_texture))
-        .route("/gallery/stars/{id}/thumbnail", get(gallery::gallery_thumbnail))
+        .route(
+            "/gallery/stars/{id}/texture.png",
+            get(gallery::gallery_texture),
+        )
+        .route(
+            "/gallery/stars/{id}/thumbnail",
+            get(gallery::gallery_thumbnail),
+        )
         .route("/version", get(version::version))
         .route("/models/reload", post(version::reload))
         .layer(cors)

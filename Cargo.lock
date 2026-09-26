@@ -4541,9 +4541,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "899def5c37c4fd7b2664648c28120ecec138e4d395b459e5ca34f9cce2dd77fd"
 dependencies = [
  "cfg-if",
+ "js-sys",
  "libc",
  "r-efi 5.3.0",
  "wasip2",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -6165,6 +6167,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.23.1",
  "dioxus",
+ "getrandom 0.3.4",
  "gloo-timers 0.4.0",
  "image",
  "js-sys",
@@ -6262,6 +6265,7 @@ dependencies = [
  "chrono",
  "dioxus",
  "futures-util",
+ "getrandom 0.3.4",
  "gloo-net 0.7.0",
  "gloo-timers 0.4.0",
  "js-sys",
@@ -6284,6 +6288,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
+ "libc",
  "lnai-data",
  "lnai-training",
  "lunar-structures",
@@ -6292,6 +6297,7 @@ dependencies = [
  "nah",
  "parking_lot",
  "reqwest 0.12.28",
+ "rusqlite",
  "serde",
  "serde_json",
  "sysinfo 0.38.4",

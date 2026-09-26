@@ -70,6 +70,19 @@ pub fn training_spec_from_request(
                 }),
             )
         }
+        ModelKindDto::GnnLocalization => {
+            reject_unrelated_options(req, "gnn_localization")?;
+            (
+                ModelKind::GnnLocalization,
+                ModelConfig::GnnLocalization(lnai_training::spec::LocalizationConfig {
+                    radius: req.radius_pc.unwrap_or(25.0),
+                    max_slots: req.max_slots.unwrap_or(16),
+                    mask_ratio: req.mask_ratio.unwrap_or(0.3),
+                    seed: req.seed.unwrap_or(42),
+                    loss_weights: lnai_training::spec::LocalizationLossWeights::default(),
+                }),
+            )
+        }
     };
     let spec = TrainingSpec {
         model,
@@ -92,12 +105,14 @@ pub fn training_spec_from_request(
             ModelKindDto::Pinn => lnai_training::spec::ModelKind::Pinn,
             ModelKindDto::Gnn => lnai_training::spec::ModelKind::GnnKinematics,
             ModelKindDto::Siren => lnai_training::spec::ModelKind::Siren,
+            ModelKindDto::GnnLocalization => lnai_training::spec::ModelKind::GnnLocalization,
         })
         .to_string(),
         norm_file: lnai_training::artifacts::norm_file_name(&match req.model {
             ModelKindDto::Pinn => lnai_training::spec::ModelKind::Pinn,
             ModelKindDto::Gnn => lnai_training::spec::ModelKind::GnnKinematics,
             ModelKindDto::Siren => lnai_training::spec::ModelKind::Siren,
+            ModelKindDto::GnnLocalization => lnai_training::spec::ModelKind::GnnLocalization,
         })
         .to_string(),
         // Epoch-watch agent / sampling / tiles are CLI-only for now.
@@ -116,6 +131,7 @@ fn reject_unrelated_options(req: &TrainingRequest, kind: &str) -> Result<(), Str
     // GNN keeps its graph flags and SIREN keeps its texture flags.
     let mut stray = Vec::new();
     if kind != "gnn"
+        && kind != "gnn_localization"
         && (req.knn_k.is_some()
             || req.hidden_dim.is_some()
             || req.max_group_size.is_some()
@@ -145,6 +161,7 @@ pub fn evaluation_spec_from_request(
         ModelKindDto::Pinn => ModelKind::Pinn,
         ModelKindDto::Gnn => ModelKind::GnnKinematics,
         ModelKindDto::Siren => ModelKind::Siren,
+        ModelKindDto::GnnLocalization => ModelKind::GnnLocalization,
     };
     let spec = EvaluationSpec {
         model,
@@ -171,6 +188,7 @@ pub fn benchmark_spec_from_request(
         ModelKindDto::Pinn => ModelKind::Pinn,
         ModelKindDto::Gnn => ModelKind::GnnKinematics,
         ModelKindDto::Siren => ModelKind::Siren,
+        ModelKindDto::GnnLocalization => ModelKind::GnnLocalization,
     };
     let spec = BenchmarkSpec {
         model,
@@ -259,6 +277,7 @@ pub async fn start_training(
             ModelKindDto::Pinn => "PINN",
             ModelKindDto::Gnn => "GNN",
             ModelKindDto::Siren => "SIREN",
+            ModelKindDto::GnnLocalization => "GNN-LOC",
         },
         req.data_path
     );
@@ -386,6 +405,7 @@ fn legacy_train_spec(req: &TrainingRequest) -> lunar_structures_testbench::Train
         model: match req.model {
             ModelKindDto::Pinn => ModelKind::Pinn,
             ModelKindDto::Gnn => ModelKind::Gnn,
+            ModelKindDto::GnnLocalization => ModelKind::GnnLocalization,
             ModelKindDto::Siren => ModelKind::Siren,
         },
         epochs: req.epochs,
@@ -405,6 +425,10 @@ fn legacy_train_spec(req: &TrainingRequest) -> lunar_structures_testbench::Train
         patience: req.patience,
         grad_accum: req.grad_accum,
         clip_grad_norm: req.clip_grad_norm,
+        radius: req.radius_pc.map(|r| r as f64),
+        max_slots: req.max_slots,
+        mask_ratio: req.mask_ratio.map(|m| m as f64),
+        latent_dim: req.hidden_dim,
     }
 }
 
@@ -436,6 +460,8 @@ mod tests {
             radius_pc: None,
             texture_size: None,
             max_stars: None,
+            max_slots: None,
+            mask_ratio: None,
             seed: Some(42),
             dataset_manifest_hash: None,
             patience: 20,
@@ -514,6 +540,22 @@ mod tests {
             }
             other => panic!("unexpected config {other:?}"),
         }
+    }
+
+    #[test]
+    fn gnn_localization_request_converts_and_renders_argv() {
+        let mut req = pinn_request();
+        req.model = ModelKindDto::GnnLocalization;
+        req.radius_pc = Some(20.0);
+        req.max_slots = Some(8);
+        req.mask_ratio = Some(0.2);
+        let spec = training_spec_from_request(&req).expect("valid gnn_localization request");
+        assert_eq!(spec.model, lnai_training::spec::ModelKind::GnnLocalization);
+        assert_eq!(spec.model_file, "stellar_gnn_loc_model.bpk");
+        let argv = spec.worker_argv();
+        assert!(has_flag_value(&argv, "--radius", "20"));
+        assert!(has_flag_value(&argv, "--max-slots", "8"));
+        assert!(has_flag_value(&argv, "--mask-ratio", "0.2"));
     }
 
     #[test]

@@ -1,7 +1,8 @@
-//! Local-weights liveness probe (ignored by default).
+//! Local-weights integrity and liveness probes (ignored by default).
 //!
-//! These tests load the real `.bpk` weights from `models/` and run one
-//! CPU forward pass per model, asserting finite outputs. Weight files are
+//! The bundle test distinguishes file integrity from release approval; the
+//! forward test loads the real `.bpk` weights directly and asserts finite
+//! outputs, but does not certify model quality. Weight files are
 //! gitignored, so the suite only runs where weights exist:
 //! `cargo test -p lnai-training --test model_liveness -- --ignored`.
 
@@ -49,10 +50,13 @@ fn serving_bundles_verify_against_manifests() {
     for dir in ["models/gnn-v1", "models/pinn-trend", "models/pinn-v1"] {
         let entry = discover_bundle(&repo_root().join(dir)).expect("bundle must verify");
         assert!(
-            matches!(entry.status, RegistryStatus::Verified),
-            "{dir} must verify"
+            matches!(
+                entry.status,
+                RegistryStatus::Verified | RegistryStatus::ReleaseBlocked(_)
+            ),
+            "{dir} must pass integrity verification"
         );
-        println!("{dir}: VERIFIED");
+        println!("{dir}: {:?}", entry.status);
     }
 }
 

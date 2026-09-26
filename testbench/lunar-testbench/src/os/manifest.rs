@@ -2,9 +2,9 @@ use dioxus::prelude::*;
 
 use crate::os::log_window::LogWindow;
 use crate::pages::{
-    backend_api::BackendApi, dashboard::Dashboard, datasets::Datasets, models::Models,
-    pipeline::Pipeline, sandbox::Sandbox, siren_gallery::SirenGallery, training::Training,
-    validation::Validation,
+    backend_api::BackendApi, benchmarks::Benchmarks, dashboard::Dashboard, datasets::Datasets,
+    models::Models, pipeline::Pipeline, sandbox::Sandbox, siren_gallery::SirenGallery,
+    training::Training, validation::Validation,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -182,6 +182,20 @@ pub const ALL_APPS: &[AppDef] = &[
         },
     },
     AppDef {
+        id: "benchmarks",
+        title: "Benchmarks",
+        category: AppCategory::TestbenchBackend,
+        desktop_order: 35,
+        required_services: TESTBENCH_BACKEND,
+        content_mode: WindowContentMode::Scroll,
+        size: WindowSizeSpec {
+            preferred_width: 1040.0,
+            preferred_height: 700.0,
+            min_width: 520.0,
+            min_height: 420.0,
+        },
+    },
+    AppDef {
         id: "datasets",
         title: "Datasets",
         category: AppCategory::TestbenchBackend,
@@ -259,6 +273,10 @@ pub fn AppIcon(app_id: String) -> Element {
             path { d: "M12 2.8 20 6v6c0 5-3.4 8.1-8 9.4C7.4 20.1 4 17 4 12V6z" }
             path { d: "M8.8 12.2 11.2 14.6 15.6 10" }
         },
+        "benchmarks" => rsx! {
+            path { d: "M3 3v18h18" }
+            path { d: "m19 9-5 5-4-4-3 3" }
+        },
         "backend_api" => rsx! {
             rect { x: "3", y: "4", width: "18", height: "6", rx: "2" }
             rect { x: "3", y: "14", width: "18", height: "6", rx: "2" }
@@ -303,6 +321,7 @@ pub fn app_content(app_id: &str) -> Element {
         "siren_gallery" => rsx! { SirenGallery {} },
         "training" => rsx! { Training {} },
         "validation" => rsx! { Validation {} },
+        "benchmarks" => rsx! { Benchmarks {} },
         "backend_api" => rsx! { BackendApi {} },
         "datasets" => rsx! { Datasets {} },
         "sandbox" => rsx! { Sandbox {} },
@@ -348,16 +367,27 @@ mod tests {
     #[test]
     fn small_client_area_overrides_declared_minimum() {
         let sandbox = app_by_id("sandbox").unwrap();
-        assert_eq!(sandbox.size.fit_to_available_space(320.0, 240.0), (320.0, 240.0));
-        assert_eq!(sandbox.size.fit_to_available_space(1_920.0, 1_080.0), (1_180.0, 760.0));
+        assert_eq!(
+            sandbox.size.fit_to_available_space(320.0, 240.0),
+            (320.0, 240.0)
+        );
+        assert_eq!(
+            sandbox.size.fit_to_available_space(1_920.0, 1_080.0),
+            (1_180.0, 760.0)
+        );
     }
 
     #[test]
     fn sandbox_is_the_only_fill_mode_app() {
-        assert_eq!(app_by_id("sandbox").unwrap().content_mode, WindowContentMode::Fill);
-        assert!(ALL_APPS
-            .iter()
-            .filter(|app| app.id != "sandbox")
-            .all(|app| app.content_mode == WindowContentMode::Scroll));
+        assert_eq!(
+            app_by_id("sandbox").unwrap().content_mode,
+            WindowContentMode::Fill
+        );
+        assert!(
+            ALL_APPS
+                .iter()
+                .filter(|app| app.id != "sandbox")
+                .all(|app| app.content_mode == WindowContentMode::Scroll)
+        );
     }
 }

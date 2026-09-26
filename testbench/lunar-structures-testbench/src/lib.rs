@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 pub mod typed;
+pub use typed::ReportRecord;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -8,6 +9,7 @@ pub enum ModelKind {
     Pinn,
     Gnn,
     Siren,
+    GnnLocalization,
 }
 
 impl ModelKind {
@@ -16,14 +18,16 @@ impl ModelKind {
             ModelKind::Pinn => "pinn",
             ModelKind::Gnn => "gnn",
             ModelKind::Siren => "siren",
+            ModelKind::GnnLocalization => "gnn_localization",
         }
     }
 
     pub fn label(&self) -> &'static str {
         match self {
             ModelKind::Pinn => "PINN",
-            ModelKind::Gnn => "GNN",
+            ModelKind::Gnn => "GNN (Kinematics)",
             ModelKind::Siren => "SIREN",
+            ModelKind::GnnLocalization => "GNN (Localization)",
         }
     }
 
@@ -32,14 +36,16 @@ impl ModelKind {
             ModelKind::Pinn => "lnai",
             ModelKind::Gnn => "lnai-gnn",
             ModelKind::Siren => "lnai-siren",
+            ModelKind::GnnLocalization => "lnai-gnn",
         }
     }
 
     pub fn from_slug(s: &str) -> Option<Self> {
         match s {
             "pinn" => Some(Self::Pinn),
-            "gnn" => Some(Self::Gnn),
+            "gnn" | "gnn_kinematics" => Some(Self::Gnn),
             "siren" => Some(Self::Siren),
+            "gnn_localization" | "gnn_loc" => Some(Self::GnnLocalization),
             _ => None,
         }
     }
@@ -53,6 +59,10 @@ pub struct ModelArtifact {
     pub size_bytes: u64,
     pub mtime_ms: u64,
     pub exists: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manifest_hash: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -62,6 +72,10 @@ pub struct DatasetInfo {
     pub size_bytes: u64,
     pub mtime_ms: u64,
     pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema_hash: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -88,6 +102,10 @@ pub struct HostInfo {
     pub cpu_count: usize,
     pub total_memory_bytes: u64,
     pub rustc_version: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub devices: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gpu_count: Option<usize>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -109,6 +127,8 @@ pub struct SystemSnapshot {
     pub jobs: Vec<Job>,
     pub norms: Vec<NormSnapshot>,
     pub host: HostInfo,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reports: Option<Vec<ReportRecord>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -216,6 +236,14 @@ pub struct TrainSpec {
     pub patience: u32,
     pub grad_accum: u32,
     pub clip_grad_norm: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub radius: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_slots: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mask_ratio: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latent_dim: Option<u32>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -230,6 +258,10 @@ pub struct ValidateSpec {
     pub knn_k: Option<u32>,
     pub texture_size: Option<u32>,
     pub max_stars: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub radius: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_slots: Option<u32>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]

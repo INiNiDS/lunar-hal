@@ -7,7 +7,7 @@ use burn::prelude::*;
 use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 
-use lnai_models::{StellarMlpConfig, fourier_encode};
+use lnai_models::{StellarMlpConfig, fourier_encode, fourier_encode_cached};
 
 type B = NdArray;
 
@@ -41,6 +41,12 @@ fn bench_pinn_forward(c: &mut Criterion) {
     c.bench_function("pinn_fourier_encode_1024", |b| {
         let xs = random_input(1024, 3, 7);
         b.iter(|| black_box(fourier_encode(xs.clone(), 8)))
+    });
+
+    // Stage 7: same microbench through the device-resident cache.
+    c.bench_function("pinn_fourier_encode_cached_1024", |b| {
+        let xs = random_input(1024, 3, 7);
+        b.iter(|| black_box(fourier_encode_cached(xs.clone(), 8)))
     });
 
     c.bench_function("pinn_forward_1024", |b| {

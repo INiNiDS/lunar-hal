@@ -153,6 +153,21 @@ pub fn clear_selection(game: &StellarScene) {
     game.select_star(None);
 }
 
+/// Export current camera offset, zoom, and selected star ID as a snapshot.
+pub fn export_camera_snapshot(game: &StellarScene) -> ((f32, f32), f32, Option<u64>) {
+    let cam = game.camera();
+    let star_id = game.selected_star().map(|s| s.id as u64);
+    (cam.offset, cam.zoom, star_id)
+}
+
+/// Apply restored camera offset and zoom to the active stellar scene.
+pub fn apply_camera_snapshot(game: &StellarScene, offset: (f32, f32), zoom: f32) {
+    let mut cam = game.camera();
+    cam.offset = offset;
+    cam.zoom = zoom;
+    game.set_camera(cam);
+}
+
 /// Helper for components that want to know whether the scene id
 /// they last saw has changed (used to apply persisted cameras).
 pub fn use_scene_id_change<F>(mut on_change: F)

@@ -22,8 +22,8 @@ use lunar_structures::{
 use lunar_utils::encode_rgb_png;
 use serde::Deserialize;
 
-use crate::{AppState, generate_siren_pixels};
 use crate::scenes::calculate_absolute_magnitude;
+use crate::{AppState, generate_siren_pixels};
 
 #[derive(Default)]
 pub struct GalleryStore {
@@ -187,7 +187,9 @@ impl GalleryStore {
         sort: Option<&str>,
         query: Option<&str>,
     ) -> GalleryListResponse {
-        let query = query.map(|value| value.trim().to_lowercase()).filter(|value| !value.is_empty());
+        let query = query
+            .map(|value| value.trim().to_lowercase())
+            .filter(|value| !value.is_empty());
         let mut records = self
             .inner
             .read()
@@ -196,28 +198,43 @@ impl GalleryStore {
         records.retain(|record| {
             let Some(query) = &query else { return true };
             record.id.to_lowercase().contains(query)
-                || record.name.as_deref().is_some_and(|name| name.to_lowercase().contains(query))
+                || record
+                    .name
+                    .as_deref()
+                    .is_some_and(|name| name.to_lowercase().contains(query))
                 || record.star.name.to_lowercase().contains(query)
-                || record.tags.iter().any(|tag| tag.to_lowercase().contains(query))
+                || record
+                    .tags
+                    .iter()
+                    .any(|tag| tag.to_lowercase().contains(query))
         });
         match sort.unwrap_or("updated_desc") {
             "name" => records.sort_by(|left, right| gallery_name(left).cmp(&gallery_name(right))),
             "created_asc" => records.sort_by_key(|record| record.created_at),
-            _ => records.sort_by_key(|record| std::cmp::Reverse((record.updated_at, record.id.clone()))),
+            _ => records
+                .sort_by_key(|record| std::cmp::Reverse((record.updated_at, record.id.clone()))),
         }
         let start = cursor
             .and_then(|cursor| records.iter().position(|record| record.id == cursor))
             .map(|index| index + 1)
             .unwrap_or(0);
         let limit = limit.clamp(1, 100);
-        let stars = records.into_iter().skip(start).take(limit).collect::<Vec<_>>();
+        let stars = records
+            .into_iter()
+            .skip(start)
+            .take(limit)
+            .collect::<Vec<_>>();
         let next_cursor = (stars.len() == limit)
             .then(|| stars.last().map(|record| record.id.clone()))
             .flatten();
         GalleryListResponse { stars, next_cursor }
     }
 
-    pub fn update(&self, id: &str, update: UpdateGalleryStarRequest) -> Result<GalleryStar, String> {
+    pub fn update(
+        &self,
+        id: &str,
+        update: UpdateGalleryStarRequest,
+    ) -> Result<GalleryStar, String> {
         let mut record = self
             .get(id)
             .ok_or_else(|| format!("Gallery star {id} not found"))?;
@@ -240,7 +257,12 @@ impl GalleryStore {
     }
 
     pub fn delete(&self, id: &str) -> bool {
-        let Some(record) = self.inner.write().ok().and_then(|mut records| records.remove(id)) else {
+        let Some(record) = self
+            .inner
+            .write()
+            .ok()
+            .and_then(|mut records| records.remove(id))
+        else {
             return false;
         };
         if let Some(request_id) = record.request_id {
@@ -305,7 +327,8 @@ pub(crate) async fn texture_for(request: &CreateGalleryStarRequest) -> Option<Ve
     } else {
         3.75
     };
-    let pixels = generate_siren_pixels(size, size, request.inputs.bp_rp, magnitude, log_teff).await?;
+    let pixels =
+        generate_siren_pixels(size, size, request.inputs.bp_rp, magnitude, log_teff).await?;
     Some(encode_rgb_png(&pixels, size, size))
 }
 
@@ -337,11 +360,12 @@ pub async fn get_gallery_star(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<GalleryStar>, (StatusCode, String)> {
-    state
-        .gallery
-        .get(&id)
-        .map(Json)
-        .ok_or_else(|| (StatusCode::NOT_FOUND, format!("Gallery star {id} not found")))
+    state.gallery.get(&id).map(Json).ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            format!("Gallery star {id} not found"),
+        )
+    })
 }
 
 pub async fn update_gallery_star(
@@ -363,7 +387,10 @@ pub async fn update_gallery_star(
         })
 }
 
-pub async fn delete_gallery_star(State(state): State<AppState>, Path(id): Path<String>) -> StatusCode {
+pub async fn delete_gallery_star(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> StatusCode {
     if state.gallery.delete(&id) {
         StatusCode::NO_CONTENT
     } else {
@@ -372,7 +399,8 @@ pub async fn delete_gallery_star(State(state): State<AppState>, Path(id): Path<S
 }
 
 fn image_response(bytes: Option<Vec<u8>>) -> Result<Response, (StatusCode, String)> {
-    let bytes = bytes.ok_or_else(|| (StatusCode::NOT_FOUND, "Gallery asset not found".to_string()))?;
+    let bytes =
+        bytes.ok_or_else(|| (StatusCode::NOT_FOUND, "Gallery asset not found".to_string()))?;
     Ok(([(header::CONTENT_TYPE, "image/png")], bytes).into_response())
 }
 
@@ -398,7 +426,10 @@ mod tests {
     fn temporary_directory(label: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
             "lunar-gallery-{label}-{}",
-            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
         ))
     }
 
@@ -440,7 +471,9 @@ mod tests {
     fn gallery_records_persist_and_post_is_idempotent() {
         let dir = temporary_directory("idempotent");
         let store = GalleryStore::new(dir.clone());
-        let first = store.create(request("drop-1"), Some(vec![137, 80, 78, 71])).unwrap();
+        let first = store
+            .create(request("drop-1"), Some(vec![137, 80, 78, 71]))
+            .unwrap();
         let duplicate = store.create(request("drop-1"), None).unwrap();
         assert_eq!(first.id, duplicate.id);
         assert!(dir.join(&first.id).join("metadata.json").exists());

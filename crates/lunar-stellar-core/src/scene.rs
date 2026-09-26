@@ -24,8 +24,9 @@ use crate::snapshot::StellarSceneSnapshot;
 use crate::validation::{
     ValidationError, ValidationResult, validate_bp_rp, validate_center_x, validate_center_y,
     validate_center_z, validate_entropy, validate_g_mag, validate_pipeline, validate_response_star,
-    validate_response_stars, validate_search_radius, validate_sector_key, validate_temperature,
-    validate_scene, validate_scene_id, validate_scene_name, validate_scene_summary, validate_zoom,
+    validate_response_stars, validate_scene, validate_scene_id, validate_scene_name,
+    validate_scene_summary, validate_search_radius, validate_sector_key, validate_temperature,
+    validate_zoom,
 };
 
 /// How the game reaches the AI backend.
@@ -256,7 +257,10 @@ impl StellarScene {
         Ok(scene)
     }
 
-    pub async fn create_scene(&self, req: CreateStarSceneRequest) -> Result<StarScene, StellarSceneError> {
+    pub async fn create_scene(
+        &self,
+        req: CreateStarSceneRequest,
+    ) -> Result<StarScene, StellarSceneError> {
         // Validate every field of the user-facing request before any
         // network traffic.
         let name = validate_scene_name(&req.name)?.to_string();
@@ -354,9 +358,14 @@ impl StellarScene {
             let mut state = self.state.write();
             match event {
                 SceneEvent::StarAdded { scene_id, star, .. } => {
-                    if state.active_scene.as_ref().is_some_and(|scene| scene.id == scene_id) {
+                    if state
+                        .active_scene
+                        .as_ref()
+                        .is_some_and(|scene| scene.id == scene_id)
+                    {
                         let scene = state.active_scene.as_mut().expect("checked active scene");
-                        if let Some(index) = scene.stars.iter().position(|item| item.id == star.id) {
+                        if let Some(index) = scene.stars.iter().position(|item| item.id == star.id)
+                        {
                             scene.stars[index] = star;
                         } else {
                             scene.stars.push(star);
@@ -369,9 +378,14 @@ impl StellarScene {
                         .selected_star
                         .as_ref()
                         .is_some_and(|selected| selected.id == star.id);
-                    if state.active_scene.as_ref().is_some_and(|scene| scene.id == scene_id) {
+                    if state
+                        .active_scene
+                        .as_ref()
+                        .is_some_and(|scene| scene.id == scene_id)
+                    {
                         let scene = state.active_scene.as_mut().expect("checked active scene");
-                        if let Some(index) = scene.stars.iter().position(|item| item.id == star.id) {
+                        if let Some(index) = scene.stars.iter().position(|item| item.id == star.id)
+                        {
                             scene.stars[index] = star.clone();
                             if selected {
                                 state.selected_star = Some(star);
@@ -385,7 +399,11 @@ impl StellarScene {
                         .selected_star
                         .as_ref()
                         .is_some_and(|selected| selected.id == star_id);
-                    if state.active_scene.as_ref().is_some_and(|scene| scene.id == scene_id) {
+                    if state
+                        .active_scene
+                        .as_ref()
+                        .is_some_and(|scene| scene.id == scene_id)
+                    {
                         let scene = state.active_scene.as_mut().expect("checked active scene");
                         let old_len = scene.stars.len();
                         scene.stars.retain(|item| item.id != star_id);
@@ -398,7 +416,11 @@ impl StellarScene {
                 }
                 SceneEvent::SceneCleared { scene_id } => {
                     let has_selection = state.selected_star.is_some();
-                    if state.active_scene.as_ref().is_some_and(|scene| scene.id == scene_id) {
+                    if state
+                        .active_scene
+                        .as_ref()
+                        .is_some_and(|scene| scene.id == scene_id)
+                    {
                         let scene = state.active_scene.as_mut().expect("checked active scene");
                         if !scene.stars.is_empty() || has_selection {
                             scene.stars.clear();
@@ -897,8 +919,9 @@ impl StellarScene {
                 cam_zoom: state.camera.zoom,
                 scene_center: center,
             };
-            let protected: HashSet<SectorKey> =
-                crate::sector::streaming_chunks(request).into_iter().collect();
+            let protected: HashSet<SectorKey> = crate::sector::streaming_chunks(request)
+                .into_iter()
+                .collect();
             let loading = state.sector_loading.clone();
             state
                 .sector_failures
@@ -958,7 +981,10 @@ impl StellarScene {
     /// Both the input star and the response are validated; the
     /// texture is sanity-checked for the expected `width*height*3`
     /// pixel count.
-    pub async fn fetch_pipeline(&self, star: ResponseStar) -> Result<PipelineResponse, StellarSceneError> {
+    pub async fn fetch_pipeline(
+        &self,
+        star: ResponseStar,
+    ) -> Result<PipelineResponse, StellarSceneError> {
         validate_response_star(&star)?;
         let req = PipelineRequest {
             x_pc: star.x,

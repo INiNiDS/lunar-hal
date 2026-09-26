@@ -18,3 +18,6 @@ AGENT_MODEL
 models/stellar_norm.json
 node_modules/
 tailwind.css
+playwright-report/
+.junie/
+notion_plan.txt

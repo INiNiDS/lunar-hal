@@ -12,19 +12,24 @@ pub struct StellarSiren<B: Backend> {
     hidden1: Linear<B>,
     hidden2: Linear<B>,
     output: Linear<B>,
+    #[module(skip)]
+    pub w0: f64,
 }
 
 #[derive(Config, Debug)]
 pub struct StellarSirenConfig {
     #[config(default = 64)]
     pub hidden: usize,
+    #[config(default = 30.0)]
+    pub w0: f64,
 }
 
 impl StellarSirenConfig {
     pub fn init<B: Backend>(&self, device: &B::Device) -> StellarSiren<B> {
         let hidden = self.hidden;
+        let w0 = self.w0;
         let first_bound = 1.0 / SIREN_INPUT_DIM as f64;
-        let hidden_bound = (6.0 / hidden as f64).sqrt() / SIREN_W0;
+        let hidden_bound = (6.0 / hidden as f64).sqrt() / w0;
 
         StellarSiren {
             first: LinearConfig::new(SIREN_INPUT_DIM, hidden)
@@ -46,15 +51,36 @@ impl StellarSirenConfig {
                 })
                 .init(device),
             output: LinearConfig::new(hidden, SIREN_OUTPUT_DIM).init(device),
+            w0,
         }
     }
 }
 
 impl<B: Backend> StellarSiren<B> {
     pub fn forward(&self, xs: Tensor<B, 2>) -> Tensor<B, 2> {
-        let h = self.first.forward(xs).mul_scalar(SIREN_W0).sin();
-        let h = self.hidden1.forward(h).mul_scalar(SIREN_W0).sin();
-        let h = self.hidden2.forward(h).mul_scalar(SIREN_W0).sin();
+        let h = self.first.forward(xs).mul_scalar(self.w0).sin();
+        let h = self.hidden1.forward(h).mul_scalar(self.w0).sin();
+        let h = self.hidden2.forward(h).mul_scalar(self.w0).sin();
         burn::tensor::activation::sigmoid(self.output.forward(h))
+    }
+
+    /// Stage 7: chunked texture inference.
+    /// Evaluates `xs` in bounded row chunks of size `chunk_size` to limit peak VRAM/RAM
+    /// consumption during high-resolution texture generation (e.g. 256x256 or 512x512).
+    pub fn forward_chunked(&self, xs: Tensor<B, 2>, chunk_size: usize) -> Tensor<B, 2> {
+        let [total_rows, _] = xs.dims();
+        if total_rows <= chunk_size || chunk_size == 0 {
+            return self.forward(xs);
+        }
+
+        let mut chunks = Vec::with_capacity((total_rows + chunk_size - 1) / chunk_size);
+        let mut start = 0;
+        while start < total_rows {
+            let end = (start + chunk_size).min(total_rows);
+            let chunk_input = xs.clone().slice([start..end]);
+            chunks.push(self.forward(chunk_input));
+            start = end;
+        }
+        Tensor::cat(chunks, 0)
     }
 }

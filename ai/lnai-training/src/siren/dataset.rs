@@ -7,6 +7,7 @@ use rand::seq::SliceRandom;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+use std::sync::Arc;
 
 use lnai_models::SIREN_INPUT_DIM;
 
@@ -30,6 +31,8 @@ pub struct SirenDataset {
     /// Stage 6: stars covered by this split (train/val splits are
     /// star-disjoint, so this also proves no pixel leakage).
     pub n_stars: usize,
+    plan: Option<Arc<StarTexturePlan>>,
+    shuffle_seed: u64,
 }
 
 /// Photometry conditioning one texture: public so streaming plans and
@@ -42,10 +45,8 @@ pub struct StarParams {
 }
 
 /// Stage 6 streaming-ready contract: everything needed to render any
-/// `(star, pixel)` row deterministically, in kilobytes — no materialized
-/// texture buffers. [`SirenDataset::generate`] (shuffleable, used by the
-/// trainer) and [`StreamingBatcher`] (on-demand, no big Vecs) are both
-/// built on top of this plan so the two paths cannot disagree.
+/// `(star, pixel)` row deterministically without materialized texture buffers.
+/// The trainer and [`StreamingBatcher`] both consume this plan on demand.
 pub struct StarTexturePlan {
     /// `(global_star_idx, params)` members of this split. Seeds derive
     /// from the global index, so a star renders byte-identical textures no
@@ -203,13 +204,34 @@ impl SirenDataset {
         stars.truncate(n_stars);
         println!("Using {} stars (max_stars={})", n_stars, max_stars);
 
+        let (train_star_idx, val_star_idx) = if let Ok(split) = df.column("split") {
+            let split = split.str()?;
+            let mut train = Vec::new();
+            let mut validation = Vec::new();
+            for (i, (row, _)) in stars.iter().enumerate() {
+                match split.get(*row) {
+                    Some("train") => train.push(i),
+                    Some("validation") => validation.push(i),
+                    other => anyhow::bail!("invalid split {other:?} at row {row}"),
+                }
+            }
+            (train, validation)
+        } else {
+            split_star_indices(n_stars, val_frac, seed)
+        };
+
         let norm = match existing_norm {
             Some(reused) => {
                 println!("Using provided SIREN normalization snapshot (resume/eval path)");
                 reused
             }
             None => {
-                let computed = compute_norm(&stars);
+                let norm_stars: Vec<StarParams> =
+                    train_star_idx.iter().map(|&i| stars[i].1).collect();
+                if norm_stars.is_empty() {
+                    anyhow::bail!("SIREN split contains no train stars after filtering");
+                }
+                let computed = compute_norm(&norm_stars);
                 print_norm(&computed);
                 computed
             }
@@ -218,52 +240,54 @@ impl SirenDataset {
         let u_coords = generate_uv_grid(texture_size);
         let n_pixels = texture_size * texture_size;
 
-        // Stage 6: split whole stars, never pixels — a star's texture
-        // exists on exactly one side of the train/val boundary, so
-        // validation cannot leak through shared pixels.
-        let (train_star_idx, val_star_idx) = split_star_indices(n_stars, val_frac, seed);
+        // Both canonical labels and the legacy seeded split select whole stars.
         let plan_for = |indices: &[usize]| StarTexturePlan {
-            stars: indices.iter().map(|&i| (i, stars[i])).collect(),
+            stars: indices
+                .iter()
+                .map(|&i| {
+                    let (row, star) = stars[i];
+                    (if df.column("split").is_ok() { row } else { i }, star)
+                })
+                .collect(),
             norm: norm.clone(),
             u_coords: u_coords.clone(),
             texture_size,
             seed_base: seed,
         };
-        let train_plan = plan_for(&train_star_idx);
-        let val_plan = plan_for(&val_star_idx);
+        let train_plan = Arc::new(plan_for(&train_star_idx));
+        let val_plan = Arc::new(plan_for(&val_star_idx));
 
-        let total_samples = (train_plan.n_rows() + val_plan.n_rows()) as f64;
-        let ram_gb = total_samples * (SIREN_INPUT_DIM + TARGET_DIM) as f64 * 4.0 / 1073741824.0;
         println!(
             "Texture grid: {}x{} = {} pixels/star",
             texture_size, texture_size, n_pixels
         );
         println!(
-            "Train: {} stars, Val: {} stars ({} rows total, ~{:.2} GB materialized)",
+            "Train: {} stars, Val: {} stars ({} rows total, rendered on demand)",
             train_plan.n_stars(),
             val_plan.n_stars(),
-            train_plan.n_rows() + val_plan.n_rows(),
-            ram_gb
+            train_plan.n_rows() + val_plan.n_rows()
         );
 
-        let (train_inputs, train_targets) = train_plan.render_all();
         let n_train = train_plan.n_rows();
-        let (val_inputs, val_targets) = val_plan.render_all();
         let n_val = val_plan.n_rows();
 
         let train = SirenDataset {
-            inputs_cpu: train_inputs,
-            targets_cpu: train_targets,
+            inputs_cpu: Vec::new(),
+            targets_cpu: Vec::new(),
             norm: norm.clone(),
             n_samples: n_train,
             n_stars: train_plan.n_stars(),
+            plan: Some(train_plan),
+            shuffle_seed: seed,
         };
         let val = SirenDataset {
-            inputs_cpu: val_inputs,
-            targets_cpu: val_targets,
+            inputs_cpu: Vec::new(),
+            targets_cpu: Vec::new(),
             norm,
             n_samples: n_val,
             n_stars: val_plan.n_stars(),
+            plan: Some(val_plan),
+            shuffle_seed: seed ^ 0xD1B54A32D192ED03,
         };
 
         Ok((train, val))
@@ -274,6 +298,10 @@ impl SirenDataset {
     }
 
     pub fn shuffle_with_seed(&mut self, seed: u64) {
+        if self.plan.is_some() {
+            self.shuffle_seed = seed;
+            return;
+        }
         let n = self.n_samples;
         if n == 0 {
             return;
@@ -301,6 +329,7 @@ impl SirenDataset {
 pub struct PrefetchBatcher {
     inputs: Vec<f32>,
     targets: Vec<f32>,
+    streaming: Option<StreamingBatcher>,
     n_samples: usize,
     batch_size: usize,
     current: usize,
@@ -308,9 +337,13 @@ pub struct PrefetchBatcher {
 
 impl PrefetchBatcher {
     pub fn new(dataset: &SirenDataset, batch_size: usize) -> Self {
+        let streaming = dataset.plan.as_ref().map(|plan| {
+            StreamingBatcher::new_shuffled(Arc::clone(plan), batch_size, dataset.shuffle_seed)
+        });
         Self {
             inputs: dataset.inputs_cpu.clone(),
             targets: dataset.targets_cpu.clone(),
+            streaming,
             n_samples: dataset.n_samples,
             batch_size,
             current: 0,
@@ -321,6 +354,9 @@ impl PrefetchBatcher {
         &mut self,
         device: &B::Device,
     ) -> Option<(Tensor<B, 2>, Tensor<B, 2>)> {
+        if let Some(streaming) = &mut self.streaming {
+            return streaming.next_batch(device);
+        }
         if self.current >= self.n_samples {
             return None;
         }
@@ -349,20 +385,24 @@ impl PrefetchBatcher {
 /// Stage 6 streaming batcher: yields `(inputs, targets)` batches by
 /// rendering rows on demand from a [`StarTexturePlan`], without ever
 /// materializing the full texture buffers. Row order is either plan order
-/// or a seeded shuffle over flat row indices.
+/// or compact seeded permutations of stars and pixels; metadata is
+/// O(n_stars + n_pixels), not O(n_stars * n_pixels).
 pub struct StreamingBatcher {
     plan: std::sync::Arc<StarTexturePlan>,
-    order: Vec<usize>,
+    star_order: Vec<usize>,
+    pixel_order: Vec<usize>,
     batch_size: usize,
     current: usize,
 }
 
 impl StreamingBatcher {
     pub fn new(plan: std::sync::Arc<StarTexturePlan>, batch_size: usize) -> Self {
-        let order: Vec<usize> = (0..plan.n_rows()).collect();
+        let star_order: Vec<usize> = (0..plan.n_stars()).collect();
+        let pixel_order: Vec<usize> = (0..plan.n_pixels()).collect();
         Self {
             plan,
-            order,
+            star_order,
+            pixel_order,
             batch_size: batch_size.max(1),
             current: 0,
         }
@@ -373,8 +413,131 @@ impl StreamingBatcher {
         batch_size: usize,
         seed: u64,
     ) -> Self {
-        let mut order: Vec<usize> = (0..plan.n_rows()).collect();
-        order.shuffle(&mut StdRng::seed_from_u64(seed));
+        let mut star_order: Vec<usize> = (0..plan.n_stars()).collect();
+        let mut pixel_order: Vec<usize> = (0..plan.n_pixels()).collect();
+        star_order.shuffle(&mut StdRng::seed_from_u64(seed));
+        pixel_order.shuffle(&mut StdRng::seed_from_u64(seed ^ 0x9E3779B97F4A7C15));
+        Self {
+            plan,
+            star_order,
+            pixel_order,
+            batch_size: batch_size.max(1),
+            current: 0,
+        }
+    }
+
+    pub fn next_batch<B: Backend>(
+        &mut self,
+        device: &B::Device,
+    ) -> Option<(Tensor<B, 2>, Tensor<B, 2>)> {
+        if self.current >= self.plan.n_rows() {
+            return None;
+        }
+        let end = (self.current + self.batch_size).min(self.plan.n_rows());
+        let rows = end - self.current;
+        let n_pixels = self.plan.n_pixels();
+        let mut inp_batch = vec![0.0f32; rows * SIREN_INPUT_DIM];
+        let mut tgt_batch = vec![0.0f32; rows * TARGET_DIM];
+        for (row, flat) in (self.current..end).enumerate() {
+            let star_slot = flat / n_pixels;
+            let pixel_slot = flat % n_pixels;
+            let star_idx = self.star_order[star_slot];
+            let pixel_idx = self.pixel_order[pixel_slot];
+            let io = row * SIREN_INPUT_DIM;
+            let to = row * TARGET_DIM;
+            self.plan.render_pixel(
+                star_idx,
+                pixel_idx,
+                &mut inp_batch[io..io + SIREN_INPUT_DIM],
+                &mut tgt_batch[to..to + TARGET_DIM],
+            );
+        }
+        self.current = end;
+        let inputs =
+            Tensor::<B, 2>::from_data(TensorData::new(inp_batch, [rows, SIREN_INPUT_DIM]), device);
+        let targets =
+            Tensor::<B, 2>::from_data(TensorData::new(tgt_batch, [rows, TARGET_DIM]), device);
+        Some((inputs, targets))
+    }
+}
+
+/// Stage 7: stratified streaming batcher.
+///
+/// Ensures balanced representation across stars and spatial texture strata
+/// (core vs. limb pixels) in every batch without pre-materializing textures.
+pub struct StratifiedStreamingBatcher {
+    plan: std::sync::Arc<StarTexturePlan>,
+    order: Vec<usize>,
+    batch_size: usize,
+    current: usize,
+}
+
+impl StratifiedStreamingBatcher {
+    pub fn new(plan: std::sync::Arc<StarTexturePlan>, batch_size: usize, seed: u64) -> Self {
+        let n_stars = plan.n_stars();
+        let n_pixels = plan.n_pixels();
+        let mut rng = StdRng::seed_from_u64(seed);
+
+        if n_stars == 0 || n_pixels == 0 {
+            return Self {
+                plan,
+                order: Vec::new(),
+                batch_size: batch_size.max(1),
+                current: 0,
+            };
+        }
+
+        // Precompute pixel stratification per star: core (r < 0.5) and limb (r >= 0.5)
+        let mut core_pixels = Vec::new();
+        let mut limb_pixels = Vec::new();
+        for p in 0..n_pixels {
+            let u = plan.u_coords[p * 2];
+            let v = plan.u_coords[p * 2 + 1];
+            let r = (u * u + v * v).sqrt();
+            if r < 0.5 {
+                core_pixels.push(p);
+            } else {
+                limb_pixels.push(p);
+            }
+        }
+        if core_pixels.is_empty() {
+            core_pixels.push(0);
+        }
+        if limb_pixels.is_empty() {
+            limb_pixels.push(0);
+        }
+
+        // Generate interleaved stratified sequence across stars and strata
+        let mut per_star_orders = Vec::with_capacity(n_stars);
+        for _ in 0..n_stars {
+            let mut s_core = core_pixels.clone();
+            let mut s_limb = limb_pixels.clone();
+            s_core.shuffle(&mut rng);
+            s_limb.shuffle(&mut rng);
+            let mut s_order = Vec::with_capacity(n_pixels);
+            let mut c_idx = 0;
+            let mut l_idx = 0;
+            while c_idx < s_core.len() || l_idx < s_limb.len() {
+                if c_idx < s_core.len() {
+                    s_order.push(s_core[c_idx]);
+                    c_idx += 1;
+                }
+                if l_idx < s_limb.len() {
+                    s_order.push(s_limb[l_idx]);
+                    l_idx += 1;
+                }
+            }
+            per_star_orders.push(s_order);
+        }
+
+        let mut order = Vec::with_capacity(n_stars * n_pixels);
+        for p_idx in 0..n_pixels {
+            for star_idx in 0..n_stars {
+                let pixel_idx = per_star_orders[star_idx][p_idx];
+                order.push(star_idx * n_pixels + pixel_idx);
+            }
+        }
+
         Self {
             plan,
             order,
@@ -416,7 +579,7 @@ impl StreamingBatcher {
     }
 }
 
-fn extract_star_params(df: &DataFrame) -> Result<Vec<StarParams>> {
+fn extract_star_params(df: &DataFrame) -> Result<Vec<(usize, StarParams)>> {
     let bp_rp = extract_f32(df, "bp_rp")?;
     let mag_g = extract_f32(df, "mag_g")?;
     let x = extract_f32(df, "x_pc")?;
@@ -435,17 +598,20 @@ fn extract_star_params(df: &DataFrame) -> Result<Vec<StarParams>> {
         })
         .collect();
 
-    let result: Vec<StarParams> = (0..bp_rp.len())
+    let result: Vec<(usize, StarParams)> = (0..bp_rp.len())
         .filter_map(|i| {
             let c = bp_rp[i];
             let m = mg[i];
             let r = ruwe[i];
             if c.is_finite() && m.is_finite() && r.is_finite() && r >= 0.0 {
-                Some(StarParams {
-                    bp_rp: c,
-                    mg: m,
-                    ruwe: r,
-                })
+                Some((
+                    i,
+                    StarParams {
+                        bp_rp: c,
+                        mg: m,
+                        ruwe: r,
+                    },
+                ))
             } else {
                 None
             }
@@ -556,7 +722,18 @@ fn read_filtered_parquet(parquet_path: &Path, max_rows: Option<u64>) -> Result<(
         }
     }
 
-    let mut lf = lf.select(required_cols.iter().map(|c| col(*c)).collect::<Vec<_>>());
+    let mut proj: Vec<Expr> = required_cols.iter().map(|c| col(*c)).collect();
+    if schema.contains("split") {
+        proj.push(col("split"));
+    }
+    let mut lf = lf.select(proj);
+    if schema.contains("split") {
+        lf = lf.filter(
+            col("split")
+                .is_not_null()
+                .and(col("split").neq(lit("test"))),
+        );
+    }
     for &col_name in required_cols {
         lf = lf.filter(col(col_name).is_not_null());
     }
@@ -576,6 +753,13 @@ fn read_filtered_parquet(parquet_path: &Path, max_rows: Option<u64>) -> Result<(
         "failed to load filtered rows",
     )?;
 
+    if let Ok(split) = df.column("split") {
+        for (i, value) in split.str()?.iter().enumerate() {
+            if !matches!(value, Some("train" | "validation")) {
+                anyhow::bail!("invalid split {value:?} at row {i}");
+            }
+        }
+    }
     let kept = df.height();
     let df = apply_max_rows(df, max_rows)?;
     let n = df.height();
@@ -874,5 +1058,40 @@ mod tests {
         }
         assert_eq!(got_inp, flat_inp);
         assert_eq!(got_tgt, flat_tgt);
+    }
+
+    #[test]
+    fn streaming_shuffle_metadata_does_not_scale_with_all_pixel_rows() {
+        let plan = std::sync::Arc::new(sample_plan(100, 32));
+        let batcher = StreamingBatcher::new_shuffled(plan, 256, 42);
+        assert_eq!(batcher.star_order.len(), 100);
+        assert_eq!(batcher.pixel_order.len(), 32 * 32);
+        assert_eq!(batcher.plan.n_rows(), 100 * 32 * 32);
+        assert!(batcher.star_order.len() + batcher.pixel_order.len() < batcher.plan.n_rows());
+    }
+
+    #[test]
+    fn trainer_prefetch_renders_from_plan_without_retaining_textures() {
+        type B = NdArray<f32>;
+        let device = burn::backend::ndarray::NdArrayDevice::default();
+        let plan = std::sync::Arc::new(sample_plan(3, 4));
+        let dataset = SirenDataset {
+            inputs_cpu: Vec::new(),
+            targets_cpu: Vec::new(),
+            norm: sample_norm(),
+            n_samples: plan.n_rows(),
+            n_stars: plan.n_stars(),
+            plan: Some(plan),
+            shuffle_seed: 42,
+        };
+        let mut batcher = PrefetchBatcher::new(&dataset, 7);
+        let mut rows = 0usize;
+        while let Some((inputs, targets)) = batcher.next_batch::<B>(&device) {
+            assert_eq!(inputs.dims()[0], targets.dims()[0]);
+            rows += inputs.dims()[0];
+        }
+        assert_eq!(rows, dataset.n_samples);
+        assert!(dataset.inputs_cpu.is_empty());
+        assert!(dataset.targets_cpu.is_empty());
     }
 }

@@ -8,13 +8,15 @@
 //! - Process lifecycle management (start / stop / restart)
 
 use std::collections::HashMap;
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use serde::Serialize;
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::net::TcpStream;
 use tokio::process::Child;
 use tokio::sync::mpsc;
 
@@ -368,7 +370,6 @@ impl LogBackend {
         };
 
         let pid = child.id();
-        self.services[idx].status = ServiceStatus::Running;
         self.services[idx].pid = pid;
         match pid {
             Some(pid) => eprintln!("[lns] [{name}] started (pid {pid})"),
@@ -396,8 +397,111 @@ impl LogBackend {
         }
 
         self.children.insert(name, child);
+        if let Some((host, port, path)) = readiness_target(&kind, &env, &combined_args) {
+            let name = self.services[idx].config.name.clone();
+            let deadline = Instant::now() + Duration::from_secs(90);
+            loop {
+                if probe_http(&host, port, path).await {
+                    break;
+                }
+                if let Some(status) = self
+                    .children
+                    .get_mut(&name)
+                    .expect("spawned child")
+                    .try_wait()?
+                {
+                    self.children.remove(&name);
+                    self.services[idx].pid = None;
+                    anyhow::bail!("{name} exited before HTTP readiness: {status}");
+                }
+                if Instant::now() >= deadline {
+                    self.stop(&name).await;
+                    anyhow::bail!(
+                        "{name} did not answer HTTP {path} on {host}:{port} within 90 seconds"
+                    );
+                }
+                tokio::time::sleep(Duration::from_millis(250)).await;
+            }
+        }
+        self.services[idx].status = ServiceStatus::Running;
         Ok(())
     }
+}
+
+fn readiness_target(
+    kind: &ServiceKind,
+    env: &HashMap<String, String>,
+    extra_args: &[String],
+) -> Option<(String, u16, &'static str)> {
+    let (host, port, path) = match kind {
+        ServiceKind::Binary { bin_name } if bin_name == "lunar-backend" => (
+            env.get("LUNAR_BACKEND_HOST")
+                .map(String::as_str)
+                .unwrap_or("127.0.0.1"),
+            env.get("LUNAR_BACKEND_PORT")?.parse().ok()?,
+            "/version",
+        ),
+        ServiceKind::Binary { bin_name } if bin_name == "lunar-testbench-backend" => (
+            "127.0.0.1",
+            env.get("LUNAR_TESTBENCH_BACKEND_PORT")?.parse().ok()?,
+            "/jobs",
+        ),
+        ServiceKind::Binary { bin_name } if bin_name == "lunar-start-backend" => (
+            "127.0.0.1",
+            env.get("LUNAR_START_PORT")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(16181),
+            "/health",
+        ),
+        ServiceKind::DxServe { crate_name, .. } if crate_name == "lunar-frontend" => (
+            "127.0.0.1",
+            FrontendLaunchConfig::from_values(env, extra_args)
+                .ok()?
+                .port?,
+            "/",
+        ),
+        ServiceKind::DxServe { default_port, .. } => (
+            "127.0.0.1",
+            extra_args
+                .windows(2)
+                .find(|args| matches!(args[0].as_str(), "--port" | "-p"))
+                .map(|args| args[1].as_str())
+                .unwrap_or(default_port)
+                .parse()
+                .ok()?,
+            "/",
+        ),
+        _ => return None,
+    };
+    let host = if host.parse::<IpAddr>().is_ok_and(|ip| ip.is_unspecified()) {
+        "127.0.0.1"
+    } else {
+        host
+    };
+    Some((host.to_string(), port, path))
+}
+
+async fn probe_http(host: &str, port: u16, path: &str) -> bool {
+    let probe = async {
+        let mut stream = TcpStream::connect((host, port)).await?;
+        stream
+            .write_all(
+                format!("GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n")
+                    .as_bytes(),
+            )
+            .await?;
+        let mut status = [0u8; 12];
+        stream.read_exact(&mut status).await?;
+        Ok::<bool, std::io::Error>(
+            status.starts_with(b"HTTP/1.1 2")
+                || status.starts_with(b"HTTP/1.0 2")
+                || status.starts_with(b"HTTP/1.1 3")
+                || status.starts_with(b"HTTP/1.0 3"),
+        )
+    };
+    tokio::time::timeout(Duration::from_secs(2), probe)
+        .await
+        .is_ok_and(|result| result.unwrap_or(false))
 }
 
 /// Human-readable command summary used in launcher diagnostics.
@@ -796,26 +900,17 @@ mod tests {
         let mut web_env = HashMap::new();
         web_env.insert("LUNAR_FRONTEND_PLATFORM".to_string(), "web".to_string());
         web_env.insert("LUNAR_FRONTEND_PORT".to_string(), "8088".to_string());
-        let web = build_frontend_dx_serve_cmd(ws, "lunar-frontend", "crates", &[], &web_env)
-            .unwrap();
+        let web =
+            build_frontend_dx_serve_cmd(ws, "lunar-frontend", "crates", &[], &web_env).unwrap();
         assert_eq!(
             extract_args(&web),
             vec!["serve", "--platform", "web", "--port", "8088"]
         );
 
         let mut desktop_env = HashMap::new();
-        desktop_env.insert(
-            "LUNAR_FRONTEND_PLATFORM".to_string(),
-            "desktop".to_string(),
-        );
-        let desktop = build_frontend_dx_serve_cmd(
-            ws,
-            "lunar-frontend",
-            "crates",
-            &[],
-            &desktop_env,
-        )
-        .unwrap();
+        desktop_env.insert("LUNAR_FRONTEND_PLATFORM".to_string(), "desktop".to_string());
+        let desktop =
+            build_frontend_dx_serve_cmd(ws, "lunar-frontend", "crates", &[], &desktop_env).unwrap();
         assert_eq!(
             extract_args(&desktop),
             vec!["serve", "--platform", "desktop"]
@@ -898,6 +993,55 @@ mod tests {
                 "--",
                 "--migrate"
             ]
+        );
+    }
+
+    #[tokio::test]
+    async fn http_readiness_rejects_unready_responses() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            for (path, response) in [
+                ("/version", "503 Service Unavailable"),
+                ("/version", "200 OK"),
+            ] {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = [0u8; 256];
+                let count = stream.read(&mut request).await.unwrap();
+                assert!(
+                    String::from_utf8_lossy(&request[..count])
+                        .starts_with(&format!("GET {path} HTTP/1.1"))
+                );
+                stream
+                    .write_all(
+                        format!("HTTP/1.1 {response}\r\nContent-Length: 0\r\n\r\n").as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+            }
+        });
+        assert!(!probe_http("127.0.0.1", port, "/version").await);
+        assert!(probe_http("127.0.0.1", port, "/version").await);
+        server.await.unwrap();
+    }
+
+    #[test]
+    fn readiness_uses_listener_not_public_browser_url() {
+        let mut env = crate::service_settings::FrontendSettings::default()
+            .to_values()
+            .env;
+        env.insert(
+            "LUNAR_FRONTEND_PUBLIC_URL".into(),
+            "https://frontend.example.org/app".into(),
+        );
+        let kind = ServiceKind::DxServe {
+            crate_name: "lunar-frontend".into(),
+            crate_subdir: "crates".into(),
+            default_port: "8080".into(),
+        };
+        assert_eq!(
+            readiness_target(&kind, &env, &[]),
+            Some(("127.0.0.1".into(), 8080, "/"))
         );
     }
 }

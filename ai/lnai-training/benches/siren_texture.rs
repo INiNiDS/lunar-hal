@@ -27,11 +27,24 @@ fn texture_grid(side: usize, device: &burn::backend::ndarray::NdArrayDevice) -> 
 
 fn bench_siren_texture(c: &mut Criterion) {
     let device = burn::backend::ndarray::NdArrayDevice::default();
-    let model = StellarSirenConfig { hidden: 64 }.init::<B>(&device);
-    let grid = texture_grid(64, &device);
+    let model = StellarSirenConfig {
+        hidden: 64,
+        w0: 30.0,
+    }
+    .init::<B>(&device);
+    let grid_64 = texture_grid(64, &device);
 
     c.bench_function("siren_forward_64x64", |b| {
-        b.iter(|| black_box(model.forward(grid.clone())))
+        b.iter(|| black_box(model.forward(grid_64.clone())))
+    });
+
+    c.bench_function("siren_chunked_64x64_c1024", |b| {
+        b.iter(|| black_box(model.forward_chunked(grid_64.clone(), 1024)))
+    });
+
+    let grid_256 = texture_grid(256, &device);
+    c.bench_function("siren_chunked_256x256_c4096", |b| {
+        b.iter(|| black_box(model.forward_chunked(grid_256.clone(), 4096)))
     });
 }
 

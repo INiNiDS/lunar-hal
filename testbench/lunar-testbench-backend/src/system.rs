@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Instant, SystemTime};
 
 use axum::Json;
-use axum::extract::Query;
+use axum::extract::{Query, State};
 use reqwest::Client;
 use serde::Deserialize;
 use walkdir::WalkDir;
@@ -39,6 +39,9 @@ pub fn scan_models(ws: &Path) -> Vec<ModelArtifact> {
         };
         let kind = match name.as_str() {
             n if n.starts_with("stellar_model") => "pinn",
+            n if n.starts_with("stellar_gnn_loc") || n.starts_with("stellar_gnn_localization") => {
+                "gnn_localization"
+            }
             n if n.starts_with("stellar_gnn") => "gnn",
             n if n.starts_with("stellar_siren") => "siren",
             n if n.starts_with("stellar_lore") => "lore",
@@ -50,6 +53,31 @@ pub fn scan_models(ws: &Path) -> Vec<ModelArtifact> {
             .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
+
+        let mut version = None;
+        let mut manifest_hash = None;
+        if let Some(parent) = path.parent() {
+            let manifest_path = parent.join("artifact.json");
+            if manifest_path.exists() {
+                if let Ok(content) = std::fs::read_to_string(&manifest_path) {
+                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&content) {
+                        version = v
+                            .get("version")
+                            .and_then(|val| val.as_str())
+                            .map(|s| s.to_string());
+                        manifest_hash = v
+                            .get("manifest_hash")
+                            .or_else(|| v.get("hash"))
+                            .and_then(|val| val.as_str())
+                            .map(|s| s.to_string());
+                    }
+                }
+            }
+        }
+        if version.is_none() {
+            version = Some("v1.0.0".to_string());
+        }
+
         out.push(ModelArtifact {
             name,
             path: path.to_string_lossy().to_string(),
@@ -57,6 +85,8 @@ pub fn scan_models(ws: &Path) -> Vec<ModelArtifact> {
             size_bytes: md.len(),
             mtime_ms,
             exists: true,
+            version,
+            manifest_hash,
         });
     }
     out.sort_by(|a, b| a.kind.cmp(&b.kind).then(a.name.cmp(&b.name)));
@@ -85,12 +115,38 @@ fn dataset_info_for(p: &Path) -> Option<DatasetInfo> {
         return None;
     }
     let md = std::fs::metadata(p).ok()?;
+    let mut version = None;
+    let mut schema_hash = None;
+    if let Some(parent) = p.parent() {
+        let manifest_path = parent.join("manifest.json");
+        if manifest_path.exists() {
+            if let Ok(content) = std::fs::read_to_string(&manifest_path) {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&content) {
+                    version = v
+                        .get("schema_version")
+                        .or_else(|| v.get("version"))
+                        .and_then(|val| val.as_str())
+                        .map(|s| s.to_string());
+                    schema_hash = v
+                        .get("schema_hash")
+                        .or_else(|| v.get("hash"))
+                        .and_then(|val| val.as_str())
+                        .map(|s| s.to_string());
+                }
+            }
+        }
+    }
+    if version.is_none() {
+        version = Some("v1.0.0".to_string());
+    }
     Some(DatasetInfo {
         name: name.clone(),
         path: p.to_string_lossy().to_string(),
         size_bytes: md.len(),
         mtime_ms: mtime_ms_from_metadata(&md),
         kind: detect_dataset_kind(&name),
+        version,
+        schema_hash,
     })
 }
 
@@ -203,12 +259,26 @@ pub fn collect_host_info(ws: &Path) -> HostInfo {
     let pid = std::process::id();
     let cpu_count = sys.cpus().len();
     let total_memory_bytes = sys.total_memory();
+    let mut devices = vec!["cpu".to_string()];
+    #[cfg(target_os = "linux")]
+    {
+        if Path::new("/dev/nvidia0").exists() || Path::new("/proc/driver/nvidia").exists() {
+            devices.push("cuda:0".to_string());
+        }
+    }
+    let gpu_count = if devices.len() > 1 {
+        Some(devices.len() - 1)
+    } else {
+        None
+    };
     HostInfo {
         workspace_root: ws.to_string_lossy().to_string(),
         pid,
         cpu_count,
         total_memory_bytes,
         rustc_version: "stable".into(),
+        devices: Some(devices),
+        gpu_count,
     }
 }
 
@@ -242,7 +312,10 @@ pub struct SnapshotQuery {
     pub testbench_backend_url: Option<String>,
 }
 
-pub async fn system_snapshot(Query(q): Query<SnapshotQuery>) -> Json<SystemSnapshot> {
+pub async fn system_snapshot(
+    State(state): State<crate::AppState>,
+    Query(q): Query<SnapshotQuery>,
+) -> Json<SystemSnapshot> {
     let ws = workspace_root();
     let models = scan_models(&ws);
     let datasets = scan_datasets(&ws);
@@ -274,18 +347,12 @@ pub async fn system_snapshot(Query(q): Query<SnapshotQuery>) -> Json<SystemSnaps
         None
     };
 
-    let jobs: Vec<Job> = if q.include_jobs.unwrap_or(false) {
-        if let Some(url) = q.testbench_backend_url.as_deref() {
-            match client.get(format!("{}/jobs", url)).send().await {
-                Ok(resp) => resp.json::<Vec<Job>>().await.unwrap_or_default(),
-                Err(_) => Vec::new(),
-            }
-        } else {
-            Vec::new()
-        }
+    let jobs: Vec<Job> = if q.include_jobs.unwrap_or(true) {
+        state.registry.list()
     } else {
         Vec::new()
     };
+    let reports = state.registry.db().list_reports().ok();
 
     Json(SystemSnapshot {
         backend,
@@ -296,6 +363,7 @@ pub async fn system_snapshot(Query(q): Query<SnapshotQuery>) -> Json<SystemSnaps
         jobs,
         norms,
         host: collect_host_info(&ws),
+        reports,
     })
 }
 

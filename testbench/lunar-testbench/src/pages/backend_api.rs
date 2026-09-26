@@ -1,6 +1,52 @@
 use crate::api;
 use crate::components::ui::{PageHeader, StatusDot, Tag};
+use crate::os::AppSnapshot;
 use dioxus::prelude::*;
+use serde::{Deserialize, Serialize};
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct BackendApiSnapshot {
+    pub method: String,
+    pub path: String,
+    pub body: String,
+    pub query: String,
+    pub response: Option<serde_json::Value>,
+    pub status_code: Option<u16>,
+    pub raw_response: Option<String>,
+    pub error: Option<String>,
+    pub busy: bool,
+    pub json_err: Option<(usize, usize, String)>,
+}
+
+impl Default for BackendApiSnapshot {
+    fn default() -> Self {
+        Self {
+            method: "GET".to_string(),
+            path: "/".to_string(),
+            body: "{}".to_string(),
+            query: String::new(),
+            response: None,
+            status_code: None,
+            raw_response: None,
+            error: None,
+            busy: false,
+            json_err: None,
+        }
+    }
+}
+
+impl AppSnapshot for BackendApiSnapshot {
+    fn capture_snapshot(&self) -> serde_json::Value {
+        serde_json::to_value(self).unwrap_or(serde_json::Value::Null)
+    }
+
+    fn hydrate_snapshot(&mut self, payload: &serde_json::Value) -> Result<(), String> {
+        let snap: BackendApiSnapshot = serde_json::from_value(payload.clone())
+            .map_err(|e| format!("BackendApi hydration failed: {e}"))?;
+        *self = snap;
+        Ok(())
+    }
+}
 
 fn fmt_json(s: &str) -> Result<String, String> {
     let v: serde_json::Value = serde_json::from_str(s).map_err(|e| format!("{e}"))?;
@@ -419,16 +465,38 @@ fn TemplateBar(
 
 #[component]
 pub fn BackendApi() -> Element {
-    let method = use_signal(|| "GET".to_string());
-    let path = use_signal(|| "/".to_string());
-    let body = use_signal(|| "{}".to_string());
-    let query = use_signal(String::new);
-    let mut response = use_signal(|| None::<serde_json::Value>);
-    let mut status_code = use_signal(|| None::<u16>);
-    let mut raw_response = use_signal(|| None::<String>);
-    let mut error = use_signal(|| None::<String>);
-    let mut busy = use_signal(|| false);
+    let initial =
+        crate::os::use_window_instance_snapshot::<BackendApiSnapshot>().unwrap_or_default();
+    let method = use_signal(|| initial.method.clone());
+    let path = use_signal(|| initial.path.clone());
+    let body = use_signal(|| initial.body.clone());
+    let query = use_signal(|| initial.query.clone());
+    let mut response = use_signal(|| initial.response.clone());
+    let mut status_code = use_signal(|| initial.status_code);
+    let mut raw_response = use_signal(|| initial.raw_response.clone());
+    let mut error = use_signal(|| initial.error.clone());
+    let mut busy = use_signal(|| initial.busy);
     let mut json_err = use_signal(|| None::<(usize, usize, String)>);
+
+    let mut os = crate::os::use_os_state();
+    use_effect(move || {
+        let snap = BackendApiSnapshot {
+            method: method(),
+            path: path(),
+            body: body(),
+            query: query(),
+            response: response(),
+            status_code: status_code(),
+            raw_response: raw_response(),
+            error: error(),
+            busy: busy(),
+            json_err: json_err(),
+        };
+        if let Some(inst_id) = crate::os::use_window_instance_id() {
+            os.register_instance_snapshot(&inst_id, snap.capture_snapshot());
+        }
+        os.register_app_snapshot("backend_api", snap.capture_snapshot());
+    });
 
     let send = move |_: ()| {
         let prep = prepare_request(&method(), &path(), &body(), &query());
@@ -528,5 +596,30 @@ pub fn BackendApi() -> Element {
                 error,
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_backend_api_snapshot_capture_and_hydration() {
+        let original = BackendApiSnapshot {
+            method: "POST".into(),
+            path: "/pinn".into(),
+            body: r#"{"x_pc": 1.0, "y_pc": 2.0}"#.into(),
+            query: "format=json".into(),
+            response: Some(serde_json::json!({ "pred": 12.3 })),
+            status_code: Some(200),
+            raw_response: Some("{\n  \"pred\": 12.3\n}".into()),
+            error: Some("sample error".into()),
+            busy: true,
+            json_err: None,
+        };
+        let payload = original.capture_snapshot();
+        let mut restored = BackendApiSnapshot::default();
+        restored.hydrate_snapshot(&payload).unwrap();
+        assert_eq!(restored, original);
     }
 }

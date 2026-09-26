@@ -1,8 +1,8 @@
 use crate::api::{SystemSnapshot, system_snapshot};
 use crate::components::ui::{PageHeader, StatusDot, Tag, bytes_human, fmt_age};
-use dioxus::prelude::*;
-use crate::os::state::use_window_lifecycle;
 use crate::os::WindowLifecycle;
+use crate::os::state::use_window_lifecycle;
+use dioxus::prelude::*;
 
 #[component]
 pub fn Dashboard() -> Element {

@@ -440,6 +440,7 @@ pub const DEFAULT_FRONTEND_PORT: u16 = 8080;
 pub struct FrontendLaunchConfig {
     pub platform: FrontendPlatform,
     pub port: Option<u16>,
+    pub published_url: Option<String>,
     pub extra_args: Vec<String>,
 }
 
@@ -458,10 +459,11 @@ impl FrontendLaunchConfig {
             .get("LUNAR_FRONTEND_PLATFORM")
             .map(String::as_str)
             .unwrap_or("web");
-        let platform = FrontendPlatform::parse(raw_platform).ok_or_else(|| FrontendLaunchError {
-            field: "LUNAR_FRONTEND_PLATFORM",
-            message: format!("Unsupported frontend platform: {raw_platform}"),
-        })?;
+        let platform =
+            FrontendPlatform::parse(raw_platform).ok_or_else(|| FrontendLaunchError {
+                field: "LUNAR_FRONTEND_PLATFORM",
+                message: format!("Unsupported frontend platform: {raw_platform}"),
+            })?;
 
         if let Some(arg) = extra_args.iter().find(|arg| {
             matches!(arg.as_str(), "--platform" | "--port" | "-p")
@@ -476,18 +478,20 @@ impl FrontendLaunchConfig {
 
         let port = match platform {
             FrontendPlatform::Web => {
-                let raw_port = env
-                    .get("LUNAR_FRONTEND_PORT")
+                let raw_port =
+                    env.get("LUNAR_FRONTEND_PORT")
+                        .ok_or_else(|| FrontendLaunchError {
+                            field: "LUNAR_FRONTEND_PORT",
+                            message: "A web frontend requires a port".to_string(),
+                        })?;
+                let port = raw_port
+                    .parse::<u16>()
+                    .ok()
+                    .filter(|port| *port != 0)
                     .ok_or_else(|| FrontendLaunchError {
                         field: "LUNAR_FRONTEND_PORT",
-                        message: "A web frontend requires a port".to_string(),
-                    })?;
-                let port = raw_port.parse::<u16>().ok().filter(|port| *port != 0).ok_or_else(|| {
-                    FrontendLaunchError {
-                        field: "LUNAR_FRONTEND_PORT",
                         message: "Web port must be an integer from 1 to 65535".to_string(),
-                    }
-                })?;
+                    })?;
                 Some(port)
             }
             FrontendPlatform::Desktop | FrontendPlatform::Android => {
@@ -501,9 +505,52 @@ impl FrontendLaunchConfig {
             }
         };
 
+        let published_url = env
+            .get("LUNAR_FRONTEND_PUBLIC_URL")
+            .map(|url| url.trim())
+            .filter(|url| !url.is_empty())
+            .map(|url| {
+                let (scheme, rest) = url.split_once("://").ok_or_else(|| FrontendLaunchError {
+                    field: "LUNAR_FRONTEND_PUBLIC_URL",
+                    message: "A public URL needs an http(s) scheme and a browser-reachable host"
+                        .into(),
+                })?;
+                let authority = rest.split('/').next().unwrap_or_default();
+                let host = if authority.starts_with('[') {
+                    authority
+                        .split_once(']')
+                        .map(|(host, _)| host.trim_start_matches('['))
+                        .unwrap_or("")
+                } else {
+                    authority.split(':').next().unwrap_or_default()
+                };
+                let is_non_routable = host.eq_ignore_ascii_case("localhost")
+                    || host.to_ascii_lowercase().ends_with(".localhost")
+                    || host
+                        .parse::<std::net::IpAddr>()
+                        .is_ok_and(|ip| ip.is_loopback() || ip.is_unspecified());
+                if !matches!(scheme, "http" | "https")
+                    || host.is_empty()
+                    || is_non_routable
+                    || authority.contains('@')
+                    || url.chars().any(char::is_whitespace)
+                    || url.contains(['?', '#'])
+                {
+                    return Err(FrontendLaunchError {
+                        field: "LUNAR_FRONTEND_PUBLIC_URL",
+                        message:
+                            "Use a browser-reachable http(s) URL, not a loopback or bind address"
+                                .into(),
+                    });
+                }
+                Ok(url.trim_end_matches('/').to_string())
+            })
+            .transpose()?;
+
         Ok(Self {
             platform,
             port,
+            published_url,
             extra_args: extra_args.to_vec(),
         })
     }
@@ -518,7 +565,7 @@ impl FrontendLaunchConfig {
     }
 
     pub fn public_url(&self) -> Option<String> {
-        self.port.map(|port| format!("http://127.0.0.1:{port}"))
+        self.port.and_then(|_| self.published_url.clone())
     }
 }
 
@@ -528,6 +575,9 @@ pub struct FrontendSettings {
     pub dx_bin: String,
     pub platform: FrontendPlatform,
     pub port: u16,
+    /// Externally routable address (possibly through a reverse proxy), not the listener address.
+    #[serde(default)]
+    pub public_url: Option<String>,
     /// An explicit host URL is required for a physical Android device; the
     /// Android emulator default is supplied by `FrontendPlatform`.
     pub backend_url: Option<String>,
@@ -542,6 +592,7 @@ impl Default for FrontendSettings {
             dx_bin: "dx".to_string(),
             platform: FrontendPlatform::Web,
             port: DEFAULT_FRONTEND_PORT,
+            public_url: None,
             backend_url: None,
             env_mode: None,
             extra_args: Vec::new(),
@@ -587,6 +638,14 @@ impl FrontendSettings {
         );
         port.min = Some(1.0);
         port.max = Some(65535.0);
+
+        let public_url = field(
+            "LUNAR_FRONTEND_PUBLIC_URL",
+            "Browser URL",
+            "Externally reachable HTTP(S) URL of the web frontend (configure proxy/network routing separately). Required to open Sandbox in a browser.",
+            FieldType::String,
+            "",
+        );
 
         let backend_url = field(
             "LUNAR_BACKEND_URL",
@@ -642,6 +701,7 @@ impl FrontendSettings {
                 dx_bin,
                 platform,
                 port,
+                public_url,
                 backend_url,
                 crate_name,
                 crate_subdir,
@@ -668,6 +728,7 @@ impl FrontendSettings {
         if self.platform == FrontendPlatform::Web {
             env.insert("LUNAR_FRONTEND_PORT".to_string(), self.port.to_string());
         }
+        optional_env(&mut env, "LUNAR_FRONTEND_PUBLIC_URL", &self.public_url);
         optional_env(&mut env, "LUNAR_ENV", &self.env_mode);
 
         ServiceConfigValues {
@@ -733,17 +794,67 @@ mod tests {
 
     #[test]
     fn frontend_launch_arguments_are_platform_specific() {
-        let web = FrontendLaunchConfig::from_values(&FrontendSettings::default().to_values().env, &[]).unwrap();
+        let web =
+            FrontendLaunchConfig::from_values(&FrontendSettings::default().to_values().env, &[])
+                .unwrap();
         assert_eq!(web.dx_args(), ["--platform", "web", "--port", "8080"]);
-        assert_eq!(web.public_url().as_deref(), Some("http://127.0.0.1:8080"));
+        assert_eq!(web.public_url(), None);
 
-        let desktop_values = FrontendSettings { platform: FrontendPlatform::Desktop, ..FrontendSettings::default() }.to_values();
-        let desktop = FrontendLaunchConfig::from_values(&desktop_values.env, &desktop_values.extra_args).unwrap();
+        let desktop_values = FrontendSettings {
+            platform: FrontendPlatform::Desktop,
+            ..FrontendSettings::default()
+        }
+        .to_values();
+        let desktop =
+            FrontendLaunchConfig::from_values(&desktop_values.env, &desktop_values.extra_args)
+                .unwrap();
         assert_eq!(desktop.dx_args(), ["--platform", "desktop"]);
         assert_eq!(desktop.public_url(), None);
 
-        let android_values = FrontendSettings { platform: FrontendPlatform::Android, ..FrontendSettings::default() }.to_values();
-        assert_eq!(android_values.env["LUNAR_BACKEND_URL"], "http://10.0.2.2:25255");
+        let android_values = FrontendSettings {
+            platform: FrontendPlatform::Android,
+            ..FrontendSettings::default()
+        }
+        .to_values();
+        assert_eq!(
+            android_values.env["LUNAR_BACKEND_URL"],
+            "http://10.0.2.2:25255"
+        );
+    }
+
+    #[test]
+    fn frontend_public_url_must_be_explicit_and_browser_reachable() {
+        let mut values = FrontendSettings::default().to_values();
+        assert_eq!(
+            FrontendLaunchConfig::from_values(&values.env, &[])
+                .unwrap()
+                .public_url(),
+            None
+        );
+        values.env.insert(
+            "LUNAR_FRONTEND_PUBLIC_URL".into(),
+            "https://editor.example.org/lunar/".into(),
+        );
+        assert_eq!(
+            FrontendLaunchConfig::from_values(&values.env, &[])
+                .unwrap()
+                .public_url()
+                .as_deref(),
+            Some("https://editor.example.org/lunar")
+        );
+        for invalid in [
+            "http://127.0.0.1:8080",
+            "http://0.0.0.0:8080",
+            "http://localhost:8080",
+        ] {
+            values
+                .env
+                .insert("LUNAR_FRONTEND_PUBLIC_URL".into(), invalid.into());
+            assert!(
+                FrontendLaunchConfig::from_values(&values.env, &[]).is_err(),
+                "{invalid}"
+            );
+        }
     }
 
     fn schema_keys(schema: &ServiceConfigSchema) -> Vec<&str> {
@@ -808,6 +919,7 @@ mod tests {
                 "LUNAR_DX_BIN",
                 "LUNAR_FRONTEND_PLATFORM",
                 "LUNAR_FRONTEND_PORT",
+                "LUNAR_FRONTEND_PUBLIC_URL",
                 "LUNAR_BACKEND_URL",
                 "CRATE",
                 "CRATE_SUBDIR",
@@ -816,9 +928,12 @@ mod tests {
                 "BUILD_ARGS",
             ]
         );
-        assert_eq!(schema.fields[1].allowed_values.as_ref().unwrap(), &vec!["web", "desktop", "android"]);
-        assert!(schema.fields[4].read_only);
+        assert_eq!(
+            schema.fields[1].allowed_values.as_ref().unwrap(),
+            &vec!["web", "desktop", "android"]
+        );
         assert!(schema.fields[5].read_only);
+        assert!(schema.fields[6].read_only);
         assert!(!schema.fields[1].read_only);
     }
 }

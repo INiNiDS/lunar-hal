@@ -10,6 +10,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+const TAP_CSV_HEADER: &str = "source_id,ra_deg,dec_deg,parallax_mas,pm_ra_mas_yr,pm_dec_mas_yr,radial_velocity_kms,mag_g,mag_bp,mag_rp,ruwe,astrometric_excess_noise";
+
 /// Deterministic fake archive server: writes header + N rows CSV to the
 /// requested temp path, keyed by shard RA so every shard has unique content.
 struct FakeArchive {
@@ -60,16 +62,18 @@ impl ShardFetcher for FakeArchive {
             .unwrap_or("1")
             .to_string();
         let mut f = fs::File::create(dest).map_err(|e| FetchError::Protocol(e.to_string()))?;
-        writeln!(f, "source_id,ra_deg,dec_deg").map_err(|e| FetchError::Protocol(e.to_string()))?;
+        writeln!(f, "{TAP_CSV_HEADER}").map_err(|e| FetchError::Protocol(e.to_string()))?;
         for i in 0..self.rows_per_shard {
-            writeln!(
-                f,
+            let mut row = format!(
                 "{}{}{i},{}.5,10.25",
                 x.replace('.', ""),
                 y.replace('.', ""),
                 x
-            )
-            .map_err(|e| FetchError::Protocol(e.to_string()))?;
+            );
+            for _ in 3..TAP_CSV_HEADER.split(',').count() {
+                row.push(',');
+            }
+            writeln!(f, "{row}").map_err(|e| FetchError::Protocol(e.to_string()))?;
         }
         Ok(self.rows_per_shard as u64)
     }

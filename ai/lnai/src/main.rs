@@ -16,6 +16,20 @@ use lnai_training::spec::{ModelConfig, ModelKind, PinnConfig, TrainingSpec};
 pub use args::Args;
 
 pub fn spec_from_args(args: &Args) -> Result<TrainingSpec> {
+    let data_path = if args.data.is_empty() {
+        None
+    } else {
+        Some(args.data.clone())
+    };
+    let computed_dataset_manifest_hash = data_path
+        .as_deref()
+        .map(|path| lnai_training::artifacts::dataset_fingerprint(std::path::Path::new(path)))
+        .transpose()?
+        .unwrap_or_default();
+    let dataset_manifest_hash = std::env::var("LUNAR_AI_DATASET_MANIFEST_HASH")
+        .ok()
+        .filter(|hash| !hash.trim().is_empty())
+        .unwrap_or(computed_dataset_manifest_hash);
     Ok(TrainingSpec {
         model: ModelKind::Pinn,
         config: ModelConfig::Pinn(PinnConfig {
@@ -25,12 +39,8 @@ pub fn spec_from_args(args: &Args) -> Result<TrainingSpec> {
             huber_delta: args.huber_delta,
             target_weights: args.target_weights_array()?,
         }),
-        dataset_manifest_hash: String::new(),
-        data_path: if args.data.is_empty() {
-            None
-        } else {
-            Some(args.data.clone())
-        },
+        dataset_manifest_hash,
+        data_path,
         epochs: args.epochs as u32,
         batch_size: args.batch_size as u32,
         lr: args.lr,

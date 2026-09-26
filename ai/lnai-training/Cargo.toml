@@ -19,6 +19,7 @@ rand = "0.10.1"
 rayon = "1.12"
 burn = { version = "0.21", features = ["std", "train", "cuda", "autodiff", "fusion", "autotune"] }
 burn-store = { version = "0.21", features = ["safetensors", "burnpack"] }
+lnai-data = { path = "../lnai-data" }
 lnai-models = { path = "../lnai-models", features = ["pinn", "gnn", "siren", "localization"] }
 
 [dev-dependencies]

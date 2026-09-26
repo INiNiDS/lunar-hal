@@ -1,18 +1,91 @@
 use crate::api;
 use crate::components::ui::{NumberFieldF64, PageHeader, Tag};
+use crate::os::AppSnapshot;
 use dioxus::prelude::*;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Tab {
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Tab {
     Pinn,
     Gnn,
     Siren,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct ModelsSnapshot {
+    pub tab: Tab,
+    pub x: f64,
+    pub y: f64,
+    pub z: f64,
+    pub bp_rp: f64,
+    pub g_mag: f64,
+    pub result: Option<serde_json::Value>,
+    pub error: Option<String>,
+    pub busy: bool,
+}
+
+impl Default for ModelsSnapshot {
+    fn default() -> Self {
+        Self {
+            tab: Tab::Pinn,
+            x: 0.0,
+            y: 0.0,
+            z: 100.0,
+            bp_rp: 1.5,
+            g_mag: 10.0,
+            result: None,
+            error: None,
+            busy: false,
+        }
+    }
+}
+
+impl AppSnapshot for ModelsSnapshot {
+    fn capture_snapshot(&self) -> serde_json::Value {
+        serde_json::to_value(self).unwrap_or(serde_json::Value::Null)
+    }
+
+    fn hydrate_snapshot(&mut self, payload: &serde_json::Value) -> Result<(), String> {
+        let snap: ModelsSnapshot = serde_json::from_value(payload.clone())
+            .map_err(|e| format!("Models hydration failed: {e}"))?;
+        *self = snap;
+        Ok(())
+    }
+}
+
 #[component]
 pub fn Models() -> Element {
-    let mut tab = use_signal(|| Tab::Pinn);
+    let initial = crate::os::use_window_instance_snapshot::<ModelsSnapshot>().unwrap_or_default();
+    let mut tab = use_signal(|| initial.tab);
+    let x = use_signal(|| initial.x);
+    let y = use_signal(|| initial.y);
+    let z = use_signal(|| initial.z);
+    let bp_rp = use_signal(|| initial.bp_rp);
+    let g_mag = use_signal(|| initial.g_mag);
+    let result = use_signal(|| initial.result.clone());
+    let error = use_signal(|| initial.error.clone());
+    let busy = use_signal(|| initial.busy);
+
+    let mut os = crate::os::use_os_state();
+    use_effect(move || {
+        let snap = ModelsSnapshot {
+            tab: tab(),
+            x: x(),
+            y: y(),
+            z: z(),
+            bp_rp: bp_rp(),
+            g_mag: g_mag(),
+            result: result(),
+            error: error(),
+            busy: busy(),
+        };
+        if let Some(inst_id) = crate::os::use_window_instance_id() {
+            os.register_instance_snapshot(&inst_id, snap.capture_snapshot());
+        }
+        os.register_app_snapshot("models", snap.capture_snapshot());
+    });
+
     rsx! {
         PageHeader {
             title: "Run Models".to_string(),
@@ -39,7 +112,7 @@ pub fn Models() -> Element {
                     span { style: "margin-left: 8px;", "Texture synthesis" }
                 }
             }
-            div { style: if tab() == Tab::Pinn { "display: block;" } else { "display: none;" }, PinnPanel {} }
+            div { style: if tab() == Tab::Pinn { "display: block;" } else { "display: none;" }, PinnPanel { x, y, z, bp_rp, g_mag, result, error, busy } }
             div { style: if tab() == Tab::Gnn { "display: block;" } else { "display: none;" }, GnnPanel {} }
             div { style: if tab() == Tab::Siren { "display: block;" } else { "display: none;" }, SirenPanel {} }
         }
@@ -47,16 +120,16 @@ pub fn Models() -> Element {
 }
 
 #[component]
-fn PinnPanel() -> Element {
-    let x = use_signal(|| 0.0_f64);
-    let y = use_signal(|| 0.0_f64);
-    let z = use_signal(|| 100.0_f64);
-    let bp_rp = use_signal(|| 1.5_f64);
-    let g_mag = use_signal(|| 10.0_f64);
-    let mut result = use_signal(|| None::<serde_json::Value>);
-    let mut error = use_signal(|| None::<String>);
-    let mut busy = use_signal(|| false);
-
+fn PinnPanel(
+    x: Signal<f64>,
+    y: Signal<f64>,
+    z: Signal<f64>,
+    bp_rp: Signal<f64>,
+    g_mag: Signal<f64>,
+    mut result: Signal<Option<serde_json::Value>>,
+    mut error: Signal<Option<String>>,
+    mut busy: Signal<bool>,
+) -> Element {
     let run = move |_| {
         busy.set(true);
         error.set(None);
@@ -265,6 +338,7 @@ fn NumberFieldU32(label: String, value: Signal<u32>, step: u32) -> Element {
             span { class: "field-label", "{label}" }
             input {
                 r#type: "number",
+                aria_label: "{label}",
                 step: "{step}",
                 value: "{value()}",
                 oninput: move |e| {
@@ -274,5 +348,29 @@ fn NumberFieldU32(label: String, value: Signal<u32>, step: u32) -> Element {
                 },
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_models_snapshot_capture_and_hydration() {
+        let original = ModelsSnapshot {
+            tab: Tab::Gnn,
+            x: 12.5,
+            y: -34.0,
+            z: 250.0,
+            bp_rp: 2.1,
+            g_mag: 14.2,
+            result: Some(serde_json::json!({ "pred": 42 })),
+            error: Some("mock err".into()),
+            busy: true,
+        };
+        let payload = original.capture_snapshot();
+        let mut restored = ModelsSnapshot::default();
+        restored.hydrate_snapshot(&payload).unwrap();
+        assert_eq!(restored, original);
     }
 }

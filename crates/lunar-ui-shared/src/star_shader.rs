@@ -267,8 +267,12 @@ fn resize_canvas_backing(canvas: &web_sys::HtmlCanvasElement, ctx: &Gl2) {
     let dpr = web_sys::window()
         .map(|window| window.device_pixel_ratio().clamp(1.0, 2.0))
         .unwrap_or(1.0);
-    let mut width = (rect.width() * dpr).round().clamp(1.0, MAX_BACKING_DIMENSION);
-    let mut height = (rect.height() * dpr).round().clamp(1.0, MAX_BACKING_DIMENSION);
+    let mut width = (rect.width() * dpr)
+        .round()
+        .clamp(1.0, MAX_BACKING_DIMENSION);
+    let mut height = (rect.height() * dpr)
+        .round()
+        .clamp(1.0, MAX_BACKING_DIMENSION);
     let pixels = width * height;
     if pixels > MAX_BACKING_PIXELS {
         let scale = (MAX_BACKING_PIXELS / pixels).sqrt();
@@ -476,15 +480,14 @@ pub fn StarShaderCanvas(
             let resize_callback = Closure::<dyn FnMut()>::new(move || {
                 resize_canvas_backing(&resize_canvas, &resize_context);
             });
-            let resize_observer = match web_sys::ResizeObserver::new(
-                resize_callback.as_ref().unchecked_ref(),
-            ) {
-                Ok(observer) => observer,
-                Err(error) => {
-                    gl_err!("StarShader: ResizeObserver {:?}", error);
-                    return;
-                }
-            };
+            let resize_observer =
+                match web_sys::ResizeObserver::new(resize_callback.as_ref().unchecked_ref()) {
+                    Ok(observer) => observer,
+                    Err(error) => {
+                        gl_err!("StarShader: ResizeObserver {:?}", error);
+                        return;
+                    }
+                };
             resize_observer.observe(canvas.as_ref());
             ctx.clear_color(0.02, 0.02, 0.04, 1.0);
 

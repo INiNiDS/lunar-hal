@@ -85,12 +85,33 @@ pub fn is_window_lifecycle_visible(lifecycle: Option<Signal<WindowLifecycle>>) -
 #[derive(Clone, Debug)]
 pub struct WindowRuntimeContext {
     pub window_id: u64,
+    pub instance_id: String,
     pub app_id: String,
     pub lifecycle: Signal<WindowLifecycle>,
+    pub snapshot_payload: Option<serde_json::Value>,
+}
+
+pub fn use_window_runtime() -> Option<WindowRuntimeContext> {
+    try_use_context::<WindowRuntimeContext>()
+}
+
+pub fn use_window_instance_id() -> Option<String> {
+    use_window_runtime().map(|ctx| ctx.instance_id)
 }
 
 pub fn use_window_lifecycle() -> Option<Signal<WindowLifecycle>> {
-    try_use_context::<WindowRuntimeContext>().map(|ctx| ctx.lifecycle)
+    use_window_runtime().map(|ctx| ctx.lifecycle)
+}
+
+pub fn use_window_snapshot_payload() -> Option<serde_json::Value> {
+    use_window_runtime().and_then(|ctx| ctx.snapshot_payload)
+}
+
+pub fn use_window_instance_snapshot<T>() -> Option<T>
+where
+    T: for<'de> serde::Deserialize<'de>,
+{
+    use_window_snapshot_payload().and_then(|val| serde_json::from_value(val).ok())
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -145,6 +166,7 @@ pub struct WindowState {
     pub minimized: bool,
     pub maximized: bool,
     pub restore_rect: Option<(f64, f64, f64, f64)>,
+    pub snapshot_payload: Option<serde_json::Value>,
 }
 
 /// Which part of a window chrome a drag/resize gesture started from.
@@ -177,7 +199,7 @@ pub struct DragOp {
     pub min_height: f64,
 }
 
-/// Global reactive state for the WebOS shell, installed into context once by
+/// Global reactive state for the Lunar-OS shell, installed into context once by
 /// [`provide_os_state`] and read anywhere via [`use_os_state`].
 #[derive(Clone, Copy)]
 pub struct OsState {
@@ -194,6 +216,9 @@ pub struct OsState {
     pub service_config_drafts: Signal<HashMap<String, ServiceConfigValues>>,
     pub service_reveal_epochs: Signal<HashMap<String, u64>>,
     pub service_action_errors: Signal<HashMap<String, String>>,
+    pub ram_store: Signal<crate::os::ram::LunarOsRamStore>,
+    pub snapshot_providers: Signal<HashMap<String, serde_json::Value>>,
+    pub in_flight_transitions: Signal<HashMap<String, u64>>,
     next_window_id: Signal<u64>,
 }
 
@@ -213,8 +238,58 @@ impl OsState {
             service_config_drafts: Signal::new(HashMap::new()),
             service_reveal_epochs: Signal::new(HashMap::new()),
             service_action_errors: Signal::new(HashMap::new()),
+            ram_store: Signal::new(crate::os::ram::LunarOsRamStore::new()),
+            snapshot_providers: Signal::new(HashMap::new()),
+            in_flight_transitions: Signal::new(HashMap::new()),
             next_window_id: Signal::new(1),
         }
+    }
+
+    pub fn is_transition_in_flight(&self, key: &str) -> bool {
+        let now = lunar_utils::time::current_time_ms();
+        if let Some(&last_time) = self.in_flight_transitions.read().get(key) {
+            if now.saturating_sub(last_time) < 400 {
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn mark_transition_started(&mut self, key: &str) {
+        let now = lunar_utils::time::current_time_ms();
+        self.in_flight_transitions
+            .write()
+            .insert(key.to_string(), now);
+    }
+
+    pub fn clear_transition(&mut self, key: &str) {
+        self.in_flight_transitions.write().remove(key);
+    }
+
+    pub fn register_instance_snapshot(&mut self, instance_id: &str, snapshot: serde_json::Value) {
+        let mut map = self.snapshot_providers.write();
+        map.insert(instance_id.to_string(), snapshot);
+    }
+
+    pub fn get_instance_snapshot(&self, instance_id: &str) -> Option<serde_json::Value> {
+        self.snapshot_providers.read().get(instance_id).cloned()
+    }
+
+    pub fn register_app_snapshot(&mut self, app_id: &str, snapshot: serde_json::Value) {
+        let mut map = self.snapshot_providers.write();
+        map.insert(app_id.to_string(), snapshot);
+    }
+
+    pub fn get_app_snapshot(&self, app_id: &str) -> Option<serde_json::Value> {
+        self.snapshot_providers.read().get(app_id).cloned()
+    }
+
+    pub fn get_snapshot(&self, instance_id: &str, app_id: &str) -> Option<serde_json::Value> {
+        let providers = self.snapshot_providers.read();
+        providers
+            .get(instance_id)
+            .cloned()
+            .or_else(|| providers.get(app_id).cloned())
     }
 
     pub fn are_app_dependencies_running(&self, app_id: &str) -> bool {
@@ -292,6 +367,7 @@ impl OsState {
             .read()
             .iter()
             .any(|window| window.app_id == app_id)
+            || self.ram_store.read().is_app_open(app_id)
     }
 
     pub fn service_reveal_epoch(&self, service: &str) -> u64 {
@@ -332,8 +408,17 @@ impl OsState {
     }
 
     pub fn open_window(&mut self, app_id: &str, title: &str) {
-        // Restore before checking launch prerequisites. A mounted window may be
-        // blocked by a temporarily missing service, but it must remain reachable.
+        if self.is_transition_in_flight(app_id) {
+            return;
+        }
+        self.mark_transition_started(app_id);
+
+        if self.ram_store.read().is_app_minimized(app_id) {
+            let (vw, vh) = crate::os::viewport_size();
+            self.restore_window(app_id, vw, vh);
+            return;
+        }
+
         let existing_id = self
             .windows
             .with_mut(|windows| restore_existing_window(windows, app_id));
@@ -345,6 +430,14 @@ impl OsState {
             return;
         }
 
+        self.spawn_new_window(app_id, title);
+    }
+
+    pub fn open_new_window(&mut self, app_id: &str, title: &str) -> u64 {
+        self.spawn_new_window(app_id, title)
+    }
+
+    fn spawn_new_window(&mut self, app_id: &str, title: &str) -> u64 {
         let id = *self.next_window_id.read();
         self.next_window_id.set(id + 1);
         let z = *self.next_z.read();
@@ -391,6 +484,11 @@ impl OsState {
             y = (available_h - height).max(0.0);
         }
 
+        let instance_id = format!("win-{}", id);
+        self.ram_store
+            .write()
+            .register_active(&instance_id, app_id, title);
+
         self.windows.with_mut(|ws| {
             ws.push(WindowState {
                 id,
@@ -406,11 +504,49 @@ impl OsState {
                 minimized: false,
                 maximized: false,
                 restore_rect: None,
+                snapshot_payload: None,
             });
         });
+        id
+    }
+
+    pub fn activate_instance(&mut self, instance_id: &str) {
+        if self.is_transition_in_flight(instance_id) {
+            return;
+        }
+        self.mark_transition_started(instance_id);
+
+        let entry = self.ram_store.read().get_entry(instance_id).cloned();
+        if let Some(entry) = entry {
+            if entry.state == crate::os::ram::RamLifecycleState::Minimized {
+                let (vw, vh) = crate::os::viewport_size();
+                self.restore_instance(instance_id, vw, vh);
+                return;
+            }
+        }
+
+        if let Some(id) = instance_id
+            .strip_prefix("win-")
+            .and_then(|s| s.parse::<u64>().ok())
+        {
+            self.focus_window(id);
+        }
     }
 
     pub fn activate_app(&mut self, app_id: &str) {
+        if self.is_transition_in_flight(app_id) {
+            return;
+        }
+        self.mark_transition_started(app_id);
+
+        let entry = self.ram_store.read().find_minimized_by_app(app_id).cloned();
+        if let Some(entry) = entry {
+            let instance_id = entry.instance_id.clone();
+            let (vw, vh) = crate::os::viewport_size();
+            self.restore_instance(&instance_id, vw, vh);
+            return;
+        }
+
         let id = self
             .windows
             .with_mut(|windows| restore_existing_window(windows, app_id));
@@ -670,15 +806,260 @@ impl OsState {
     pub fn close_window(&mut self, id: u64) {
         self.cancel_drag_for_window(id);
         self.windows.with_mut(|ws| ws.retain(|w| w.id != id));
+
+        let instance_id = format!("win-{}", id);
+        self.ram_store.write().close_instance(&instance_id);
+        self.snapshot_providers.write().remove(&instance_id);
+        self.clear_transition(&instance_id);
     }
 
     pub fn minimize_window(&mut self, id: u64) {
         self.cancel_drag_for_window(id);
-        self.windows.with_mut(|ws| {
-            if let Some(w) = ws.iter_mut().find(|w| w.id == id) {
-                w.minimized = true;
+        let win = self.windows.read().iter().find(|w| w.id == id).cloned();
+        let Some(win) = win else {
+            return;
+        };
+
+        let instance_id = format!("win-{}", id);
+        if self.is_transition_in_flight(&instance_id) {
+            return;
+        }
+        self.mark_transition_started(&instance_id);
+
+        self.ram_store
+            .write()
+            .register_active(&instance_id, &win.app_id, &win.title);
+
+        if self.ram_store.write().begin_minimize(&instance_id).is_err() {
+            self.clear_transition(&instance_id);
+            return;
+        }
+
+        if win.app_id == "sandbox"
+            && self
+                .get_snapshot(&instance_id, &win.app_id)
+                .and_then(|payload| {
+                    payload
+                        .get("retained_iframe_src")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_owned)
+                })
+                .is_some()
+        {
+            let mut os = *self;
+            let generation = self
+                .ram_store
+                .read()
+                .get_entry(&instance_id)
+                .map(|entry| entry.restore_generation)
+                .unwrap_or_default();
+            spawn(async move {
+                let request_id = format!(
+                    "{instance_id}-{generation}-{}",
+                    lunar_utils::time::current_time_ms()
+                );
+                let result = crate::pages::sandbox::prepare_iframe_suspend(
+                    &instance_id,
+                    &request_id,
+                    generation,
+                )
+                .await;
+                match result {
+                    Ok(snapshot) => os.finish_minimize_window(id, Some(snapshot)),
+                    Err(error) => {
+                        #[cfg(target_arch = "wasm32")]
+                        web_sys::console::warn_1(&format!("Sandbox remains open: {error}").into());
+                        #[cfg(not(target_arch = "wasm32"))]
+                        eprintln!("Sandbox remains open: {error}");
+                        os.ram_store.write().rollback_minimize(&instance_id);
+                        os.clear_transition(&instance_id);
+                        crate::pages::sandbox::post_iframe_resume();
+                    }
+                }
+            });
+            return;
+        }
+        self.finish_minimize_window(id, None);
+    }
+
+    fn finish_minimize_window(&mut self, id: u64, iframe_snapshot: Option<serde_json::Value>) {
+        let instance_id = format!("win-{}", id);
+        let Some(win) = self.windows.read().iter().find(|w| w.id == id).cloned() else {
+            self.clear_transition(&instance_id);
+            return;
+        };
+
+        let mut payload = self
+            .get_snapshot(&instance_id, &win.app_id)
+            .unwrap_or(serde_json::Value::Null);
+        if let Some(iframe_snapshot) = iframe_snapshot {
+            let updated =
+                serde_json::from_value::<crate::pages::sandbox::SandboxSnapshot>(payload.clone())
+                    .map_err(|e| e.to_string())
+                    .and_then(|mut state| {
+                        crate::pages::sandbox::apply_suspend_state(&mut state, &iframe_snapshot)?;
+                        serde_json::to_value(state).map_err(|e| e.to_string())
+                    });
+            match updated {
+                Ok(snapshot) => payload = snapshot,
+                Err(error) => {
+                    #[cfg(target_arch = "wasm32")]
+                    web_sys::console::warn_1(&format!("Sandbox remains open: {error}").into());
+                    #[cfg(not(target_arch = "wasm32"))]
+                    eprintln!("Sandbox remains open: {error}");
+                    self.ram_store.write().rollback_minimize(&instance_id);
+                    self.clear_transition(&instance_id);
+                    crate::pages::sandbox::post_iframe_resume();
+                    return;
+                }
             }
+        }
+        let geom = crate::os::snapshot::WindowGeometry {
+            x: win.x as i32,
+            y: win.y as i32,
+            width: win.width as u32,
+            height: win.height as u32,
+        };
+        let snapshot = crate::os::snapshot::AppSnapshotEnvelopeV1::new(
+            &instance_id,
+            &win.app_id,
+            geom,
+            payload,
+        );
+
+        if self
+            .ram_store
+            .write()
+            .commit_minimize(&instance_id, snapshot)
+            .is_err()
+        {
+            self.ram_store.write().rollback_minimize(&instance_id);
+            self.clear_transition(&instance_id);
+            if win.app_id == "sandbox" {
+                crate::pages::sandbox::post_iframe_resume();
+            }
+            return;
+        }
+
+        // Unmount window completely from DOM tree:
+        self.windows.with_mut(|ws| ws.retain(|w| w.id != id));
+        self.clear_transition(&instance_id);
+    }
+
+    pub fn restore_instance(&mut self, instance_id: &str, viewport_w: f64, viewport_h: f64) {
+        let entry = self.ram_store.read().get_entry(instance_id).cloned();
+        let Some(entry) = entry else {
+            return;
+        };
+        if entry.state != crate::os::ram::RamLifecycleState::Minimized {
+            return;
+        }
+
+        if self.is_transition_in_flight(instance_id) {
+            return;
+        }
+        self.mark_transition_started(instance_id);
+
+        let restore_result = {
+            let mut ram_store = self.ram_store.write();
+            ram_store.begin_restore(instance_id)
+        };
+        let restore_gen = match restore_result {
+            Ok(g) => g,
+            Err(_) => {
+                self.clear_transition(instance_id);
+                return;
+            }
+        };
+
+        let snapshot_res = self
+            .ram_store
+            .write()
+            .commit_restore(instance_id, restore_gen);
+
+        let snap = match snapshot_res {
+            Ok(snap) => snap,
+            Err(e) => {
+                #[cfg(target_arch = "wasm32")]
+                web_sys::console::warn_1(
+                    &format!(
+                        "Snapshot restoration failed for {instance_id}: {e}; snapshot retained"
+                    )
+                    .into(),
+                );
+                #[cfg(not(target_arch = "wasm32"))]
+                eprintln!("Snapshot restoration failed for {instance_id}: {e}; snapshot retained");
+                self.ram_store.write().rollback_restore(instance_id);
+                self.clear_transition(instance_id);
+                return;
+            }
+        };
+
+        let (geom, snapshot_payload) = (Some(snap.window_geometry), Some(snap.payload));
+
+        let id = *self.next_window_id.read();
+        self.next_window_id.set(id + 1);
+        let z = *self.next_z.read();
+        self.next_z.set(z + 1);
+
+        let app = app_by_id(&entry.app_id);
+        let spec = app.map(|a| a.size).unwrap_or(WindowSizeSpec {
+            preferred_width: 800.0,
+            preferred_height: 600.0,
+            min_width: 480.0,
+            min_height: 320.0,
         });
+
+        let available_w = viewport_w.max(spec.min_width);
+        let available_h = (viewport_h - DOCK_HEIGHT).max(spec.min_height);
+
+        let (width, height, x, y) = if let Some(g) = geom {
+            let width = (g.width as f64).min(available_w).max(spec.min_width);
+            let height = (g.height as f64).min(available_h).max(spec.min_height);
+            let x = (g.x as f64).min(available_w - width).max(0.0);
+            let y = (g.y as f64).min(available_h - height).max(0.0);
+            (width, height, x, y)
+        } else {
+            let (w, h) = spec.fit_to_available_space(available_w, available_h);
+            let x = ((available_w - w) / 2.0).max(0.0);
+            let y = ((available_h - h) / 2.0).max(0.0);
+            (w, h, x, y)
+        };
+
+        let new_instance_id = format!("win-{}", id);
+        self.ram_store.write().close_instance(instance_id);
+        self.snapshot_providers.write().remove(instance_id);
+        self.ram_store
+            .write()
+            .register_active(&new_instance_id, &entry.app_id, &entry.title);
+
+        self.windows.with_mut(|ws| {
+            ws.push(WindowState {
+                id,
+                app_id: entry.app_id.clone(),
+                title: entry.title.clone(),
+                x,
+                y,
+                width,
+                height,
+                min_width: spec.min_width,
+                min_height: spec.min_height,
+                z,
+                minimized: false,
+                maximized: false,
+                restore_rect: None,
+                snapshot_payload,
+            });
+        });
+        self.focus_window(id);
+    }
+
+    pub fn restore_window(&mut self, app_id: &str, viewport_w: f64, viewport_h: f64) {
+        let entry = self.ram_store.read().find_minimized_by_app(app_id).cloned();
+        let Some(entry) = entry else {
+            return;
+        };
+        self.restore_instance(&entry.instance_id, viewport_w, viewport_h);
     }
 
     pub fn toggle_maximize_window(&mut self, id: u64, viewport_w: f64, viewport_h: f64) {
@@ -1273,6 +1654,7 @@ mod settings_tests {
             minimized: true,
             maximized: false,
             restore_rect: None,
+            snapshot_payload: None,
         }];
         assert_eq!(restore_existing_window(&mut windows, "sandbox"), Some(7));
         assert!(!windows[0].minimized);
@@ -1382,5 +1764,65 @@ mod settings_tests {
             known_port_conflict("frontend", &configs).unwrap().0,
             "LUNAR_FRONTEND_PORT"
         );
+    }
+
+    #[test]
+    fn multi_instance_snapshots_are_isolated() {
+        let mut dom = VirtualDom::new(|| {
+            let mut os = OsState::new();
+            os.register_instance_snapshot("win-1", serde_json::json!({ "filter": "alpha" }));
+            os.register_instance_snapshot("win-2", serde_json::json!({ "filter": "beta" }));
+
+            assert_eq!(
+                os.get_instance_snapshot("win-1"),
+                Some(serde_json::json!({ "filter": "alpha" }))
+            );
+            assert_eq!(
+                os.get_instance_snapshot("win-2"),
+                Some(serde_json::json!({ "filter": "beta" }))
+            );
+
+            assert_eq!(
+                os.get_snapshot("win-1", "log:backend"),
+                Some(serde_json::json!({ "filter": "alpha" }))
+            );
+            assert_eq!(
+                os.get_snapshot("win-2", "log:backend"),
+                Some(serde_json::json!({ "filter": "beta" }))
+            );
+            rsx! {}
+        });
+        dom.rebuild_in_place();
+    }
+
+    #[test]
+    fn window_close_cleans_up_ram_store() {
+        let mut dom = VirtualDom::new(|| {
+            let mut os = OsState::new();
+            let win1_id = os.open_new_window("log:backend", "Log 1");
+            let win2_id = os.open_new_window("log:backend", "Log 2");
+
+            assert_eq!(os.ram_store.read().is_instance_open("win-1"), true);
+            assert_eq!(os.ram_store.read().is_instance_open("win-2"), true);
+
+            os.register_instance_snapshot("win-1", serde_json::json!({ "cursor": 10 }));
+            os.register_instance_snapshot("win-2", serde_json::json!({ "cursor": 20 }));
+
+            // Close win-1
+            os.close_window(win1_id);
+
+            // win-1 is evicted from RAM and providers
+            assert_eq!(os.ram_store.read().is_instance_open("win-1"), false);
+            assert_eq!(os.get_instance_snapshot("win-1"), None);
+
+            // win-2 remains completely untouched
+            assert_eq!(os.ram_store.read().is_instance_open("win-2"), true);
+            assert_eq!(
+                os.get_instance_snapshot("win-2"),
+                Some(serde_json::json!({ "cursor": 20 }))
+            );
+            rsx! {}
+        });
+        dom.rebuild_in_place();
     }
 }

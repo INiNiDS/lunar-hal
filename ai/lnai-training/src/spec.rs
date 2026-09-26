@@ -163,6 +163,18 @@ pub struct LocalizationLossWeights {
     pub calibration: f32,
 }
 
+impl Default for LocalizationLossWeights {
+    fn default() -> Self {
+        Self {
+            existence: 1.0,
+            position_nll: 1.0,
+            chamfer: 1.0,
+            feature: 0.5,
+            calibration: 0.2,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ModelConfig {
@@ -292,10 +304,42 @@ impl TrainingSpec {
                     errors.push("gnn kl_weight must be finite and >= 0".to_string());
                 }
             }
-            ModelConfig::GnnLocalization(_) => {
-                errors.push(
-                    "gnn_localization training is not implemented in Stage 5 (Stage 8)".to_string(),
-                );
+            ModelConfig::GnnLocalization(cfg) => {
+                if !cfg.radius.is_finite() || cfg.radius <= 0.0 {
+                    errors.push("localization radius must be finite and > 0".to_string());
+                }
+                if cfg.max_slots == 0 {
+                    errors.push("localization max_slots must be >= 1".to_string());
+                }
+                if !cfg.mask_ratio.is_finite() || cfg.mask_ratio < 0.0 || cfg.mask_ratio > 1.0 {
+                    errors.push("localization mask_ratio must be between 0.0 and 1.0".to_string());
+                }
+                if !cfg.loss_weights.existence.is_finite() || cfg.loss_weights.existence < 0.0 {
+                    errors.push(
+                        "localization existence loss weight must be finite and >= 0".to_string(),
+                    );
+                }
+                if !cfg.loss_weights.position_nll.is_finite() || cfg.loss_weights.position_nll < 0.0
+                {
+                    errors.push(
+                        "localization position_nll loss weight must be finite and >= 0".to_string(),
+                    );
+                }
+                if !cfg.loss_weights.chamfer.is_finite() || cfg.loss_weights.chamfer < 0.0 {
+                    errors.push(
+                        "localization chamfer loss weight must be finite and >= 0".to_string(),
+                    );
+                }
+                if !cfg.loss_weights.feature.is_finite() || cfg.loss_weights.feature < 0.0 {
+                    errors.push(
+                        "localization feature loss weight must be finite and >= 0".to_string(),
+                    );
+                }
+                if !cfg.loss_weights.calibration.is_finite() || cfg.loss_weights.calibration < 0.0 {
+                    errors.push(
+                        "localization calibration loss weight must be finite and >= 0".to_string(),
+                    );
+                }
             }
             ModelConfig::Siren(cfg) => {
                 if cfg.texture_size == 0 {
@@ -434,7 +478,28 @@ impl TrainingSpec {
                     }
                 }
             }
-            ModelConfig::GnnLocalization(_) => {}
+            ModelConfig::GnnLocalization(cfg) => {
+                argv.push("--max-nodes".to_string());
+                argv.push(self.batch_size.to_string());
+                argv.push("--radius".to_string());
+                argv.push(cfg.radius.to_string());
+                argv.push("--max-slots".to_string());
+                argv.push(cfg.max_slots.to_string());
+                argv.push("--mask-ratio".to_string());
+                argv.push(cfg.mask_ratio.to_string());
+                argv.push("--seed".to_string());
+                argv.push(cfg.seed.to_string());
+                argv.push("--existence-weight".to_string());
+                argv.push(cfg.loss_weights.existence.to_string());
+                argv.push("--position-weight".to_string());
+                argv.push(cfg.loss_weights.position_nll.to_string());
+                argv.push("--chamfer-weight".to_string());
+                argv.push(cfg.loss_weights.chamfer.to_string());
+                argv.push("--feature-weight".to_string());
+                argv.push(cfg.loss_weights.feature.to_string());
+                argv.push("--calibration-weight".to_string());
+                argv.push(cfg.loss_weights.calibration.to_string());
+            }
             ModelConfig::Siren(cfg) => {
                 argv.push("--batch-size".to_string());
                 argv.push(self.batch_size.to_string());
@@ -465,11 +530,6 @@ pub struct EvaluationSpec {
 impl EvaluationSpec {
     pub fn validate(&self) -> Result<(), Vec<String>> {
         let mut errors = Vec::new();
-        if matches!(self.model, ModelKind::GnnLocalization) {
-            errors.push(
-                "gnn_localization evaluation is not implemented in Stage 5 (Stage 8)".to_string(),
-            );
-        }
         if self.batch_size == 0 {
             errors.push("batch_size must be >= 1".to_string());
         }
@@ -551,10 +611,7 @@ impl BenchmarkSpec {
     /// Argv for the worker's benchmark mode: loads the artifact, times
     /// forward passes, writes `benchmark.json`, trains nothing.
     pub fn worker_argv(&self) -> Vec<String> {
-        let mut argv = vec![
-            "--output-dir".to_string(),
-            self.output_dir.clone(),
-        ];
+        let mut argv = vec!["--output-dir".to_string(), self.output_dir.clone()];
         // The GNN worker names its batch budget --max-nodes (legacy flag).
         match self.model {
             ModelKind::GnnKinematics | ModelKind::GnnLocalization => {
@@ -760,6 +817,18 @@ mod tests {
     #[test]
     fn capability_validation_accepts_matching_config() {
         assert!(pinn_training_spec().validate().is_ok());
+        assert!(sample_training_spec().validate().is_ok());
+    }
+
+    #[test]
+    fn localization_training_spec_validates_and_renders_argv() {
+        let spec = sample_training_spec();
+        assert!(spec.validate().is_ok());
+        let argv = spec.worker_argv();
+        assert!(argv.contains(&"--radius".to_string()));
+        assert!(argv.contains(&"--max-slots".to_string()));
+        assert!(argv.contains(&"--mask-ratio".to_string()));
+        assert!(argv.contains(&"--existence-weight".to_string()));
     }
 
     #[test]

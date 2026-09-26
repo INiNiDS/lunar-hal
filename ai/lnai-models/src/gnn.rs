@@ -1,6 +1,108 @@
 use burn::nn::{LayerNorm, LayerNormConfig, Linear, LinearConfig};
 use burn::prelude::*;
 
+/// Stage 7: Compressed Sparse Row (CSR) edge representation for graph batches.
+///
+/// Encodes a sparse graph of `num_nodes` and `num_edges`.
+/// `row_ptr` has length `num_nodes + 1`, indexing into `col_indices` and `edge_weights`.
+/// Avoids allocating and transferring dense `N×N` matrices for inference and message passing.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct GraphBatch {
+    pub num_nodes: usize,
+    pub num_edges: usize,
+    pub row_ptr: Vec<usize>,
+    pub col_indices: Vec<usize>,
+    pub edge_weights: Vec<f32>,
+}
+
+impl GraphBatch {
+    pub fn empty() -> Self {
+        Self {
+            num_nodes: 0,
+            num_edges: 0,
+            row_ptr: vec![0],
+            col_indices: Vec::new(),
+            edge_weights: Vec::new(),
+        }
+    }
+
+    pub fn new(
+        num_nodes: usize,
+        row_ptr: Vec<usize>,
+        col_indices: Vec<usize>,
+        edge_weights: Vec<f32>,
+    ) -> Self {
+        assert_eq!(
+            row_ptr.len(),
+            num_nodes + 1,
+            "row_ptr length must be num_nodes + 1"
+        );
+        let num_edges = col_indices.len();
+        assert_eq!(
+            edge_weights.len(),
+            num_edges,
+            "edge_weights length must match col_indices"
+        );
+        assert_eq!(
+            row_ptr[num_nodes], num_edges,
+            "row_ptr[num_nodes] must equal num_edges"
+        );
+        Self {
+            num_nodes,
+            num_edges,
+            row_ptr,
+            col_indices,
+            edge_weights,
+        }
+    }
+
+    /// Converts this sparse CSR graph to a dense `[N, N]` adjacency tensor.
+    /// Used for dense path parity benchmarks and validation against legacy paths.
+    pub fn to_dense_adjacency<B: Backend>(&self, device: &Device<B>) -> Tensor<B, 2> {
+        let n = self.num_nodes;
+        let mut dense = vec![0.0f32; n * n];
+        for i in 0..n {
+            let start = self.row_ptr[i];
+            let end = self.row_ptr[i + 1];
+            for edge_idx in start..end {
+                let j = self.col_indices[edge_idx];
+                let w = self.edge_weights[edge_idx];
+                dense[i * n + j] = w;
+            }
+        }
+        Tensor::<B, 2>::from_data(TensorData::new(dense, [n, n]), device)
+    }
+
+    /// Propagates node features `H` of shape `[N, D]` along the sparse edges:
+    /// `H_out[i] = sum_{j in N(i)} W_ij * H_in[j]`.
+    pub fn propagate<B: Backend>(&self, features: Tensor<B, 2>) -> Tensor<B, 2> {
+        let [n, d] = features.dims();
+        assert_eq!(
+            n, self.num_nodes,
+            "feature row count {n} must match graph node count {}",
+            self.num_nodes
+        );
+        if n == 0 {
+            return features;
+        }
+        let device = features.device();
+        let mut rows = Vec::with_capacity(n);
+        for i in 0..n {
+            let mut row = Tensor::<B, 2>::zeros([1, d], &device);
+            let start = self.row_ptr[i];
+            let end = self.row_ptr[i + 1];
+            for edge_idx in start..end {
+                let j = self.col_indices[edge_idx];
+                let w = self.edge_weights[edge_idx];
+                let source = features.clone().slice([j..j + 1, 0..d]);
+                row = row + source.mul_scalar(w);
+            }
+            rows.push(row);
+        }
+        Tensor::cat(rows, 0)
+    }
+}
+
 #[derive(Module, Debug)]
 pub struct GcnLayer<B: Backend> {
     linear: Linear<B>,
@@ -19,6 +121,15 @@ impl<B: Backend> GcnLayer<B> {
     pub fn forward(&self, nodes: Tensor<B, 2>, adj: Tensor<B, 2>) -> Tensor<B, 2> {
         let projected = self.linear.forward(nodes);
         let propagated = adj.matmul(projected);
+        burn::tensor::activation::silu(self.norm.forward(propagated))
+    }
+
+    /// Stage 7: sparse message passing over a CSR [`GraphBatch`].
+    /// Avoids materializing the `N×N` dense adjacency tensor and
+    /// scales linearly with the number of edges.
+    pub fn forward_sparse(&self, nodes: Tensor<B, 2>, graph: &GraphBatch) -> Tensor<B, 2> {
+        let projected = self.linear.forward(nodes);
+        let propagated = graph.propagate(projected);
         burn::tensor::activation::silu(self.norm.forward(propagated))
     }
 }
@@ -64,6 +175,16 @@ impl<B: Backend> StellarGnn<B> {
         let h3 = self.gcn3.forward(h2.clone() + h1, adj);
         self.readout.forward(h3)
     }
+
+    /// Stage 7: sparse 3-layer GCN forward pass over a [`GraphBatch`].
+    /// Yields identical values to [`forward`] (pinned by parity test)
+    /// without building dense `N×N` intermediate matrices.
+    pub fn forward_sparse(&self, nodes: Tensor<B, 2>, graph: &GraphBatch) -> Tensor<B, 2> {
+        let h1 = self.gcn1.forward_sparse(nodes, graph);
+        let h2 = self.gcn2.forward_sparse(h1.clone(), graph);
+        let h3 = self.gcn3.forward_sparse(h2.clone() + h1, graph);
+        self.readout.forward(h3)
+    }
 }
 
 pub const GNN_INPUT_DIM: usize = 8;
@@ -97,6 +218,52 @@ impl GnnHeadKind {
             GnnHeadKind::Deterministic => GNN_OUTPUT_DIM,
             GnnHeadKind::Variational => GNN_VARIATIONAL_DIM,
         }
+    }
+}
+
+/// Stage 7: explicit Deterministic readout head `[N, hidden] -> [N, 3]`.
+#[derive(Module, Debug)]
+pub struct DeterministicGnnHead<B: Backend> {
+    pub readout: Linear<B>,
+}
+
+impl<B: Backend> DeterministicGnnHead<B> {
+    pub fn new(device: &Device<B>, hidden_dim: usize) -> Self {
+        Self {
+            readout: LinearConfig::new(hidden_dim, GNN_OUTPUT_DIM).init(device),
+        }
+    }
+
+    pub fn forward(&self, hidden: Tensor<B, 2>) -> Tensor<B, 2> {
+        self.readout.forward(hidden)
+    }
+}
+
+/// Stage 7: explicit Variational readout head `[N, hidden] -> (mean [N, 3], logvar [N, 3])`.
+#[derive(Module, Debug)]
+pub struct VariationalGnnHead<B: Backend> {
+    pub mean_head: Linear<B>,
+    pub logvar_head: Linear<B>,
+}
+
+impl<B: Backend> VariationalGnnHead<B> {
+    pub fn new(device: &Device<B>, hidden_dim: usize) -> Self {
+        Self {
+            mean_head: LinearConfig::new(hidden_dim, GNN_OUTPUT_DIM).init(device),
+            logvar_head: LinearConfig::new(hidden_dim, GNN_OUTPUT_DIM).init(device),
+        }
+    }
+
+    pub fn forward(&self, hidden: Tensor<B, 2>) -> (Tensor<B, 2>, Tensor<B, 2>) {
+        (
+            self.mean_head.forward(hidden.clone()),
+            self.logvar_head.forward(hidden),
+        )
+    }
+
+    pub fn forward_cat(&self, hidden: Tensor<B, 2>) -> Tensor<B, 2> {
+        let (mean, logvar) = self.forward(hidden);
+        Tensor::cat(vec![mean, logvar], 1)
     }
 }
 
@@ -216,6 +383,37 @@ mod tests {
         assert_eq!(GnnHeadKind::Deterministic.output_width(), GNN_OUTPUT_DIM);
         assert_eq!(GnnHeadKind::Variational.output_width(), GNN_VARIATIONAL_DIM);
     }
+
+    #[test]
+    fn sparse_graph_propagation_preserves_autodiff_gradients() {
+        use burn::backend::Autodiff;
+        use burn::backend::NdArray;
+
+        type Train = Autodiff<NdArray<f32>>;
+        let device = burn::backend::ndarray::NdArrayDevice::default();
+        let graph = GraphBatch::new(
+            3,
+            vec![0, 2, 4, 5],
+            vec![0, 1, 1, 2, 2],
+            vec![0.5, 0.5, 0.5, 0.5, 1.0],
+        );
+        let nodes = Tensor::<Train, 2>::from_data(
+            TensorData::new(vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0], [3, 2]),
+            &device,
+        )
+        .require_grad();
+        let propagated = graph.propagate(nodes.clone());
+        let loss = propagated.powf_scalar(2.0).mean();
+        let gradients = loss.backward();
+        let node_gradients: Vec<f32> = nodes
+            .grad(&gradients)
+            .expect("sparse aggregation must preserve input gradients")
+            .into_data()
+            .to_vec()
+            .unwrap();
+        assert!(node_gradients.iter().all(|gradient| gradient.is_finite()));
+        assert!(node_gradients.iter().any(|gradient| gradient.abs() > 1e-6));
+    }
 }
 
 pub fn compute_adjacency_matrix(coords: &[[f32; 3]]) -> Vec<Vec<f32>> {
@@ -257,14 +455,15 @@ pub fn sample_stellar_dynamics<B: Backend>(
     };
     let (mean, logvar) = split_mean_logvar(gnn_output, head);
 
-    if temperature <= 0.0 {
+    // Stage 7: deterministic head has no learned variance, so variational
+    // sampling is invalid and returns the mean directly.
+    if temperature <= 0.0 || head == GnnHeadKind::Deterministic {
         return mean;
     }
 
     let std = match logvar {
         Some(logvar) => log_var_to_std(logvar),
-        // Deterministic head: unit sampling noise (no learned variance).
-        None => Tensor::<B, 2>::ones([num_stars, GNN_OUTPUT_DIM], device),
+        None => return mean,
     };
 
     let epsilon = Tensor::<B, 2>::random(
@@ -297,11 +496,22 @@ pub fn compute_knn_adjacency(coords: &[[f32; 3]], k: usize) -> Vec<Vec<f32>> {
                 (j, dx * dx + dy * dy + dz * dz)
             })
             .collect();
-        dists.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+
+        // Stage 7: linear-time partial selection O(N) replaces O(N log N) full sort.
+        let effective_k = k.min(dists.len());
+        if effective_k > 0 && effective_k < dists.len() {
+            dists.select_nth_unstable_by(effective_k - 1, |a, b| {
+                a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
+            });
+            dists[..effective_k]
+                .sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        } else {
+            dists.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        }
 
         adj[i][i] = 1.0;
         let mut degree_sum = 1.0f32;
-        for &(j, dist_sq) in &dists[..k.min(dists.len())] {
+        for &(j, dist_sq) in &dists[..effective_k] {
             let w = 1.0 / (dist_sq + 1e-5);
             adj[i][j] = w;
             degree_sum += w;
@@ -312,4 +522,69 @@ pub fn compute_knn_adjacency(coords: &[[f32; 3]], k: usize) -> Vec<Vec<f32>> {
         }
     }
     adj
+}
+
+/// Stage 7: builds a sparse CSR [`GraphBatch`] directly from 3D coordinates
+/// and a k-NN parameter, using linear-time partial selection per node.
+/// Avoids allocating and populating dense `N×N` adjacency matrices.
+pub fn compute_sparse_knn_graph(coords: &[[f32; 3]], k: usize) -> GraphBatch {
+    let n = coords.len();
+    if n == 0 {
+        return GraphBatch::empty();
+    }
+    let k = k.min(n - 1).max(1);
+    let mut row_ptr = Vec::with_capacity(n + 1);
+    let mut col_indices = Vec::with_capacity(n * (k + 1));
+    let mut edge_weights = Vec::with_capacity(n * (k + 1));
+
+    row_ptr.push(0);
+
+    for i in 0..n {
+        let mut dists: Vec<(usize, f32)> = (0..n)
+            .filter(|&j| j != i)
+            .map(|j| {
+                let dx = coords[i][0] - coords[j][0];
+                let dy = coords[i][1] - coords[j][1];
+                let dz = coords[i][2] - coords[j][2];
+                (j, dx * dx + dy * dy + dz * dz)
+            })
+            .collect();
+
+        let effective_k = k.min(dists.len());
+        if effective_k > 0 && effective_k < dists.len() {
+            dists.select_nth_unstable_by(effective_k - 1, |a, b| {
+                a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
+            });
+            dists[..effective_k]
+                .sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        } else {
+            dists.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        }
+
+        let mut degree_sum = 1.0f32;
+        let mut neighbors = Vec::with_capacity(effective_k + 1);
+        neighbors.push((i, 1.0f32));
+
+        for &(j, dist_sq) in &dists[..effective_k] {
+            let w = 1.0 / (dist_sq + 1e-5);
+            neighbors.push((j, w));
+            degree_sum += w;
+        }
+
+        neighbors.sort_by_key(|&(col, _)| col);
+
+        for (col, w) in neighbors {
+            col_indices.push(col);
+            edge_weights.push(w / degree_sum);
+        }
+        row_ptr.push(col_indices.len());
+    }
+
+    GraphBatch {
+        num_nodes: n,
+        num_edges: col_indices.len(),
+        row_ptr,
+        col_indices,
+        edge_weights,
+    }
 }

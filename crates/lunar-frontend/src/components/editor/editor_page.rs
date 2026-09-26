@@ -1,17 +1,19 @@
 use crate::assets::FONT_SANS;
 use crate::components::editor::embedded::{EmbeddedSandbox, embedded_scene_id};
+use crate::components::editor::scene_panel::{StarSceneCreator, StarScenePicker};
 use crate::components::editor::sidebar::StarSidebar;
 use crate::components::editor::star_map::StarMap;
-use crate::components::editor::scene_panel::{StarSceneCreator, StarScenePicker};
 use crate::stellar_state::{
-    restore_camera, use_stellar_scene, use_stellar_scene_snapshot, use_persist_scene_camera,
-    use_pipeline_snapshot, use_provide_scene_camera_persistence, use_scene_id_change,
+    restore_camera, use_persist_scene_camera, use_pipeline_snapshot,
+    use_provide_scene_camera_persistence, use_scene_id_change, use_stellar_scene,
+    use_stellar_scene_snapshot,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use dioxus::prelude::*;
 use lunar_stellar_core::{StellarScene, StellarSceneSnapshot};
 use lunar_structures::{
-    PinnResponse, PipelineResponse, ResponseStar, StarLore, StellarMetadata, StarScene, StarSceneSummary,
+    PinnResponse, PipelineResponse, ResponseStar, StarLore, StarScene, StarSceneSummary,
+    StellarMetadata,
 };
 use std::io::Cursor;
 use tracing::warn;
@@ -144,7 +146,11 @@ fn use_sync_star_pipeline(game: Signal<StellarScene>, version: Signal<u64>) {
     });
 }
 
-fn use_editor_synchronization(game: Signal<StellarScene>, version: Signal<u64>, refresh_tick: Signal<u32>) {
+fn use_editor_synchronization(
+    game: Signal<StellarScene>,
+    version: Signal<u64>,
+    refresh_tick: Signal<u32>,
+) {
     use_provide_scene_camera_persistence();
     use_persist_scene_camera();
 
@@ -184,7 +190,11 @@ fn handle_scene_creation(
 }
 
 #[component]
-fn StarSceneBadge(scene: StarScene, game: Signal<StellarScene>, show_picker: Signal<bool>) -> Element {
+fn StarSceneBadge(
+    scene: StarScene,
+    game: Signal<StellarScene>,
+    show_picker: Signal<bool>,
+) -> Element {
     rsx! {
         div {
             class: "absolute left-4 top-4 px-3 py-2 bg-black/40 backdrop-blur-xl border border-white/10 rounded-xl text-white/70 text-[10px] font-bold uppercase tracking-[0.2em] cursor-pointer hover:bg-white/10 hover:text-white transition-colors shadow-lg pointer-events-auto flex items-center gap-2",

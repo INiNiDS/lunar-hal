@@ -8,8 +8,22 @@ use lnai_training::spec::{ModelConfig, ModelKind, SirenConfig, TrainingSpec};
 
 pub use args::Args;
 
-pub fn spec_from_args(args: &Args) -> TrainingSpec {
-    TrainingSpec {
+pub fn spec_from_args(args: &Args) -> Result<TrainingSpec> {
+    let data_path = if args.data.is_empty() {
+        None
+    } else {
+        Some(args.data.clone())
+    };
+    let computed_dataset_manifest_hash = data_path
+        .as_deref()
+        .map(|path| lnai_training::artifacts::dataset_fingerprint(std::path::Path::new(path)))
+        .transpose()?
+        .unwrap_or_default();
+    let dataset_manifest_hash = std::env::var("LUNAR_AI_DATASET_MANIFEST_HASH")
+        .ok()
+        .filter(|hash| !hash.trim().is_empty())
+        .unwrap_or(computed_dataset_manifest_hash);
+    Ok(TrainingSpec {
         model: ModelKind::Siren,
         config: ModelConfig::Siren(SirenConfig {
             texture_size: args.texture_size as u32,
@@ -17,12 +31,8 @@ pub fn spec_from_args(args: &Args) -> TrainingSpec {
             max_stars: args.max_stars as u32,
             seed: args.seed,
         }),
-        dataset_manifest_hash: String::new(),
-        data_path: if args.data.is_empty() {
-            None
-        } else {
-            Some(args.data.clone())
-        },
+        dataset_manifest_hash,
+        data_path,
         epochs: args.epochs as u32,
         batch_size: args.batch_size as u32,
         lr: args.lr,
@@ -40,12 +50,12 @@ pub fn spec_from_args(args: &Args) -> TrainingSpec {
         max_rows: args.max_rows,
         tiles: None,
         agent: None,
-    }
+    })
 }
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    let spec = spec_from_args(&args);
+    let spec = spec_from_args(&args)?;
     if let Err(errs) = spec.validate() {
         anyhow::bail!("invalid SIREN spec: {}", errs.join("; "));
     }

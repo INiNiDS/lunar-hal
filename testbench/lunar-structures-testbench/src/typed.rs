@@ -15,7 +15,7 @@
 
 pub use lnai_dto::{
     BenchmarkRequest, DataCollectRequestShim, EvaluationRequest, JobEventDto, ModelKindDto,
-    TrainingRequest,
+    ReportRecord, TrainingRequest,
 };
 
 /// Re-exported shared enums so frontend code keeps a single import path.
@@ -33,6 +33,7 @@ mod lnai_dto {
         Pinn,
         Gnn,
         Siren,
+        GnnLocalization,
     }
 
     impl ModelKindDto {
@@ -41,6 +42,7 @@ mod lnai_dto {
                 ModelKindDto::Pinn => "pinn",
                 ModelKindDto::Gnn => "gnn",
                 ModelKindDto::Siren => "siren",
+                ModelKindDto::GnnLocalization => "gnn_localization",
             }
         }
 
@@ -49,6 +51,7 @@ mod lnai_dto {
                 ModelKindDto::Pinn => "PINN",
                 ModelKindDto::Gnn => "GNN",
                 ModelKindDto::Siren => "SIREN",
+                ModelKindDto::GnnLocalization => "GNN-Localization",
             }
         }
 
@@ -57,6 +60,7 @@ mod lnai_dto {
                 ModelKindDto::Pinn => "lnai",
                 ModelKindDto::Gnn => "lnai-gnn",
                 ModelKindDto::Siren => "lnai-siren",
+                ModelKindDto::GnnLocalization => "lnai-gnn",
             }
         }
 
@@ -65,6 +69,9 @@ mod lnai_dto {
                 "pinn" => Some(Self::Pinn),
                 "gnn" | "gnn_kinematics" | "gnn-kinematics" => Some(Self::Gnn),
                 "siren" => Some(Self::Siren),
+                "gnn_localization" | "gnn-localization" | "localization" => {
+                    Some(Self::GnnLocalization)
+                }
                 _ => None,
             }
         }
@@ -91,6 +98,8 @@ mod lnai_dto {
         pub radius_pc: Option<f32>,
         pub texture_size: Option<u32>,
         pub max_stars: Option<u32>,
+        pub max_slots: Option<u32>,
+        pub mask_ratio: Option<f32>,
         pub seed: Option<u64>,
         pub dataset_manifest_hash: Option<String>,
         pub patience: u32,
@@ -131,6 +140,18 @@ mod lnai_dto {
     #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
     pub struct DataCollectRequestShim {
         pub out_dir: String,
+    }
+
+    /// Persistent report record (Stage 10).
+    #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+    pub struct ReportRecord {
+        pub id: String,
+        pub job_id: String,
+        pub kind: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub baseline_delta_json: Option<serde_json::Value>,
+        pub report_json: serde_json::Value,
+        pub created_at: u64,
     }
 
     /// Typed job event mirrored from `lnai-training::events::JobEvent` for
@@ -200,6 +221,8 @@ mod lnai_dto {
                 radius_pc: None,
                 texture_size: None,
                 max_stars: None,
+                max_slots: None,
+                mask_ratio: None,
                 seed: Some(42),
                 dataset_manifest_hash: None,
                 patience: 5,

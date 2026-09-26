@@ -1,0 +1,37 @@
+{
+  "version": "1.0.0",
+  "created_ms": 1789729507630,
+  "git_revision": "754091aa7b0bf52fd06a63385bbbd2de2244714a",
+  "models": [
+    {
+      "kind": "pinn",
+      "architecture_version": "pinn-v1",
+      "weights": "stellar_model.bpk",
+      "norm": "stellar_norm.json",
+      "manifest": "stellar_model.artifact.json",
+      "model_hash": "7c19f8dfde41f8f85df4894a79b073f4266776ff6f3751ca9f5bab5d075acdca",
+      "norm_hash": "7f2a8b841a4df9b99af8af2e78a8e0c7f2e5f659161eb349b25b94c070eea30e",
+      "feature_schema_hash": "pinn-input-x,y,z,bp_rp,g_mag-v1"
+    },
+    {
+      "kind": "gnn_kinematics",
+      "architecture_version": "gnn-kinematics-v1",
+      "weights": "stellar_gnn_model.bpk",
+      "norm": "stellar_gnn_norm.json",
+      "manifest": "stellar_gnn_model.artifact.json",
+      "model_hash": "e46c8caecfe95ff78c50bb643810e7ee3102ce2ac9dc65e91081a44a5816d922",
+      "norm_hash": "4b5effc3035e59c7d1ae72b40588e75a1ba0da58b35f7df9597decd38d123c59",
+      "feature_schema_hash": "gnn-serving-pinn-derived-log_teff,log_rad,log_mass,log_lum,mg,x,y,z-v1"
+    },
+    {
+      "kind": "siren",
+      "architecture_version": "siren-v1",
+      "weights": "stellar_siren_model.bpk",
+      "norm": "stellar_siren_norm.json",
+      "manifest": "stellar_siren_model.artifact.json",
+      "model_hash": "df7d3d503851238f3e8a99cf388581a29f042f8f20191bcda7ae2793b93c7fce",
+      "norm_hash": "c700765c1f7d17718b262bf578022d522b91064b892b22287804567877399093",
+      "feature_schema_hash": "siren-serving-uv,bp_rp,m_g,log_teff-v1"
+    }
+  ]
+}

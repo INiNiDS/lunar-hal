@@ -9,8 +9,22 @@ use lnai_training::spec::{GnnKinematicsConfig, ModelConfig, ModelKind, TrainingS
 pub use args::Args;
 pub use lnai_training::gnn::dataset::{DEFAULT_KNN_K, DEFAULT_MAX_GROUP};
 
-pub fn spec_from_args(args: &Args) -> TrainingSpec {
-    TrainingSpec {
+pub fn spec_from_args(args: &Args) -> Result<TrainingSpec> {
+    let data_path = if args.data.is_empty() {
+        None
+    } else {
+        Some(args.data.clone())
+    };
+    let computed_dataset_manifest_hash = data_path
+        .as_deref()
+        .map(|path| lnai_training::artifacts::dataset_fingerprint(std::path::Path::new(path)))
+        .transpose()?
+        .unwrap_or_default();
+    let dataset_manifest_hash = std::env::var("LUNAR_AI_DATASET_MANIFEST_HASH")
+        .ok()
+        .filter(|hash| !hash.trim().is_empty())
+        .unwrap_or(computed_dataset_manifest_hash);
+    Ok(TrainingSpec {
         model: ModelKind::GnnKinematics,
         config: ModelConfig::GnnKinematics(GnnKinematicsConfig {
             knn_k: args.knn_k as u32,
@@ -21,12 +35,8 @@ pub fn spec_from_args(args: &Args) -> TrainingSpec {
             physics_weight: args.physics_weight,
             kl_weight: args.kl_weight,
         }),
-        dataset_manifest_hash: String::new(),
-        data_path: if args.data.is_empty() {
-            None
-        } else {
-            Some(args.data.clone())
-        },
+        dataset_manifest_hash,
+        data_path,
         epochs: args.epochs as u32,
         batch_size: args.max_nodes as u32,
         lr: args.lr,
@@ -44,12 +54,12 @@ pub fn spec_from_args(args: &Args) -> TrainingSpec {
         max_rows: args.max_rows,
         tiles: args.tiles.clone(),
         agent: args.agent_hook(),
-    }
+    })
 }
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    let spec = spec_from_args(&args);
+    let spec = spec_from_args(&args)?;
     if let Err(errs) = spec.validate() {
         anyhow::bail!("invalid GNN spec: {}", errs.join("; "));
     }

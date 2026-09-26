@@ -12,7 +12,7 @@ use burn::backend::cuda::CudaDevice;
 use burn::grad_clipping::GradientClippingConfig;
 use burn::module::{AutodiffModule, Module};
 use burn::optim::{AdamWConfig, GradientsAccumulator, GradientsParams, Optimizer};
-use burn::tensor::ElementConversion;
+use burn::tensor::{ElementConversion, Tensor};
 use burn_store::{BurnpackStore, ModuleSnapshot};
 use lnai_models::{GNN_INPUT_DIM, GnnHeadKind, StellarGnn, StellarGnnConfig};
 use std::path::Path;
@@ -246,33 +246,44 @@ pub fn run_train_with_cancel(spec: &TrainingSpec, cancel: &CancelFlag) -> Result
 
         train_ds.shuffle_with_seed(seed.wrapping_add(epoch as u64));
         let mut prefetcher = PrefetchBatchedBatcher::new(&train_ds, max_nodes);
-        let mut epoch_train_loss = 0.0f64;
-        let mut n_batches = 0usize;
+        let mut epoch_train_loss = WeightedMean::default();
 
         let mut accumulator: GradientsAccumulator<StellarGnn<TrainBackend>> =
             GradientsAccumulator::new();
         let mut accum_count = 0usize;
 
-        while let Some((nodes, adj, targets)) = prefetcher.next_batch::<TrainBackend>(&device) {
-            let predictions = model.forward(nodes, adj);
-            // Stage 6 unified contract: the optimized total is also what
-            // selects checkpoints and what evaluation reports.
-            let loss = compute_gnn_total_loss(
-                predictions,
-                targets,
-                gnn_cfg.physics_weight,
-                gnn_cfg.kl_weight,
-            );
+        while let Some((groups, total_nodes)) = prefetcher.next_batch::<TrainBackend>(&device) {
+            let mut batch_loss: Option<Tensor<TrainBackend, 1>> = None;
+            let mut batch_loss_scalar = 0.0f64;
+            for (nodes, graph, targets) in groups {
+                let n_nodes = targets.dims()[0];
+                let predictions = model.forward_sparse(nodes, &graph);
+                // Stage 6 unified contract: the optimized total is also what
+                // selects checkpoints and what evaluation reports.
+                let loss = compute_gnn_total_loss(
+                    predictions,
+                    targets,
+                    gnn_cfg.physics_weight,
+                    gnn_cfg.kl_weight,
+                );
+                let weight = n_nodes as f32 / total_nodes as f32;
+                batch_loss_scalar +=
+                    loss.clone().into_scalar().elem::<f32>() as f64 * weight as f64;
+                let weighted_loss = loss.mul_scalar(weight);
+                batch_loss = Some(match batch_loss {
+                    Some(accumulated) => accumulated + weighted_loss,
+                    None => weighted_loss,
+                });
+            }
+            let loss = batch_loss.expect("prefetch batch must contain at least one graph");
 
-            let loss_scalar = loss.clone().into_scalar().elem::<f32>();
             let scaled_loss = loss.div_scalar(spec.grad_accum as f32);
             let grads = scaled_loss.backward();
             drop(scaled_loss);
             let grads = GradientsParams::from_grads(grads, &model);
 
             accumulator.accumulate(&model, grads);
-            epoch_train_loss += loss_scalar as f64;
-            n_batches += 1;
+            epoch_train_loss.add(batch_loss_scalar, total_nodes);
             accum_count += 1;
 
             if accum_count >= spec.grad_accum as usize {
@@ -288,7 +299,7 @@ pub fn run_train_with_cancel(spec: &TrainingSpec, cancel: &CancelFlag) -> Result
             model = optim.step(lr, model, grads);
         }
 
-        let epoch_train_loss = epoch_train_loss / n_batches.max(1) as f64;
+        let epoch_train_loss = epoch_train_loss.mean();
         let infer_model = model.valid();
         // Stage 6: checkpoint selection optimizes the same unified total
         // as the train step (previously pure data loss while training
@@ -333,10 +344,8 @@ pub fn run_train_with_cancel(spec: &TrainingSpec, cancel: &CancelFlag) -> Result
         // Epoch-watch AI supervisor: blocks here until the agent answers.
         // Only an explicit VERDICT: STOP halts; anything else continues.
         if let Some(hook) = spec.agent.as_ref() {
-            let log_tail = crate::agent::tail_file(
-                &output_dir.join("events.ndjson"),
-                hook.log_lines,
-            );
+            let log_tail =
+                crate::agent::tail_file(&output_dir.join("events.ndjson"), hook.log_lines);
             let prompt = crate::agent::epoch_prompt(
                 "gnn_kinematics",
                 output_dir,
@@ -356,8 +365,12 @@ pub fn run_train_with_cancel(spec: &TrainingSpec, cancel: &CancelFlag) -> Result
                 AgentVerdict::Continue => {}
                 AgentVerdict::Stop { reason } => {
                     println!("\nAgent verdict STOP at epoch {epoch}: {reason}");
-                    println!("Saving checkpoint before halt...");
-                    save_checkpoint(&model, &norm, &out_model_path, &out_norm_path)?;
+                    if !out_model_path.is_file() || !out_norm_path.is_file() {
+                        anyhow::bail!(
+                            "agent stopped before a finite validation checkpoint was saved"
+                        );
+                    }
+                    println!("Keeping the best validation checkpoint before halt...");
                     let _ = append_event_line(
                         output_dir,
                         &JobEvent::Failed {
@@ -466,14 +479,14 @@ fn write_artifact_manifest(
         architecture_version(&ModelKind::GnnKinematics).to_string(),
         model_hash,
         norm_hash,
-        String::new(),
+        crate::artifacts::expected_feature_schema_hash(&ModelKind::GnnKinematics)
+            .expect("GNN kinematics serving schema must be defined")
+            .to_string(),
         "gaia_dr3".to_string(),
         spec.dataset_manifest_hash.clone(),
         seed,
         serde_json::to_value(&spec.config).unwrap_or(serde_json::Value::Null),
-        option_env!("LUNAR_AI_GIT_REV")
-            .unwrap_or("unknown")
-            .to_string(),
+        crate::artifacts::current_git_revision(),
         format!("cuda:{}", spec.gpu_index),
     );
     manifest.evaluation_metrics = Some(serde_json::json!({ "best_val_loss": best_val_loss }));
@@ -679,19 +692,55 @@ fn evaluate_totals(
     max_nodes: usize,
 ) -> (f64, f64) {
     let mut prefetcher = PrefetchBatchedBatcher::new(dataset, max_nodes);
-    let mut total_sum = 0.0f64;
-    let mut phys_sum = 0.0f64;
-    let mut n = 0usize;
+    let mut total_mean = WeightedMean::default();
+    let mut phys_mean = WeightedMean::default();
 
-    while let Some((nodes, adj, targets)) = prefetcher.next_batch::<InferBackend>(device) {
-        let preds = model.forward(nodes, adj);
-        let (total, physics) = gnn_loss_scalars(preds, targets, physics_weight, kl_weight);
-        total_sum += total as f64;
-        phys_sum += physics as f64;
-        n += 1;
+    while let Some((groups, _total_nodes)) = prefetcher.next_batch::<InferBackend>(device) {
+        for (nodes, graph, targets) in groups {
+            let [n_nodes, _] = targets.dims();
+            let preds = model.forward_sparse(nodes, &graph);
+            let (total, physics) = gnn_loss_scalars(preds, targets, physics_weight, kl_weight);
+            total_mean.add(total as f64, n_nodes);
+            phys_mean.add(physics as f64, n_nodes);
+        }
     }
 
-    (total_sum / n.max(1) as f64, phys_sum / n.max(1) as f64)
+    (total_mean.mean(), phys_mean.mean())
+}
+
+#[derive(Default)]
+struct WeightedMean {
+    sum: f64,
+    count: usize,
+}
+
+impl WeightedMean {
+    fn add(&mut self, loss: f64, n_nodes: usize) {
+        self.sum += loss * n_nodes as f64;
+        self.count += n_nodes;
+    }
+
+    fn mean(&self) -> f64 {
+        self.sum / self.count.max(1) as f64
+    }
+}
+
+#[cfg(test)]
+mod weighted_loss_tests {
+    use super::WeightedMean;
+
+    #[test]
+    fn incomplete_node_batch_changes_checkpoint_order() {
+        let loss = |first: f64, last: f64| {
+            let mut mean = WeightedMean::default();
+            mean.add(first, 4);
+            mean.add(last, 2);
+            mean.mean()
+        };
+        assert!((loss(0.0, 9.0) - 3.0).abs() < 1e-12);
+        assert!(loss(0.0, 9.0) < loss(3.2, 3.2));
+        assert!((0.0 + 9.0) / 2.0 > (3.2 + 3.2) / 2.0);
+    }
 }
 
 fn cosine_annealing(epoch: usize, total_epochs: usize, initial_lr: f64, min_lr: f64) -> f64 {

@@ -180,10 +180,7 @@ fn gpu_summary() -> String {
             if body.is_empty() {
                 "no GPUs reported".to_string()
             } else {
-                body.lines()
-                    .map(str::trim)
-                    .collect::<Vec<_>>()
-                    .join(" | ")
+                body.lines().map(str::trim).collect::<Vec<_>>().join(" | ")
             }
         }
         _ => "nvidia-smi unavailable".to_string(),
@@ -222,10 +219,7 @@ fn load_summary() -> String {
     if loads.len() < 3 {
         return "load info unavailable".to_string();
     }
-    format!(
-        "{} {} {} on {} cores",
-        loads[0], loads[1], loads[2], cores
-    )
+    format!("{} {} {} on {} cores", loads[0], loads[1], loads[2], cores)
 }
 
 /// Builds the per-epoch prompt: epoch table + file pointers. The agent reads
@@ -338,7 +332,10 @@ fn run_agent_call(
                 if start.elapsed() >= timeout {
                     let _ = child.kill();
                     let _ = child.wait();
-                    return Err(format!("opencode run timed out after {}s", timeout.as_secs()));
+                    return Err(format!(
+                        "opencode run timed out after {}s",
+                        timeout.as_secs()
+                    ));
                 }
                 std::thread::sleep(Duration::from_millis(500));
             }
@@ -410,14 +407,15 @@ pub fn maybe_consult_agent(
                 v
             }
             None => {
-                println!(
-                    "--- agent watch: no VERDICT block, continuing (fail-open) ---"
-                );
+                println!("--- agent watch: no VERDICT block, continuing (fail-open) ---");
                 AgentVerdict::Continue
             }
         },
         Err(e) => {
-            println!("--- agent watch: primary model failed ({e}); trying fallback {} ---", cfg.fallback_model);
+            println!(
+                "--- agent watch: primary model failed ({e}); trying fallback {} ---",
+                cfg.fallback_model
+            );
             match attempt(&cfg.fallback_model) {
                 Ok(out) => match parse_verdict(&out) {
                     Some(v) => {

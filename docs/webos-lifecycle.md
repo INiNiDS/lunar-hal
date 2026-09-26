@@ -1,4 +1,9 @@
-# WebOS window lifecycle
+# WebOS window lifecycle (Deprecated)
+
+> **Notice:** The hidden-DOM model described in this document has been superseded by the **Lunar-OS RAM Snapshot Architecture**.
+> For full technical specifications, two-phase commit protocol, and WebGL/SSE lifecycle handling, see [`docs/lunar-os-lifecycle.md`](lunar-os-lifecycle.md).
+
+---
 
 A WebOS window has three visible runtime states:
 

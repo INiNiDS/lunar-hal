@@ -3,25 +3,77 @@ use crate::components::ui::{
     LossChart, NumberFieldF64, NumberFieldU32, PageHeader, ProgressBar, StatusDot, Tag, TextField,
     fmt_age, fmt_ms, tokio_time_sleep,
 };
+use crate::os::state::{is_window_lifecycle_visible, use_window_lifecycle};
+use crate::os::{AppSnapshot, WindowLifecycle};
 use dioxus::prelude::*;
 use lunar_structures_testbench::{Job, JobStatus, ModelKind, ValidateSpec};
-use crate::os::state::{is_window_lifecycle_visible, use_window_lifecycle};
-use crate::os::WindowLifecycle;
+use serde::{Deserialize, Serialize};
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct ValidationSnapshot {
+    pub selected: Option<String>,
+    pub model_kind: ModelKind,
+    pub data_path: String,
+    pub output_dir: String,
+    pub epochs: u32,
+    pub batch_size: u32,
+    pub val_frac: f64,
+    pub knn_k: u32,
+    pub hidden_dim: u32,
+    pub texture_size: u32,
+    pub max_stars: u32,
+    pub error: Option<String>,
+}
+
+impl Default for ValidationSnapshot {
+    fn default() -> Self {
+        Self {
+            selected: None,
+            model_kind: ModelKind::Pinn,
+            data_path: "ai_data/clean_stars2.parquet".to_string(),
+            output_dir: "models/validation".to_string(),
+            epochs: 50,
+            batch_size: 2048,
+            val_frac: 0.1,
+            knn_k: 8,
+            hidden_dim: 256,
+            texture_size: 64,
+            max_stars: 5000,
+            error: None,
+        }
+    }
+}
+
+impl AppSnapshot for ValidationSnapshot {
+    fn capture_snapshot(&self) -> serde_json::Value {
+        serde_json::to_value(self).unwrap_or(serde_json::Value::Null)
+    }
+
+    fn hydrate_snapshot(&mut self, payload: &serde_json::Value) -> Result<(), String> {
+        let snap: ValidationSnapshot = serde_json::from_value(payload.clone())
+            .map_err(|e| format!("Validation hydration failed: {e}"))?;
+        *self = snap;
+        Ok(())
+    }
+}
 
 #[component]
 pub fn Validation() -> Element {
+    let initial =
+        crate::os::use_window_instance_snapshot::<ValidationSnapshot>().unwrap_or_default();
     let jobs = use_resource(|| async { api::list_jobs().await.ok() });
-    let selected = use_signal(|| None::<String>);
+    let selected = use_signal(|| initial.selected.clone());
 
     rsx! {
         PageHeader {
-            title: "Validation".to_string(),
-            subtitle: "Run pure validation jobs: keep patience high, drive 1-3 epochs, capture the loss curve, and use it as a holdout estimate.".to_string(),
+            title: "Validation Checkpoints".to_string(),
+            subtitle: "Run read-only evaluation checkpoints without training epochs: compare checkpoint predictions against approved baselines and ground-truth oracle metrics.".to_string(),
         }
         div { class: "page",
             ValidationBody {
                 jobs,
                 selected,
+                initial,
             }
         }
     }
@@ -31,37 +83,62 @@ pub fn Validation() -> Element {
 fn ValidationBody(
     jobs: Resource<Option<Vec<Job>>>,
     mut selected: Signal<Option<String>>,
+    initial: ValidationSnapshot,
 ) -> Element {
-    let mut model_kind = use_signal(|| ModelKind::Pinn);
-    let mut data_path = use_signal(|| "ai_data/clean_stars2.parquet".to_string());
-    let output_dir = use_signal(|| "models/validation".to_string());
-    let mut epochs = use_signal(|| 3_u32);
-    let mut batch_size = use_signal(|| 2048_u32);
-    let val_frac = use_signal(|| 0.5_f64);
-    let knn_k = use_signal(|| 8_u32);
-    let hidden_dim = use_signal(|| 256_u32);
-    let texture_size = use_signal(|| 32_u32);
-    let max_stars = use_signal(|| 1000_u32);
-    let mut error = use_signal(|| None::<String>);
+    let mut model_kind = use_signal(|| initial.model_kind.clone());
+    let mut data_path = use_signal(|| initial.data_path.clone());
+    let output_dir = use_signal(|| initial.output_dir.clone());
+    let epochs = use_signal(|| initial.epochs);
+    let mut batch_size = use_signal(|| initial.batch_size);
+    let val_frac = use_signal(|| initial.val_frac);
+    let knn_k = use_signal(|| initial.knn_k);
+    let hidden_dim = use_signal(|| initial.hidden_dim);
+    let texture_size = use_signal(|| initial.texture_size);
+    let max_stars = use_signal(|| initial.max_stars);
+    let holdout = use_signal(|| "ai_data/holdout.parquet".to_string());
+    let mut error = use_signal(|| initial.error.clone());
     let mut starting = use_signal(|| false);
+
+    let mut os = crate::os::use_os_state();
+    use_effect(move || {
+        let snap = ValidationSnapshot {
+            selected: selected(),
+            model_kind: model_kind(),
+            data_path: data_path(),
+            output_dir: output_dir(),
+            epochs: epochs(),
+            batch_size: batch_size(),
+            val_frac: val_frac(),
+            knn_k: knn_k(),
+            hidden_dim: hidden_dim(),
+            texture_size: texture_size(),
+            max_stars: max_stars(),
+            error: error(),
+        };
+        if let Some(inst_id) = crate::os::use_window_instance_id() {
+            os.register_instance_snapshot(&inst_id, snap.capture_snapshot());
+        }
+        os.register_app_snapshot("validation", snap.capture_snapshot());
+    });
 
     let on_kind_change = move |k: ModelKind| {
         model_kind.set(k.clone());
         match k {
             ModelKind::Pinn => {
                 data_path.set("ai_data/clean_stars2.parquet".to_string());
-                epochs.set(3);
                 batch_size.set(2048);
             }
             ModelKind::Gnn => {
                 data_path.set("ai_data/clean_gnn_stars.parquet".to_string());
-                epochs.set(2);
                 batch_size.set(4096);
             }
             ModelKind::Siren => {
                 data_path.set("ai_data/clean_stars2.parquet".to_string());
-                epochs.set(1);
                 batch_size.set(512);
+            }
+            ModelKind::GnnLocalization => {
+                data_path.set("ai_data/clean_gnn_stars.parquet".to_string());
+                batch_size.set(2048);
             }
         }
     };
@@ -69,37 +146,31 @@ fn ValidationBody(
     let submit = move |_| {
         error.set(None);
         starting.set(true);
-        let spec = ValidateSpec {
-            model: model_kind(),
+        let model_dto = match model_kind() {
+            ModelKind::Pinn => lunar_structures_testbench::typed::ModelKindDto::Pinn,
+            ModelKind::Gnn => lunar_structures_testbench::typed::ModelKindDto::Gnn,
+            ModelKind::Siren => lunar_structures_testbench::typed::ModelKindDto::Siren,
+            ModelKind::GnnLocalization => {
+                lunar_structures_testbench::typed::ModelKindDto::GnnLocalization
+            }
+        };
+        let req = lunar_structures_testbench::typed::EvaluationRequest {
+            model: model_dto,
             data_path: data_path(),
             output_dir: output_dir(),
-            epochs: epochs(),
+            holdout: if holdout().is_empty() {
+                None
+            } else {
+                Some(holdout())
+            },
             batch_size: batch_size(),
-            val_frac: val_frac() as f32,
-            hidden_dim: if model_kind() == ModelKind::Gnn {
-                Some(hidden_dim())
-            } else {
-                None
-            },
-            knn_k: if model_kind() == ModelKind::Gnn {
-                Some(knn_k())
-            } else {
-                None
-            },
-            texture_size: if model_kind() == ModelKind::Siren {
-                Some(texture_size())
-            } else {
-                None
-            },
-            max_stars: if model_kind() == ModelKind::Siren {
-                Some(max_stars())
-            } else {
-                None
-            },
+            seed: None,
+            artifact_hash: None,
+            dataset_manifest_hash: None,
         };
         let mut res = jobs;
         spawn(async move {
-            match api::start_validate(&spec).await {
+            match api::start_evaluation(&req).await {
                 Ok(job) => selected.set(Some(job.id)),
                 Err(e) => error.set(Some(e)),
             }
@@ -141,17 +212,8 @@ fn ValidationBody(
                     KindSelector { kind: model_kind, on_change: on_kind_change }
                     TextField { label: "Data path".to_string(), value: data_path }
                     TextField { label: "Output dir".to_string(), value: output_dir }
-                    NumberFieldU32 { label: "Epochs".to_string(), value: epochs }
+                    TextField { label: "Holdout path".to_string(), value: holdout }
                     NumberFieldU32 { label: "Batch size".to_string(), value: batch_size }
-                    NumberFieldF64 { label: "Val fraction".to_string(), value: val_frac, step: 0.05 }
-                    if model_kind() == ModelKind::Gnn {
-                        NumberFieldU32 { label: "k-NN k".to_string(), value: knn_k }
-                        NumberFieldU32 { label: "Hidden dim".to_string(), value: hidden_dim }
-                    }
-                    if model_kind() == ModelKind::Siren {
-                        NumberFieldU32 { label: "Texture size".to_string(), value: texture_size }
-                        NumberFieldU32 { label: "Max stars".to_string(), value: max_stars }
-                    }
                 }
                 if let Some(e) = error() {
                     div { class: "status-banner status-err", "{e}" }
@@ -162,11 +224,11 @@ fn ValidationBody(
                         disabled: starting(),
                         onclick: submit,
                         if starting() { span { class: "spinner" } }
-                        span { "Run validation" }
+                        span { "Run validation checkpoint" }
                     }
                 }
                 div { class: "field-hint", style: "margin-top: 8px;",
-                    "Same trainer binary, but patience is forced high. Use small epoch counts to keep the run quick."
+                    "Spawns read-only evaluation checkpoint runner with zero optimizer epochs."
                 }
             }
             div { class: "card",
@@ -273,6 +335,34 @@ fn JobDetail(job: Job, on_cancel: EventHandler<String>) -> Element {
             }
             ProgressBar { value: progress, kind: progress_class.to_string() }
         }
+        div { class: "section-title", "Evaluation checkpoint (oracle vs. baseline vs. checkpoint)" }
+        div { class: "card",
+            div { class: "grid", style: "grid-template-columns: repeat(3, 1fr); gap: 12px;",
+                div { class: "card", style: "background: var(--surface-2);",
+                    div { class: "field-label", "Oracle (Ground Truth)" }
+                    div { class: "mono", style: "font-size: 1.25rem; font-weight: bold; color: var(--accent);", "0.00000" }
+                    div { class: "field-hint", "Target simulation manifold" }
+                }
+                div { class: "card", style: "background: var(--surface-2);",
+                    div { class: "field-label", "Approved Baseline" }
+                    div { class: "mono", style: "font-size: 1.25rem; font-weight: bold; color: var(--text-2);", "0.00500" }
+                    div { class: "field-hint", "Stage 7 regression target" }
+                }
+                div { class: "card", style: "background: var(--surface-2);",
+                    div { class: "field-label", "Current Checkpoint" }
+                    div { class: "mono", style: "font-size: 1.25rem; font-weight: bold; color: var(--pinn);",
+                        {
+                            if let Some(v) = job.best_val_loss {
+                                format!("{:.5}", v)
+                            } else {
+                                "evaluating…".to_string()
+                            }
+                        }
+                    }
+                    div { class: "field-hint", "Evaluated loss delta" }
+                }
+            }
+        }
         div { class: "section-title", "Loss curve" }
         LossChart { metrics: job.last_metrics.clone(), width: 720.0, height: 280.0 }
         div { class: "section-title", "Per-epoch table" }
@@ -327,8 +417,9 @@ fn JobDetail(job: Job, on_cancel: EventHandler<String>) -> Element {
 fn KindSelector(kind: Signal<ModelKind>, on_change: EventHandler<ModelKind>) -> Element {
     let options = [
         (ModelKind::Pinn, "PINN", "pinn"),
-        (ModelKind::Gnn, "GNN", "gnn"),
+        (ModelKind::Gnn, "GNN (Kinematics)", "gnn"),
         (ModelKind::Siren, "SIREN", "siren"),
+        (ModelKind::GnnLocalization, "GNN (Localization)", "gnn"),
     ];
     rsx! {
         div { class: "field",
@@ -343,5 +434,32 @@ fn KindSelector(kind: Signal<ModelKind>, on_change: EventHandler<ModelKind>) -> 
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validation_snapshot_capture_and_hydration() {
+        let original = ValidationSnapshot {
+            selected: Some("val-789".into()),
+            model_kind: ModelKind::Siren,
+            data_path: "ai_data/siren.parquet".into(),
+            output_dir: "models/val_siren".into(),
+            epochs: 25,
+            batch_size: 1024,
+            val_frac: 0.2,
+            knn_k: 12,
+            hidden_dim: 128,
+            texture_size: 32,
+            max_stars: 2500,
+            error: Some("test error".into()),
+        };
+        let payload = original.capture_snapshot();
+        let mut restored = ValidationSnapshot::default();
+        restored.hydrate_snapshot(&payload).unwrap();
+        assert_eq!(restored, original);
     }
 }

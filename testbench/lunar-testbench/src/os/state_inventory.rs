@@ -30,6 +30,7 @@ pub const COMMON_WINDOW_STATE_FIELDS: &[&str] = &[
     "minimized",
     "maximized",
     "restore_rect",
+    "snapshot_payload",
 ];
 
 /// A single app-specific value that must be captured into `WindowSnapshotV1.app_state`.
@@ -55,9 +56,15 @@ const fn f(name: &'static str, kind: &'static str) -> AppSpecificField {
 /// Fields captured for dynamic `log:<service>` windows.
 pub const LOG_WINDOW_FIELDS: &[AppSpecificField] = &[f("service", "String")];
 
+/// Current schema version for all snapshot payloads and envelopes.
+pub const SCHEMA_VERSION: u32 = 1;
+
 /// App-specific values per registered Lunar-OS application (contract v1).
 pub const APP_STATE_INVENTORY: &[AppStateEntry] = &[
-    AppStateEntry { app_id: "dashboard", fields: &[] },
+    AppStateEntry {
+        app_id: "dashboard",
+        fields: &[],
+    },
     AppStateEntry {
         app_id: "models",
         fields: &[
@@ -148,6 +155,16 @@ pub const APP_STATE_INVENTORY: &[AppStateEntry] = &[
         ],
     },
     AppStateEntry {
+        app_id: "benchmarks",
+        fields: &[
+            f("model_kind", "ModelKind"),
+            f("iterations", "u32"),
+            f("warmup", "u32"),
+            f("batch_size", "u32"),
+            f("selected_report", "Option<String>"),
+        ],
+    },
+    AppStateEntry {
         app_id: "backend_api",
         fields: &[
             f("method", "String"),
@@ -162,7 +179,14 @@ pub const APP_STATE_INVENTORY: &[AppStateEntry] = &[
             f("json_err", "Option<(usize, usize, String)>"),
         ],
     },
-    AppStateEntry { app_id: "datasets", fields: &[] },
+    AppStateEntry {
+        app_id: "datasets",
+        fields: &[
+            f("coverage_dir", "String"),
+            f("active_tab", "String"),
+            f("filter", "String"),
+        ],
+    },
     AppStateEntry {
         app_id: "sandbox",
         fields: &[
@@ -265,7 +289,214 @@ mod tests {
             minimized: false,
             maximized: false,
             restore_rect: None,
+            snapshot_payload: None,
         };
-        assert_eq!(COMMON_WINDOW_STATE_FIELDS.len(), 13);
+        assert_eq!(COMMON_WINDOW_STATE_FIELDS.len(), 14);
+    }
+
+    #[test]
+    fn completeness_round_trip_for_all_inventory_fields() {
+        use crate::os::AppSnapshot;
+        use crate::os::log_window::LogWindowSnapshot;
+        use crate::pages::backend_api::BackendApiSnapshot;
+        use crate::pages::benchmarks::BenchmarksSnapshot;
+        use crate::pages::datasets::DatasetsSnapshot;
+        use crate::pages::models::{ModelsSnapshot, Tab};
+        use crate::pages::pipeline::PipelineSnapshot;
+        use crate::pages::siren_gallery::SirenGallerySnapshot;
+        use crate::pages::training::TrainingSnapshot;
+        use crate::pages::validation::ValidationSnapshot;
+        use lunar_structures_testbench::ModelKind;
+
+        // 1. Training
+        let orig_training = TrainingSnapshot {
+            selected: Some("job-1".into()),
+            model_kind: ModelKind::Gnn,
+            data_path: "path/data.parquet".into(),
+            output_dir: "models/out".into(),
+            epochs: 25,
+            batch_size: 1024,
+            lr: 1e-4,
+            physics_weight: 0.5,
+            val_frac: 0.2,
+            gpu_index: 2,
+            patience: 15,
+            grad_accum: 4,
+            clip_grad_norm: 1.5,
+            knn_k: 12,
+            hidden_dim: 128,
+            texture_size: 32,
+            max_stars: 4000,
+            resume: "ckpt.pt".into(),
+            holdout: "holdout.parquet".into(),
+            error: Some("err".into()),
+            starting: true,
+        };
+        let p = orig_training.capture_snapshot();
+        let mut hyd_training = TrainingSnapshot::default();
+        hyd_training.hydrate_snapshot(&p).unwrap();
+        assert_eq!(hyd_training, orig_training);
+
+        // 2. Validation
+        let orig_validation = ValidationSnapshot {
+            selected: Some("val-1".into()),
+            model_kind: ModelKind::Siren,
+            data_path: "val_data.parquet".into(),
+            output_dir: "val_out".into(),
+            epochs: 10,
+            batch_size: 512,
+            val_frac: 0.3,
+            knn_k: 6,
+            hidden_dim: 64,
+            texture_size: 64,
+            max_stars: 2000,
+            error: Some("val_err".into()),
+        };
+        let p = orig_validation.capture_snapshot();
+        let mut hyd_validation = ValidationSnapshot::default();
+        hyd_validation.hydrate_snapshot(&p).unwrap();
+        assert_eq!(hyd_validation, orig_validation);
+
+        // 3. Benchmarks
+        let orig_benchmarks = BenchmarksSnapshot {
+            model_kind: ModelKind::Pinn,
+            iterations: 200,
+            warmup: 20,
+            batch_size: 128,
+            selected_report: Some("rep-1".into()),
+        };
+        let p = orig_benchmarks.capture_snapshot();
+        let mut hyd_benchmarks = BenchmarksSnapshot::default();
+        hyd_benchmarks.hydrate_snapshot(&p).unwrap();
+        assert_eq!(hyd_benchmarks, orig_benchmarks);
+
+        // 4. Models
+        let orig_models = ModelsSnapshot {
+            tab: Tab::Siren,
+            x: 1.2,
+            y: 3.4,
+            z: 5.6,
+            bp_rp: 0.9,
+            g_mag: 12.0,
+            result: Some(serde_json::json!({"ok": true})),
+            error: Some("none".into()),
+            busy: false,
+        };
+        let p = orig_models.capture_snapshot();
+        let mut hyd_models = ModelsSnapshot::default();
+        hyd_models.hydrate_snapshot(&p).unwrap();
+        assert_eq!(hyd_models, orig_models);
+
+        // 5. Pipeline
+        let orig_pipeline = PipelineSnapshot {
+            x: 7.8,
+            y: 9.0,
+            z: 11.2,
+            bp_rp: 1.1,
+            g_mag: 8.5,
+            texture_size: 256,
+            pipeline_result: Some(serde_json::json!({"pipeline": 1})),
+            png_data_url: Some("data:image/png;base64,123".into()),
+            png_dims: (128, 128),
+            description_result: Some(serde_json::json!({"desc": "star"})),
+            random_result: Some(serde_json::json!({"star_id": 42})),
+            busy: 3,
+        };
+        let p = orig_pipeline.capture_snapshot();
+        let mut hyd_pipeline = PipelineSnapshot::default();
+        hyd_pipeline.hydrate_snapshot(&p).unwrap();
+        assert_eq!(hyd_pipeline, orig_pipeline);
+
+        // 6. Siren Gallery
+        let orig_gallery = SirenGallerySnapshot {
+            selected: None,
+            sort: "created_asc".into(),
+            refresh_tick: 4,
+            status: Some("loaded".into()),
+            busy: true,
+            name: "Star A".into(),
+            bp_rp: 1.3,
+            g_mag: 5.5,
+            temperature: 6200.0,
+            tags: "cluster, test".into(),
+        };
+        let p = orig_gallery.capture_snapshot();
+        let mut hyd_gallery = SirenGallerySnapshot::default();
+        hyd_gallery.hydrate_snapshot(&p).unwrap();
+        assert_eq!(hyd_gallery, orig_gallery);
+
+        // 7. Backend API
+        let orig_backend = BackendApiSnapshot {
+            method: "POST".into(),
+            path: "/pinn".into(),
+            body: "{\"x_pc\": 1.0}".into(),
+            query: "tag=1".into(),
+            response: Some(serde_json::json!({"out": 2})),
+            status_code: Some(200),
+            raw_response: Some("{\"out\": 2}".into()),
+            error: None,
+            busy: false,
+            json_err: None,
+        };
+        let p = orig_backend.capture_snapshot();
+        let mut hyd_backend = BackendApiSnapshot::default();
+        hyd_backend.hydrate_snapshot(&p).unwrap();
+        assert_eq!(hyd_backend, orig_backend);
+
+        // 8. Datasets
+        let orig_datasets = DatasetsSnapshot {
+            coverage_dir: "/ai_data/coverage".into(),
+            active_tab: "models".into(),
+            filter: "clean".into(),
+        };
+        let p = orig_datasets.capture_snapshot();
+        let mut hyd_datasets = DatasetsSnapshot::default();
+        hyd_datasets.hydrate_snapshot(&p).unwrap();
+        assert_eq!(hyd_datasets, orig_datasets);
+
+        // 9. Log Window
+        let orig_log = LogWindowSnapshot {
+            service: "backend".into(),
+            scroll_offset: 420.5,
+        };
+        let p = orig_log.capture_snapshot();
+        let mut hyd_log = LogWindowSnapshot::default();
+        hyd_log.hydrate_snapshot(&p).unwrap();
+        assert_eq!(hyd_log, orig_log);
+
+        // 10. Sandbox
+        use crate::pages::sandbox::SandboxSnapshot;
+        let orig_sandbox = SandboxSnapshot {
+            selected_scene: Some("scene-stellar".into()),
+            retained_iframe_src: Some("http://127.0.0.1:25255/editor".into()),
+            snapshot: None,
+            selected_star: Some(77),
+            camera_offset: (200.0, -150.0),
+            camera_zoom: 3.0,
+            selected_star_id: Some(77),
+        };
+        let p = orig_sandbox.capture_snapshot();
+        let mut hyd_sandbox = SandboxSnapshot::default();
+        hyd_sandbox.hydrate_snapshot(&p).unwrap();
+        assert_eq!(hyd_sandbox, orig_sandbox);
+    }
+
+    #[test]
+    fn schema_version_mismatch_rejected() {
+        use crate::os::snapshot::AppSnapshotEnvelopeV1;
+        let mut envelope = AppSnapshotEnvelopeV1::new(
+            "win-1",
+            "training",
+            crate::os::snapshot::WindowGeometry {
+                x: 0,
+                y: 0,
+                width: 800,
+                height: 600,
+            },
+            serde_json::json!({"epochs": 50}),
+        );
+        assert_eq!(envelope.verify_integrity(), Ok(()));
+        envelope.version = 2;
+        assert!(envelope.verify_integrity().is_err());
     }
 }

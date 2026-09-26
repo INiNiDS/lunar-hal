@@ -1,6 +1,6 @@
 use anyhow::Result;
 use burn::prelude::*;
-use lnai_models::compute_knn_adjacency;
+use lnai_models::{GraphBatch, compute_knn_adjacency};
 use polars::prelude::*;
 use rand::SeedableRng;
 use rand::rngs::StdRng;
@@ -48,7 +48,7 @@ pub struct StarGroup {
     pub coords: Vec<[f32; 3]>,
     pub node_features: Vec<[f32; NODE_FEATURE_DIM]>,
     pub velocities: Vec<[f32; VELOCITY_DIM]>,
-    pub adjacency: Vec<Vec<f32>>,
+    pub graph: GraphBatch,
 }
 
 impl StarGroup {
@@ -61,6 +61,7 @@ pub struct GnnDataset {
     pub groups: Arc<Vec<StarGroup>>, // Wrapped in Arc for fast reference cloning
     pub norm: GnnNormParams,
     indices: Vec<usize>,
+    canonical_train_groups: Option<usize>,
 }
 
 impl GnnDataset {
@@ -92,7 +93,7 @@ impl GnnDataset {
         max_rows: Option<u64>,
         tiles: Option<String>,
     ) -> Result<Self> {
-        let (groups, norm) = build_groups_from_parquet(
+        let (groups, norm, canonical_train_groups) = build_groups_from_parquet(
             parquet_path,
             knn_k,
             max_group_size,
@@ -108,6 +109,7 @@ impl GnnDataset {
             groups: Arc::new(groups),
             norm,
             indices: (0..n).collect(),
+            canonical_train_groups,
         })
     }
 
@@ -143,7 +145,56 @@ impl GnnDataset {
         max_rows: Option<u64>,
         tiles: Option<String>,
     ) -> Result<Self> {
-        let (groups, _) = build_groups_from_parquet_with_norm(
+        Self::load_with_norm_mode(
+            parquet_path,
+            norm,
+            knn_k,
+            max_group_size,
+            radius_pc,
+            seed,
+            max_rows,
+            tiles,
+            false,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn load_holdout_with_norm_and_seed(
+        parquet_path: &Path,
+        norm: GnnNormParams,
+        knn_k: usize,
+        max_group_size: usize,
+        radius_pc: f32,
+        seed: u64,
+        max_rows: Option<u64>,
+        tiles: Option<String>,
+    ) -> Result<Self> {
+        Self::load_with_norm_mode(
+            parquet_path,
+            norm,
+            knn_k,
+            max_group_size,
+            radius_pc,
+            seed,
+            max_rows,
+            tiles,
+            true,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn load_with_norm_mode(
+        parquet_path: &Path,
+        norm: GnnNormParams,
+        knn_k: usize,
+        max_group_size: usize,
+        radius_pc: f32,
+        seed: u64,
+        max_rows: Option<u64>,
+        tiles: Option<String>,
+        holdout: bool,
+    ) -> Result<Self> {
+        let (groups, _, canonical_train_groups) = build_groups_from_parquet_with_norm(
             parquet_path,
             &norm,
             knn_k,
@@ -152,6 +203,7 @@ impl GnnDataset {
             seed,
             max_rows,
             tiles,
+            holdout,
         )?;
         let n = groups.len();
         println!("Built {} star groups (external norm)", n);
@@ -160,6 +212,7 @@ impl GnnDataset {
             groups: Arc::new(groups),
             norm,
             indices: (0..n).collect(),
+            canonical_train_groups,
         })
     }
 
@@ -169,14 +222,18 @@ impl GnnDataset {
 
     pub fn split_with_seed(self, val_frac: f32, seed: u64) -> (Self, Self) {
         let n = self.groups.len();
-        let n_val = ((n as f32) * val_frac) as usize;
-        let n_train = n - n_val;
-
-        let mut split_indices: Vec<usize> = (0..n).collect();
-        split_indices.shuffle(&mut StdRng::seed_from_u64(seed));
-
-        let train_idx = &split_indices[..n_train];
-        let val_idx = &split_indices[n_train..];
+        let (train_idx, val_idx) = if let Some(n_train) = self.canonical_train_groups {
+            (
+                (0..n_train).collect::<Vec<_>>(),
+                (n_train..n).collect::<Vec<_>>(),
+            )
+        } else {
+            let n_val = ((n as f32) * val_frac) as usize;
+            let mut indices: Vec<usize> = (0..n).collect();
+            indices.shuffle(&mut StdRng::seed_from_u64(seed));
+            (indices[..n - n_val].to_vec(), indices[n - n_val..].to_vec())
+        };
+        let (n_train, n_val) = (train_idx.len(), val_idx.len());
 
         let train_groups: Vec<StarGroup> =
             train_idx.iter().map(|&i| self.groups[i].clone()).collect();
@@ -189,11 +246,13 @@ impl GnnDataset {
                 groups: Arc::new(train_groups),
                 norm: self.norm.clone(),
                 indices: (0..n_train).collect(),
+                canonical_train_groups: None,
             },
             GnnDataset {
                 groups: Arc::new(val_groups),
                 norm: self.norm,
                 indices: (0..n_val).collect(),
+                canonical_train_groups: None,
             },
         )
     }
@@ -208,10 +267,15 @@ impl GnnDataset {
 }
 
 struct PrefetchBatchedItem {
-    nodes_data: Vec<f32>,
-    adj_data: Vec<f32>,
-    target_data: Vec<f32>,
+    groups: Vec<PrefetchGroupItem>,
     total_nodes: usize,
+}
+
+struct PrefetchGroupItem {
+    nodes_data: Vec<f32>,
+    target_data: Vec<f32>,
+    graph: GraphBatch,
+    nodes: usize,
 }
 
 pub struct PrefetchBatchedBatcher {
@@ -229,8 +293,6 @@ impl PrefetchBatchedBatcher {
         std::thread::spawn(move || {
             let mut idx = 0;
             while idx < n_groups {
-                let mut nodes_data = Vec::new();
-                let mut targets_data = Vec::new();
                 let mut total_nodes = 0usize;
                 let mut batch_groups: Vec<usize> = Vec::new();
 
@@ -249,40 +311,29 @@ impl PrefetchBatchedBatcher {
                     break;
                 }
 
-                nodes_data.reserve(total_nodes * NODE_FEATURE_DIM);
-                targets_data.reserve(total_nodes * VELOCITY_DIM);
-                let mut block_adj = vec![0.0f32; total_nodes * total_nodes];
-
-                let mut row_off = 0usize;
-                let mut col_off = 0usize;
-
+                let mut group_items = Vec::with_capacity(batch_groups.len());
                 for &gi in &batch_groups {
                     let group = &groups[gi];
                     let n = group.n_nodes();
-
+                    let mut nodes_data = Vec::with_capacity(n * NODE_FEATURE_DIM);
                     for feat in &group.node_features {
                         nodes_data.extend_from_slice(feat);
                     }
+                    let mut target_data = Vec::with_capacity(n * VELOCITY_DIM);
                     for vel in &group.velocities {
-                        targets_data.extend_from_slice(vel);
+                        target_data.extend_from_slice(vel);
                     }
-
-                    for r in 0..n {
-                        for c in 0..n {
-                            block_adj[(row_off + r) * total_nodes + col_off + c] =
-                                group.adjacency[r][c];
-                        }
-                    }
-
-                    row_off += n;
-                    col_off += n;
+                    group_items.push(PrefetchGroupItem {
+                        nodes_data,
+                        target_data,
+                        graph: group.graph.clone(),
+                        nodes: n,
+                    });
                 }
 
                 if tx
                     .send(PrefetchBatchedItem {
-                        nodes_data,
-                        adj_data: block_adj,
-                        target_data: targets_data,
+                        groups: group_items,
                         total_nodes,
                     })
                     .is_err()
@@ -298,21 +349,43 @@ impl PrefetchBatchedBatcher {
     pub fn next_batch<B: Backend>(
         &mut self,
         device: &B::Device,
-    ) -> Option<(Tensor<B, 2>, Tensor<B, 2>, Tensor<B, 2>)> {
+    ) -> Option<(Vec<(Tensor<B, 2>, GraphBatch, Tensor<B, 2>)>, usize)> {
         self.receiver.recv().ok().map(|batch| {
-            let n = batch.total_nodes;
-            let nodes = Tensor::<B, 2>::from_data(
-                TensorData::new(batch.nodes_data, [n, NODE_FEATURE_DIM]),
-                device,
-            );
-            let adj = Tensor::<B, 2>::from_data(TensorData::new(batch.adj_data, [n, n]), device);
-            let targets = Tensor::<B, 2>::from_data(
-                TensorData::new(batch.target_data, [n, VELOCITY_DIM]),
-                device,
-            );
-            (nodes, adj, targets)
+            let groups = batch
+                .groups
+                .into_iter()
+                .map(|group| {
+                    let nodes = Tensor::<B, 2>::from_data(
+                        TensorData::new(group.nodes_data, [group.nodes, NODE_FEATURE_DIM]),
+                        device,
+                    );
+                    let targets = Tensor::<B, 2>::from_data(
+                        TensorData::new(group.target_data, [group.nodes, VELOCITY_DIM]),
+                        device,
+                    );
+                    (nodes, group.graph, targets)
+                })
+                .collect();
+            (groups, batch.total_nodes)
         })
     }
+}
+
+fn graph_from_dense(adjacency: &[Vec<f32>]) -> GraphBatch {
+    let mut row_ptr = Vec::with_capacity(adjacency.len() + 1);
+    let mut col_indices = Vec::new();
+    let mut edge_weights = Vec::new();
+    row_ptr.push(0);
+    for row in adjacency {
+        for (column, weight) in row.iter().copied().enumerate() {
+            if weight != 0.0 {
+                col_indices.push(column);
+                edge_weights.push(weight);
+            }
+        }
+        row_ptr.push(col_indices.len());
+    }
+    GraphBatch::new(adjacency.len(), row_ptr, col_indices, edge_weights)
 }
 
 fn build_groups_from_parquet(
@@ -323,8 +396,12 @@ fn build_groups_from_parquet(
     seed: u64,
     max_rows: Option<u64>,
     tiles: Option<String>,
-) -> Result<(Vec<StarGroup>, GnnNormParams)> {
+) -> Result<(Vec<StarGroup>, GnnNormParams, Option<usize>)> {
     let df = read_gnn_parquet(path, max_rows, tiles)?;
+    let (df, validation) = partition_frame(df)?;
+    if df.height() == 0 && validation.is_some() {
+        anyhow::bail!("GNN split contains no train rows after filtering");
+    }
 
     let x = extract_f32(&df, "x_pc")?;
     let y = extract_f32(&df, "y_pc")?;
@@ -385,28 +462,19 @@ fn build_groups_from_parquet(
         vz_std: vz_s,
     };
 
-    let groups = build_star_groups(&GroupBuildConfig {
-        features: StarFeatures {
-            x: &x,
-            y: &y,
-            z: &z,
-            bp_rp: &bp_rp,
-            mg: &mg,
-            mag_bp: &mag_bp,
-            mag_rp: &mag_rp,
-            ruwe: &ruwe,
-            vx: &vx,
-            vy: &vy,
-            vz: &vz,
-        },
-        norm: &norm,
-        knn_k,
-        max_group_size,
-        radius_pc,
-        seed,
-    });
-
-    Ok((groups, norm))
+    let mut groups = build_groups_from_frame(&df, &norm, knn_k, max_group_size, radius_pc, seed)?;
+    let canonical_train_groups = validation.as_ref().map(|_| groups.len());
+    if let Some(val_df) = validation {
+        groups.extend(build_groups_from_frame(
+            &val_df,
+            &norm,
+            knn_k,
+            max_group_size,
+            radius_pc,
+            seed,
+        )?);
+    }
+    Ok((groups, norm, canonical_train_groups))
 }
 
 fn build_groups_from_parquet_with_norm(
@@ -418,9 +486,50 @@ fn build_groups_from_parquet_with_norm(
     seed: u64,
     max_rows: Option<u64>,
     tiles: Option<String>,
-) -> Result<(Vec<StarGroup>, GnnNormParams)> {
-    let df = read_gnn_parquet(path, max_rows, tiles)?;
+    holdout: bool,
+) -> Result<(Vec<StarGroup>, GnnNormParams, Option<usize>)> {
+    let df = read_gnn_parquet_mode(path, max_rows, tiles, holdout)?;
+    if holdout {
+        let groups = build_groups_from_frame(&df, norm, knn_k, max_group_size, radius_pc, seed)?;
+        return Ok((groups, norm.clone(), None));
+    }
+    let (df, validation) = partition_frame(df)?;
+    let mut groups = build_groups_from_frame(&df, norm, knn_k, max_group_size, radius_pc, seed)?;
+    let canonical_train_groups = validation.as_ref().map(|_| groups.len());
+    if let Some(val_df) = validation {
+        groups.extend(build_groups_from_frame(
+            &val_df,
+            norm,
+            knn_k,
+            max_group_size,
+            radius_pc,
+            seed,
+        )?);
+    }
+    Ok((groups, norm.clone(), canonical_train_groups))
+}
 
+fn partition_frame(df: DataFrame) -> Result<(DataFrame, Option<DataFrame>)> {
+    if df.column("split").is_err() {
+        return Ok((df, None));
+    }
+    let validation = df
+        .clone()
+        .lazy()
+        .filter(col("split").eq(lit("validation")))
+        .collect()?;
+    let train = df.lazy().filter(col("split").eq(lit("train"))).collect()?;
+    Ok((train, Some(validation)))
+}
+
+fn build_groups_from_frame(
+    df: &DataFrame,
+    norm: &GnnNormParams,
+    knn_k: usize,
+    max_group_size: usize,
+    radius_pc: f32,
+    seed: u64,
+) -> Result<Vec<StarGroup>> {
     let x = extract_f32(&df, "x_pc")?;
     let y = extract_f32(&df, "y_pc")?;
     let z = extract_f32(&df, "z_pc")?;
@@ -464,7 +573,7 @@ fn build_groups_from_parquet_with_norm(
         seed,
     });
 
-    Ok((groups, norm.clone()))
+    Ok(groups)
 }
 
 struct StarFeatures<'a> {
@@ -610,12 +719,13 @@ fn build_star_groups(config: &GroupBuildConfig<'_>) -> Vec<StarGroup> {
             .collect();
 
         let adjacency = compute_knn_adjacency(&coords, knn_k);
+        let graph = graph_from_dense(&adjacency);
 
         groups.push(StarGroup {
             coords,
             node_features,
             velocities,
-            adjacency,
+            graph,
         });
     }
 
@@ -629,7 +739,20 @@ fn build_star_groups(config: &GroupBuildConfig<'_>) -> Vec<StarGroup> {
     groups
 }
 
-fn read_gnn_parquet(path: &Path, max_rows: Option<u64>, tiles: Option<String>) -> Result<DataFrame> {
+fn read_gnn_parquet(
+    path: &Path,
+    max_rows: Option<u64>,
+    tiles: Option<String>,
+) -> Result<DataFrame> {
+    read_gnn_parquet_mode(path, max_rows, tiles, false)
+}
+
+fn read_gnn_parquet_mode(
+    path: &Path,
+    max_rows: Option<u64>,
+    tiles: Option<String>,
+    holdout: bool,
+) -> Result<DataFrame> {
     println!("Loading parquet: {}", path.display());
     let path_str = path
         .to_str()
@@ -673,7 +796,21 @@ fn read_gnn_parquet(path: &Path, max_rows: Option<u64>, tiles: Option<String>) -
 
     let mut proj: Vec<Expr> = required_cols.iter().map(|c| col(*c)).collect();
     proj.push(col("spatial_tile"));
+    if schema.contains("split") {
+        proj.push(col("split"));
+    }
     let mut lf = lf.select(proj);
+    if schema.contains("split") {
+        lf = if holdout {
+            lf.filter(col("split").is_null().or(col("split").eq(lit("test"))))
+        } else {
+            lf.filter(
+                col("split")
+                    .is_not_null()
+                    .and(col("split").neq(lit("test"))),
+            )
+        };
+    }
     for &col_name in required_cols {
         lf = lf.filter(col(col_name).is_not_null());
     }
@@ -725,6 +862,13 @@ fn read_gnn_parquet(path: &Path, max_rows: Option<u64>, tiles: Option<String>) -
         "failed to load filtered rows",
     )?;
 
+    if !holdout && let Ok(split) = df.column("split") {
+        for (i, value) in split.str()?.iter().enumerate() {
+            if !matches!(value, Some("train" | "validation")) {
+                anyhow::bail!("invalid split {value:?} at row {i}");
+            }
+        }
+    }
     let kept = df.height();
     let df = apply_max_rows(df, max_rows)?;
     println!(
@@ -785,15 +929,81 @@ fn mean_std(data: &[f32]) -> (f32, f32) {
 mod tests {
     use super::*;
 
-    fn write_parquet(
-        df: &mut DataFrame,
-        name: &str,
-    ) -> (tempfile::TempDir, std::path::PathBuf) {
+    fn test_norm() -> GnnNormParams {
+        GnnNormParams {
+            x_mean: 0.0,
+            x_std: 1.0,
+            y_mean: 0.0,
+            y_std: 1.0,
+            z_mean: 0.0,
+            z_std: 1.0,
+            bp_rp_mean: 0.0,
+            bp_rp_std: 1.0,
+            mg_mean: 0.0,
+            mg_std: 1.0,
+            mag_bp_mean: 0.0,
+            mag_bp_std: 1.0,
+            mag_rp_mean: 0.0,
+            mag_rp_std: 1.0,
+            ruwe_mean: 0.0,
+            ruwe_std: 1.0,
+            vx_mean: 0.0,
+            vx_std: 1.0,
+            vy_mean: 0.0,
+            vy_std: 1.0,
+            vz_mean: 0.0,
+            vz_std: 1.0,
+        }
+    }
+
+    fn test_group(nodes: usize) -> StarGroup {
+        let mut row_ptr = Vec::with_capacity(nodes + 1);
+        let mut col_indices = Vec::new();
+        let mut edge_weights = Vec::new();
+        row_ptr.push(0);
+        for node in 0..nodes {
+            col_indices.push(node);
+            edge_weights.push(1.0);
+            if node + 1 < nodes {
+                col_indices.push(node + 1);
+                edge_weights.push(0.5);
+            }
+            row_ptr.push(col_indices.len());
+        }
+        StarGroup {
+            coords: vec![[0.0; 3]; nodes],
+            node_features: vec![[0.0; NODE_FEATURE_DIM]; nodes],
+            velocities: vec![[0.0; VELOCITY_DIM]; nodes],
+            graph: GraphBatch::new(nodes, row_ptr, col_indices, edge_weights),
+        }
+    }
+
+    fn write_parquet(df: &mut DataFrame, name: &str) -> (tempfile::TempDir, std::path::PathBuf) {
         let dir = tempfile::tempdir().expect("tmpdir");
         let path = dir.path().join(name);
         let file = std::fs::File::create(&path).expect("create");
         ParquetWriter::new(file).finish(df).expect("write");
         (dir, path)
+    }
+
+    #[test]
+    fn prefetch_retains_sparse_edges_without_cross_group_adjacency_blocks() {
+        let dataset = GnnDataset {
+            groups: Arc::new(vec![test_group(3), test_group(4)]),
+            norm: test_norm(),
+            indices: vec![0, 1],
+            canonical_train_groups: None,
+        };
+        let batcher = PrefetchBatchedBatcher::new(&dataset, 16);
+        let batch = batcher.receiver.recv().expect("prefetched group batch");
+        let sparse_edges: usize = batch.groups.iter().map(|group| group.graph.num_edges).sum();
+        assert_eq!(batch.total_nodes, 7);
+        assert_eq!(sparse_edges, 5 + 7);
+        assert!(sparse_edges < batch.total_nodes * batch.total_nodes);
+        assert_eq!(
+            batch.groups.iter().map(|g| g.nodes).collect::<Vec<_>>(),
+            [3, 4]
+        );
     }
 
     fn canonical_like_frame() -> DataFrame {

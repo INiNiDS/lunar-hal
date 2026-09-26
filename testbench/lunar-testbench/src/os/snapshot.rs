@@ -1,31 +1,12 @@
-//! Window snapshot envelope contract v1 (Stage 2). Apps adopt `AppSnapshot`
-//! during the Stage 12 snapshot/restore migration.
+//! Window snapshot envelope contract v1 (Stage 2 & Stage 11).
 #![allow(dead_code)]
 
+use lunar_utils::time::current_time_ms;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use lunar_utils::time::current_time_ms;
-
 /// Version of the snapshot envelope structure.
 pub const SNAPSHOT_SCHEMA_VERSION: &str = "1.0.0";
-
-/// Serializable state of an application window, used for minimize/restore lifecycle.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
-pub struct WindowSnapshotV1 {
-    /// Snapshot schema version
-    pub version: String,
-    /// Application identifier (e.g., "terminal", "files")
-    pub app_id: String,
-    /// Window position and size
-    pub window_geometry: WindowGeometry,
-    /// Application-specific serialized state (JSON)
-    pub app_state: serde_json::Value,
-    /// SHA-256 checksum of the `app_state` to detect corruption
-    pub checksum: String,
-    /// Timestamp when the snapshot was taken (ms since UNIX_EPOCH)
-    pub captured_ms: u64,
-}
 
 /// Window position and size.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Copy)]
@@ -34,6 +15,85 @@ pub struct WindowGeometry {
     pub y: i32,
     pub width: u32,
     pub height: u32,
+}
+
+/// Computes the IEEE 802.3 CRC32 checksum for arbitrary byte slices.
+pub fn calculate_crc32(bytes: &[u8]) -> u32 {
+    let mut crc = 0xFFFF_FFFFu32;
+    for &b in bytes {
+        crc ^= b as u32;
+        for _ in 0..8 {
+            if (crc & 1) != 0 {
+                crc = (crc >> 1) ^ 0xEDB8_8320;
+            } else {
+                crc >>= 1;
+            }
+        }
+    }
+    !crc
+}
+
+/// Versioned snapshot envelope for Lunar-OS window state (Stage 11).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct AppSnapshotEnvelopeV1 {
+    pub version: u32,
+    pub instance_id: String,
+    pub app_id: String,
+    pub window_geometry: WindowGeometry,
+    pub captured_at_ms: u64,
+    pub checksum_crc32: u32,
+    pub payload: serde_json::Value,
+}
+
+impl AppSnapshotEnvelopeV1 {
+    pub fn new(
+        instance_id: &str,
+        app_id: &str,
+        window_geometry: WindowGeometry,
+        payload: serde_json::Value,
+    ) -> Self {
+        let serialized = payload.to_string();
+        let checksum_crc32 = calculate_crc32(serialized.as_bytes());
+        Self {
+            version: 1,
+            instance_id: instance_id.to_string(),
+            app_id: app_id.to_string(),
+            window_geometry,
+            captured_at_ms: current_time_ms(),
+            checksum_crc32,
+            payload,
+        }
+    }
+
+    /// Verifies snapshot integrity by validating schema version and CRC32 over the payload.
+    pub fn verify_integrity(&self) -> Result<(), SnapshotError> {
+        if self.version != 1 {
+            return Err(SnapshotError::VersionMismatch);
+        }
+        self.verify_checksum()
+    }
+
+    /// Verifies snapshot integrity by recomputing CRC32 over the payload.
+    pub fn verify_checksum(&self) -> Result<(), SnapshotError> {
+        let serialized = self.payload.to_string();
+        let expected = calculate_crc32(serialized.as_bytes());
+        if self.checksum_crc32 == expected {
+            Ok(())
+        } else {
+            Err(SnapshotError::ChecksumMismatch)
+        }
+    }
+}
+
+/// Serializable state of an application window, used for minimize/restore lifecycle (Legacy compatibility).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct WindowSnapshotV1 {
+    pub version: String,
+    pub app_id: String,
+    pub window_geometry: WindowGeometry,
+    pub app_state: serde_json::Value,
+    pub checksum: String,
+    pub captured_ms: u64,
 }
 
 impl WindowSnapshotV1 {
@@ -49,7 +109,14 @@ impl WindowSnapshotV1 {
         }
     }
 
-    /// Verifies snapshot integrity by recomputing the `app_state` checksum.
+    pub fn verify_integrity(&self) -> Result<(), SnapshotError> {
+        if self.version != SNAPSHOT_SCHEMA_VERSION && self.version != "1" && self.version != "1.0.0"
+        {
+            return Err(SnapshotError::VersionMismatch);
+        }
+        self.verify_checksum()
+    }
+
     pub fn verify_checksum(&self) -> Result<(), SnapshotError> {
         if calculate_checksum(&self.app_state) == self.checksum {
             Ok(())
@@ -59,14 +126,38 @@ impl WindowSnapshotV1 {
     }
 }
 
-/// Trait that every Lunar-OS application must implement to support minimize/restore.
-pub trait AppSnapshot: Send + Sync {
-    /// Capture the current state into a serializable JSON value.
-    fn capture_state(&self) -> serde_json::Value;
+impl From<AppSnapshotEnvelopeV1> for WindowSnapshotV1 {
+    fn from(env: AppSnapshotEnvelopeV1) -> Self {
+        let checksum = calculate_checksum(&env.payload);
+        Self {
+            version: SNAPSHOT_SCHEMA_VERSION.to_string(),
+            app_id: env.app_id,
+            window_geometry: env.window_geometry,
+            app_state: env.payload,
+            checksum,
+            captured_ms: env.captured_at_ms,
+        }
+    }
+}
 
-    /// Hydrate the application state from a snapshot.
-    /// This is called *before* the first render.
-    fn hydrate_state(&mut self, state: serde_json::Value) -> Result<(), SnapshotError>;
+impl From<WindowSnapshotV1> for AppSnapshotEnvelopeV1 {
+    fn from(snap: WindowSnapshotV1) -> Self {
+        AppSnapshotEnvelopeV1::new(
+            &snap.app_id,
+            &snap.app_id,
+            snap.window_geometry,
+            snap.app_state,
+        )
+    }
+}
+
+/// Trait that every Lunar-OS application component must implement to support state hydration.
+pub trait AppSnapshot: Send + Sync {
+    /// Capture the current component state into a serializable JSON value.
+    fn capture_snapshot(&self) -> serde_json::Value;
+
+    /// Hydrate the component state from a snapshot payload.
+    fn hydrate_snapshot(&mut self, payload: &serde_json::Value) -> Result<(), String>;
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -90,6 +181,20 @@ fn calculate_checksum(state: &serde_json::Value) -> String {
 mod tests {
     use super::*;
 
+    fn sample_envelope() -> AppSnapshotEnvelopeV1 {
+        AppSnapshotEnvelopeV1::new(
+            "inst-1",
+            "datasets",
+            WindowGeometry {
+                x: 10,
+                y: 20,
+                width: 960,
+                height: 640,
+            },
+            serde_json::json!({ "dir": "data/canonical-v1", "tab": "coverage" }),
+        )
+    }
+
     fn sample_snapshot() -> WindowSnapshotV1 {
         WindowSnapshotV1::new(
             "terminal",
@@ -101,6 +206,22 @@ mod tests {
             },
             serde_json::json!({ "cwd": "/home/star", "history": ["ls", "cargo test"] }),
         )
+    }
+
+    #[test]
+    fn app_snapshot_envelope_crc32_and_round_trip() {
+        let env = sample_envelope();
+        let json = serde_json::to_string(&env).expect("serialize");
+        let restored: AppSnapshotEnvelopeV1 = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(restored, env);
+        assert_eq!(env.verify_checksum(), Ok(()));
+    }
+
+    #[test]
+    fn corrupted_envelope_payload_fails_crc32() {
+        let mut env = sample_envelope();
+        env.payload["dir"] = serde_json::json!("data/tampered");
+        assert_eq!(env.verify_checksum(), Err(SnapshotError::ChecksumMismatch));
     }
 
     #[test]
@@ -137,5 +258,21 @@ mod tests {
     fn snapshot_version_is_frozen() {
         assert_eq!(SNAPSHOT_SCHEMA_VERSION, "1.0.0");
         assert_eq!(sample_snapshot().version, "1.0.0");
+    }
+
+    #[test]
+    fn envelope_schema_version_mismatch_rejected() {
+        let mut env = sample_envelope();
+        assert_eq!(env.verify_integrity(), Ok(()));
+        env.version = 999;
+        assert_eq!(env.verify_integrity(), Err(SnapshotError::VersionMismatch));
+    }
+
+    #[test]
+    fn legacy_snapshot_schema_version_mismatch_rejected() {
+        let mut snap = sample_snapshot();
+        assert_eq!(snap.verify_integrity(), Ok(()));
+        snap.version = "2.0.0".to_string();
+        assert_eq!(snap.verify_integrity(), Err(SnapshotError::VersionMismatch));
     }
 }

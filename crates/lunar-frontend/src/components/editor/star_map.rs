@@ -79,6 +79,8 @@ fn render_star(
 
             div {
                 class: "absolute inset-0 rounded-full pointer-events-auto cursor-pointer",
+                "data-testid": "embedded-star-{key_prefix}-{star.id}",
+                "data-selected": "{is_selected}",
                 style: "
                     background: radial-gradient(circle, {inner} 0%, {mid} 40%, transparent 80%);
                     {animation_style}
@@ -308,6 +310,10 @@ pub fn StarMap(
     rsx! {
         div {
             class: if is_active { "starmap-root absolute inset-0 cursor-grab active:cursor-grabbing" } else { "starmap-root absolute inset-0 pointer-events-none" },
+            "data-testid": "stellar-star-map",
+            "data-camera-x": "{offset.0}",
+            "data-camera-y": "{offset.1}",
+            "data-camera-zoom": "{zoom}",
             onpointerdown: move |e| {
                 let g = game.read().clone();
                 g.set_dragging(true);
@@ -420,6 +426,7 @@ pub fn StarMap(
                 class: "absolute right-6 bottom-6 flex flex-col gap-2 bg-black/40 backdrop-blur-xl border border-white/10 p-2 rounded-xl shadow-lg pointer-events-auto",
                 button {
                     class: "w-8 h-8 rounded-lg text-white/70 hover:text-white hover:bg-white/10 flex items-center justify-center font-bold text-lg",
+                    "data-testid": "camera-zoom-in",
                     onclick: move |_| handle_zoom(1.3),
                     "+"
                 }

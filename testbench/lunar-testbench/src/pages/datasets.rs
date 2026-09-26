@@ -3,37 +3,129 @@ use crate::api::{
     start_data_verify, system_snapshot,
 };
 use crate::components::ui::{PageHeader, StatusDot, Tag, bytes_human, fmt_age};
+use crate::os::snapshot::AppSnapshot;
 use dioxus::prelude::*;
+use serde::{Deserialize, Serialize};
 
 const DEFAULT_CANONICAL_DIR: &str = "data/canonical-v1";
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct DatasetsSnapshot {
+    pub coverage_dir: String,
+    pub active_tab: String,
+    pub filter: String,
+}
+
+impl Default for DatasetsSnapshot {
+    fn default() -> Self {
+        Self {
+            coverage_dir: DEFAULT_CANONICAL_DIR.to_string(),
+            active_tab: "overview".to_string(),
+            filter: "all".to_string(),
+        }
+    }
+}
+
+impl AppSnapshot for DatasetsSnapshot {
+    fn capture_snapshot(&self) -> serde_json::Value {
+        serde_json::to_value(self).unwrap_or(serde_json::Value::Null)
+    }
+
+    fn hydrate_snapshot(&mut self, payload: &serde_json::Value) -> Result<(), String> {
+        let restored: DatasetsSnapshot =
+            serde_json::from_value(payload.clone()).map_err(|e| e.to_string())?;
+        *self = restored;
+        Ok(())
+    }
+}
+
 #[component]
 pub fn Datasets() -> Element {
+    let mut initial = DatasetsSnapshot::default();
+    if let Some(payload) = crate::os::state::use_window_snapshot_payload() {
+        let _ = initial.hydrate_snapshot(&payload);
+    }
+
     let snapshot = use_resource(|| async { system_snapshot().await.ok() });
-    let coverage_dir = use_signal(|| DEFAULT_CANONICAL_DIR.to_string());
+    let coverage_dir = use_signal(|| initial.coverage_dir.clone());
+    let mut active_tab = use_signal(|| initial.active_tab.clone());
+    let mut filter = use_signal(|| initial.filter.clone());
+
+    let mut os = crate::os::use_os_state();
+    use_effect(move || {
+        let snap = DatasetsSnapshot {
+            coverage_dir: coverage_dir(),
+            active_tab: active_tab(),
+            filter: filter(),
+        };
+        if let Some(inst_id) = crate::os::use_window_instance_id() {
+            os.register_instance_snapshot(&inst_id, snap.capture_snapshot());
+        }
+        os.register_app_snapshot("datasets", snap.capture_snapshot());
+    });
+
     rsx! {
         PageHeader {
             title: "Datasets".to_string(),
             subtitle: "Inspect the parquet/csv files that the trainers consume. Confirm paths, sizes, and modification times before launching long runs.".to_string(),
         }
         div { class: "page",
-            CanonicalCollection { dir: coverage_dir }
-            match &*snapshot.read() {
-                Some(Some(snap)) => rsx! { DatasetsBody { snap: snap.clone() } },
-                _ => rsx! {
-                    div { class: "status-banner status-info",
-                        span { class: "spinner" }
-                        span { "Loading…" }
+            div { class: "row", style: "gap: 8px; margin-bottom: 12px;",
+                button {
+                    class: if active_tab() == "overview" { "btn btn-primary btn-sm" } else { "btn btn-sm" },
+                    onclick: move |_| active_tab.set("overview".to_string()),
+                    "Overview"
+                }
+                button {
+                    class: if active_tab() == "coverage" { "btn btn-primary btn-sm" } else { "btn btn-sm" },
+                    onclick: move |_| active_tab.set("coverage".to_string()),
+                    "Canonical Coverage"
+                }
+                button {
+                    class: if active_tab() == "artifacts" { "btn btn-primary btn-sm" } else { "btn btn-sm" },
+                    onclick: move |_| active_tab.set("artifacts".to_string()),
+                    "Model Artifacts"
+                }
+                div { style: "margin-left: auto; display: flex; align-items: center; gap: 6px;",
+                    span { class: "field-label", "Filter:" }
+                    select {
+                        class: "mono",
+                        style: "background: var(--surface-2); color: var(--text-1); border: 1px solid var(--border); padding: 4px 8px; border-radius: 6px;",
+                        value: "{filter()}",
+                        onchange: move |e: Event<FormData>| filter.set(e.value()),
+                        option { value: "all", "All datasets" }
+                        option { value: "clean", "Clean only" }
+                        option { value: "gnn", "GNN only" }
+                        option { value: "chunks", "Chunks only" }
                     }
-                },
+                }
+            }
+
+            if active_tab() == "overview" || active_tab() == "coverage" {
+                CanonicalCollection { dir: coverage_dir }
+            }
+
+            if active_tab() == "overview" || active_tab() == "artifacts" {
+                match &*snapshot.read() {
+                    Some(Some(snap)) => rsx! { DatasetsBody { snap: snap.clone(), filter_kind: filter() } },
+                    _ => rsx! {
+                        div { class: "status-banner status-info",
+                            span { class: "spinner" }
+                            span { "Loading…" }
+                        }
+                    },
+                }
             }
         }
     }
 }
 
 #[component]
-fn DatasetsBody(snap: SystemSnapshot) -> Element {
+fn DatasetsBody(snap: SystemSnapshot, filter_kind: String) -> Element {
     let mut datasets = snap.datasets.clone();
+    if filter_kind != "all" {
+        datasets.retain(|d| d.kind == filter_kind || (filter_kind == "clean" && d.kind == "raw"));
+    }
     datasets.sort_by_key(|d| std::cmp::Reverse(d.mtime_ms));
 
     rsx! {
@@ -274,5 +366,25 @@ fn CoverageCard(
                 span { class: "mono", style: "color: var(--text-3);", "{m}" }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_datasets_snapshot_capture_and_hydration() {
+        let original = DatasetsSnapshot {
+            coverage_dir: "data/custom-canonical".to_string(),
+            active_tab: "artifacts".to_string(),
+            filter: "clean".to_string(),
+        };
+        let payload = original.capture_snapshot();
+        let mut restored = DatasetsSnapshot::default();
+        restored
+            .hydrate_snapshot(&payload)
+            .expect("hydration must succeed");
+        assert_eq!(restored, original);
     }
 }

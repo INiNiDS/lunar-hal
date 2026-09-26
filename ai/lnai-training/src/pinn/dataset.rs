@@ -38,18 +38,36 @@ pub struct StellarDataset<B: Backend> {
     pub norm: NormParams,
     pub n_samples: usize,
     pub device: B::Device,
+    canonical_indices: Option<(Vec<usize>, Vec<usize>)>,
 }
 
 impl<B: Backend> StellarDataset<B> {
-    pub fn load(parquet_path: &Path, device: &B::Device, max_rows: Option<u64>, tiles: Option<String>) -> Result<Self> {
+    pub fn load(
+        parquet_path: &Path,
+        device: &B::Device,
+        max_rows: Option<u64>,
+        tiles: Option<String>,
+    ) -> Result<Self> {
         let (df, n) = read_filtered_parquet(parquet_path, max_rows, tiles)?;
         println!(
             "Loaded {} complete rows (all required features non-null, outliers filtered)",
             n
         );
 
+        let canonical_indices = canonical_indices(&df)?;
         let raw = RawColumns::extract(&df)?;
-        let norm = raw.compute_norm();
+        let norm = if let Some((train, _)) = &canonical_indices {
+            if train.is_empty() {
+                anyhow::bail!("PINN split contains no train rows after filtering");
+            }
+            let mask = BooleanChunked::from_iter_values(
+                "train".into(),
+                (0..n).map(|i| train.binary_search(&i).is_ok()),
+            );
+            RawColumns::extract(&df.filter(&mask)?)?.compute_norm()
+        } else {
+            raw.compute_norm()
+        };
         let (inputs_cpu, targets_cpu) = raw.build_cpu(&norm);
         raw.print_norm(&norm);
 
@@ -63,6 +81,7 @@ impl<B: Backend> StellarDataset<B> {
             norm,
             n_samples: n,
             device: device.clone(),
+            canonical_indices,
         })
     }
 
@@ -73,13 +92,39 @@ impl<B: Backend> StellarDataset<B> {
         max_rows: Option<u64>,
         tiles: Option<String>,
     ) -> Result<Self> {
-        let (df, n) = read_filtered_parquet(parquet_path, max_rows, tiles)?;
+        Self::load_with_norm_mode(parquet_path, norm, device, max_rows, tiles, false)
+    }
+
+    pub fn load_holdout_with_norm(
+        parquet_path: &Path,
+        norm: NormParams,
+        device: &B::Device,
+        max_rows: Option<u64>,
+        tiles: Option<String>,
+    ) -> Result<Self> {
+        Self::load_with_norm_mode(parquet_path, norm, device, max_rows, tiles, true)
+    }
+
+    fn load_with_norm_mode(
+        parquet_path: &Path,
+        norm: NormParams,
+        device: &B::Device,
+        max_rows: Option<u64>,
+        tiles: Option<String>,
+        holdout: bool,
+    ) -> Result<Self> {
+        let (df, n) = read_filtered_parquet_mode(parquet_path, max_rows, tiles, holdout)?;
         println!(
             "Loaded {} complete rows (all required features non-null, outliers filtered)",
             n
         );
         println!("Using external normalization (resuming from saved model).");
 
+        let canonical_indices = if holdout {
+            None
+        } else {
+            canonical_indices(&df)?
+        };
         let raw = RawColumns::extract(&df)?;
         let (inputs_cpu, targets_cpu) = raw.build_cpu(&norm);
 
@@ -93,6 +138,7 @@ impl<B: Backend> StellarDataset<B> {
             norm,
             n_samples: n,
             device: device.clone(),
+            canonical_indices,
         })
     }
 
@@ -103,14 +149,18 @@ impl<B: Backend> StellarDataset<B> {
     }
 
     pub fn split_with_seed(self, val_frac: f32, seed: u64) -> (Self, Self) {
-        let n = self.n_samples;
-        let n_val = ((n as f32) * val_frac) as usize;
-        let n_train = n - n_val;
-
-        let mut split_indices: Vec<usize> = (0..n).collect();
-        split_indices.shuffle(&mut StdRng::seed_from_u64(seed));
-
-        let (train_idx, val_idx) = split_indices.split_at(n_train);
+        let (train_idx, val_idx) = if let Some(indices) = self.canonical_indices.as_ref() {
+            indices.clone()
+        } else {
+            let n_val = ((self.n_samples as f32) * val_frac) as usize;
+            let mut indices: Vec<usize> = (0..self.n_samples).collect();
+            indices.shuffle(&mut StdRng::seed_from_u64(seed));
+            (
+                indices[..self.n_samples - n_val].to_vec(),
+                indices[self.n_samples - n_val..].to_vec(),
+            )
+        };
+        let (n_train, n_val) = (train_idx.len(), val_idx.len());
 
         let to_idx_tensor = |ids: &[usize]| -> Tensor<B, 1, Int> {
             let ids: Vec<u32> = ids.iter().map(|&i| i as u32).collect();
@@ -118,10 +168,10 @@ impl<B: Backend> StellarDataset<B> {
             Tensor::<B, 1, Int>::from_data(TensorData::new(ids, [len]), &self.device)
         };
 
-        let train_inputs = self.inputs.clone().select(0, to_idx_tensor(train_idx));
-        let train_targets = self.targets.clone().select(0, to_idx_tensor(train_idx));
-        let val_inputs = self.inputs.select(0, to_idx_tensor(val_idx));
-        let val_targets = self.targets.select(0, to_idx_tensor(val_idx));
+        let train_inputs = self.inputs.clone().select(0, to_idx_tensor(&train_idx));
+        let train_targets = self.targets.clone().select(0, to_idx_tensor(&train_idx));
+        let val_inputs = self.inputs.select(0, to_idx_tensor(&val_idx));
+        let val_targets = self.targets.select(0, to_idx_tensor(&val_idx));
 
         let train = StellarDataset {
             inputs: train_inputs,
@@ -129,6 +179,7 @@ impl<B: Backend> StellarDataset<B> {
             norm: self.norm.clone(),
             n_samples: n_train,
             device: self.device.clone(),
+            canonical_indices: None,
         };
         let val = StellarDataset {
             inputs: val_inputs,
@@ -136,6 +187,7 @@ impl<B: Backend> StellarDataset<B> {
             norm: self.norm,
             n_samples: n_val,
             device: self.device,
+            canonical_indices: None,
         };
 
         println!("Train samples: {}, Validation samples: {}", n_train, n_val);
@@ -210,10 +262,36 @@ fn detect_schema(df: &DataFrame) -> Result<SchemaKind> {
     }
 }
 
+fn canonical_indices(df: &DataFrame) -> Result<Option<(Vec<usize>, Vec<usize>)>> {
+    let Ok(column) = df.column("split") else {
+        return Ok(None);
+    };
+    let mut train = Vec::new();
+    let mut validation = Vec::new();
+    for (i, value) in column.str()?.iter().enumerate() {
+        match value {
+            Some("train") => train.push(i),
+            Some("validation") => validation.push(i),
+            Some(other) => anyhow::bail!("invalid split '{other}' at row {i}"),
+            None => anyhow::bail!("null split was not filtered at row {i}"),
+        }
+    }
+    Ok(Some((train, validation)))
+}
+
 fn read_filtered_parquet(
     parquet_path: &Path,
     max_rows: Option<u64>,
     tiles: Option<String>,
+) -> Result<(DataFrame, usize)> {
+    read_filtered_parquet_mode(parquet_path, max_rows, tiles, false)
+}
+
+fn read_filtered_parquet_mode(
+    parquet_path: &Path,
+    max_rows: Option<u64>,
+    tiles: Option<String>,
+    holdout: bool,
 ) -> Result<(DataFrame, usize)> {
     println!("Loading parquet: {}", parquet_path.display());
     let path_str = parquet_path
@@ -244,8 +322,7 @@ fn read_filtered_parquet(
         SchemaKind::Legacy => (
             "g_mag",
             &[
-                "x_pc", "y_pc", "z_pc", "bp_rp", "g_mag", "st_teff", "st_rad", "st_mass",
-                "st_lum",
+                "x_pc", "y_pc", "z_pc", "bp_rp", "g_mag", "st_teff", "st_rad", "st_mass", "st_lum",
             ],
         ),
         SchemaKind::ApEnriched => (
@@ -266,9 +343,7 @@ fn read_filtered_parquet(
 
     for &col_name in required_cols {
         if !schema.contains(col_name) {
-            anyhow::bail!(
-                "Column '{col_name}' not found in dataset ({kind:?} schema)."
-            );
+            anyhow::bail!("Column '{col_name}' not found in dataset ({kind:?} schema).");
         }
     }
 
@@ -280,7 +355,21 @@ fn read_filtered_parquet(
         }
         proj.push(col("spatial_tile"));
     }
+    if schema.contains("split") {
+        proj.push(col("split"));
+    }
     let mut lf = lf.select(proj);
+    if schema.contains("split") {
+        lf = if holdout {
+            lf.filter(col("split").is_null().or(col("split").eq(lit("test"))))
+        } else {
+            lf.filter(
+                col("split")
+                    .is_not_null()
+                    .and(col("split").neq(lit("test"))),
+            )
+        };
+    }
     for &col_name in required_cols {
         lf = lf.filter(col(col_name).is_not_null());
     }
@@ -322,6 +411,9 @@ fn read_filtered_parquet(
         "failed to load filtered rows",
     )?;
 
+    if !holdout {
+        canonical_indices(&df)?;
+    }
     let kept = df.height();
     let df = apply_max_rows(df, max_rows)?;
     let n = df.height();
@@ -577,10 +669,7 @@ mod tests {
             "teff_gspphot" => [5778.0],
         ]
         .expect("frame");
-        assert_eq!(
-            detect_schema(&legacy).expect("detect"),
-            SchemaKind::Legacy
-        );
+        assert_eq!(detect_schema(&legacy).expect("detect"), SchemaKind::Legacy);
         let bare = df!["x_pc" => [1.0f32]].expect("frame");
         assert!(detect_schema(&bare).is_err());
     }
@@ -597,10 +686,7 @@ mod tests {
         assert_eq!(raw.log_mass.len(), 2);
     }
 
-    fn write_parquet(
-        df: &mut DataFrame,
-        name: &str,
-    ) -> (tempfile::TempDir, std::path::PathBuf) {
+    fn write_parquet(df: &mut DataFrame, name: &str) -> (tempfile::TempDir, std::path::PathBuf) {
         let dir = tempfile::tempdir().expect("tmpdir");
         let path = dir.path().join(name);
         let file = std::fs::File::create(&path).expect("create");
@@ -628,8 +714,7 @@ mod tests {
     fn read_ap_file_filters_tiles_and_nulls() {
         let (_dir, path) = write_parquet(&mut ap_file_frame(), "ap.parquet");
         // tileA has 3 rows, one with null teff -> 2 survive.
-        let (df, n) =
-            read_filtered_parquet(&path, None, Some("tileA".to_string())).expect("read");
+        let (df, n) = read_filtered_parquet(&path, None, Some("tileA".to_string())).expect("read");
         assert_eq!(n, 2);
         assert_eq!(df.height(), 2);
         // No tile filter: 5 valid rows of 6.

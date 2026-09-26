@@ -1,10 +1,10 @@
 use crate::api::{self, ServiceInfo, ServiceLogEvent, ServiceStatus};
 use crate::components::ui::{PageHeader, StatusDot, Tag, tokio_time_sleep};
+use crate::os::WindowLifecycle;
+use crate::os::state::{is_window_lifecycle_visible, use_window_lifecycle};
 use dioxus::prelude::*;
 use futures_util::StreamExt;
 use gloo_net::eventsource::futures::EventSource;
-use crate::os::state::{is_window_lifecycle_visible, use_window_lifecycle};
-use crate::os::WindowLifecycle;
 
 const MAX_LOG_LINES: usize = 2000;
 

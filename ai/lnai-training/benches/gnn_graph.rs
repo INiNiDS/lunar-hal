@@ -6,7 +6,10 @@ use burn::prelude::*;
 use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 
-use lnai_models::{GNN_INPUT_DIM, GNN_OUTPUT_DIM, StellarGnnConfig, compute_knn_adjacency};
+use lnai_models::{
+    GNN_INPUT_DIM, GNN_OUTPUT_DIM, StellarGnnConfig, compute_knn_adjacency,
+    compute_sparse_knn_graph,
+};
 
 type B = NdArray;
 
@@ -36,9 +39,13 @@ fn dense_to_tensor(
 fn bench_gnn_graph(c: &mut Criterion) {
     let mut group = c.benchmark_group("gnn_preprocessing");
     for &n in &[256_usize, 512] {
-        group.bench_function(format!("knn_k8_n{n}"), |b| {
+        group.bench_function(format!("knn_dense_k8_n{n}"), |b| {
             let coords = random_coords(n, 42);
             b.iter(|| black_box(compute_knn_adjacency(black_box(&coords), 8)))
+        });
+        group.bench_function(format!("knn_sparse_k8_n{n}"), |b| {
+            let coords = random_coords(n, 42);
+            b.iter(|| black_box(compute_sparse_knn_graph(black_box(&coords), 8)))
         });
     }
     group.finish();
@@ -53,15 +60,21 @@ fn bench_gnn_graph(c: &mut Criterion) {
     .init::<B>(&device);
 
     let n = 256;
+    let coords = random_coords(n, 42);
     let nodes = Tensor::<B, 2>::random(
         [n, GNN_INPUT_DIM],
         burn::tensor::Distribution::Default,
         &device,
     );
-    let adj = dense_to_tensor(&compute_knn_adjacency(&random_coords(n, 42), 8), &device);
+    let adj = dense_to_tensor(&compute_knn_adjacency(&coords, 8), &device);
+    let graph = compute_sparse_knn_graph(&coords, 8);
 
-    c.bench_function("gnn_forward_n256", |b| {
+    c.bench_function("gnn_forward_dense_n256", |b| {
         b.iter(|| black_box(model.forward(nodes.clone(), adj.clone())))
+    });
+
+    c.bench_function("gnn_forward_sparse_n256", |b| {
+        b.iter(|| black_box(model.forward_sparse(nodes.clone(), &graph)))
     });
 }
 

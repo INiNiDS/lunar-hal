@@ -34,7 +34,9 @@ struct ServiceInfo {
 
 fn service_info(runtime: &ServiceRuntime) -> ServiceInfo {
     let launch = (runtime.config.name == "frontend")
-        .then(|| FrontendLaunchConfig::from_values(&runtime.config.env, &runtime.config.extra_args).ok())
+        .then(|| {
+            FrontendLaunchConfig::from_values(&runtime.config.env, &runtime.config.extra_args).ok()
+        })
         .flatten();
     let platform = launch
         .as_ref()
@@ -626,7 +628,27 @@ mod tests {
 
         let root = temp_workspace();
         let binary = root.join("target/release/lunar-backend");
-        fs::write(&binary, "#!/bin/sh\nsleep 30\n").unwrap();
+        fs::write(
+            &binary,
+            r#"#!/usr/bin/env sh
+exec python3 -c "
+import os
+from http.server import HTTPServer, BaseHTTPRequestHandler
+
+class H(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b'OK')
+    def log_message(self, *args):
+        pass
+
+p = int(os.environ.get('LUNAR_BACKEND_PORT', '25255'))
+HTTPServer(('127.0.0.1', p), H).serve_forever()
+"
+"#,
+        )
+        .unwrap();
         let mut permissions = fs::metadata(&binary).unwrap().permissions();
         permissions.set_mode(0o755);
         fs::set_permissions(&binary, permissions).unwrap();

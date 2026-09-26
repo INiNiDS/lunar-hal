@@ -146,7 +146,10 @@ fn StarSceneCard(
 }
 
 #[component]
-pub fn StarSceneCreator(on_cancel: EventHandler<()>, on_created: EventHandler<StarScene>) -> Element {
+pub fn StarSceneCreator(
+    on_cancel: EventHandler<()>,
+    on_created: EventHandler<StarScene>,
+) -> Element {
     let game = use_stellar_scene();
     let name = use_signal(String::new);
 

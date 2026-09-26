@@ -42,7 +42,7 @@ impl StarModelInputs {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct GalleryStar {
     pub id: String,
     #[serde(default = "gallery_schema_version")]

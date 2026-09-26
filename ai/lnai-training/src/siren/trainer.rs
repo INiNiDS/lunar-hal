@@ -12,7 +12,7 @@ use burn::backend::cuda::CudaDevice;
 use burn::grad_clipping::GradientClippingConfig;
 use burn::module::{AutodiffModule, Module};
 use burn::optim::{AdamWConfig, GradientsAccumulator, GradientsParams, Optimizer};
-use burn::tensor::{ElementConversion, Tensor, TensorData};
+use burn::tensor::{ElementConversion, Tensor};
 use burn_store::{BurnpackStore, ModuleSnapshot};
 use lnai_models::{SIREN_INPUT_DIM, StellarSiren, StellarSirenConfig};
 use std::path::Path;
@@ -244,8 +244,7 @@ pub fn run_train_with_cancel(spec: &TrainingSpec, cancel: &CancelFlag) -> Result
 
         train_ds.shuffle_with_seed(seed.wrapping_add(epoch as u64));
         let mut prefetcher = PrefetchBatcher::new(&train_ds, spec.batch_size as usize);
-        let mut epoch_train_loss = 0.0f64;
-        let mut n_batches = 0usize;
+        let mut epoch_train_loss = WeightedMean::default();
 
         let mut accumulator: GradientsAccumulator<StellarSiren<TrainBackend>> =
             GradientsAccumulator::new();
@@ -257,6 +256,7 @@ pub fn run_train_with_cancel(spec: &TrainingSpec, cancel: &CancelFlag) -> Result
             // Stage 6 target-aware loss: conditioning columns (normed
             // bp_rp/mg/ruwe) ride along in inputs columns 2..5.
             let [batch_rows, _] = batch_inputs.dims();
+            let target_rows = batch_targets.dims()[0];
             let conditioning = batch_inputs.clone().slice([0..batch_rows, 2..5]);
             let predictions = model.forward(batch_inputs);
             let loss = compute_siren_loss_conditioned(predictions, batch_targets, conditioning);
@@ -272,8 +272,7 @@ pub fn run_train_with_cancel(spec: &TrainingSpec, cancel: &CancelFlag) -> Result
             let grads = GradientsParams::from_grads(grads, &model);
 
             accumulator.accumulate(&model, grads);
-            epoch_train_loss += loss_scalar as f64;
-            n_batches += 1;
+            epoch_train_loss.add(loss_scalar as f64, target_rows);
             accum_count += 1;
 
             if accum_count >= spec.grad_accum as usize {
@@ -289,16 +288,9 @@ pub fn run_train_with_cancel(spec: &TrainingSpec, cancel: &CancelFlag) -> Result
             model = optim.step(lr, model, grads);
         }
 
-        let epoch_train_loss = epoch_train_loss / n_batches.max(1) as f64;
+        let epoch_train_loss = epoch_train_loss.mean();
         let infer_model = model.valid();
-        let val_loss = evaluate_infer(
-            &infer_model,
-            &val_ds.inputs_cpu,
-            &val_ds.targets_cpu,
-            val_ds.n_samples,
-            spec.batch_size as usize,
-            &device,
-        );
+        let val_loss = evaluate_infer(&infer_model, &val_ds, spec.batch_size as usize, &device);
         drop(infer_model);
 
         if val_loss < best_val_loss {
@@ -382,9 +374,7 @@ pub fn run_train_with_cancel(spec: &TrainingSpec, cancel: &CancelFlag) -> Result
             let infer_model = model.valid();
             let holdout_loss = evaluate_infer(
                 &infer_model,
-                &holdout_val.inputs_cpu,
-                &holdout_val.targets_cpu,
-                holdout_val.n_samples,
+                &holdout_val,
                 spec.batch_size as usize,
                 &device,
             );
@@ -423,14 +413,14 @@ fn write_artifact_manifest(
         architecture_version(&ModelKind::Siren).to_string(),
         model_hash,
         norm_hash,
-        String::new(),
+        crate::artifacts::expected_feature_schema_hash(&ModelKind::Siren)
+            .expect("SIREN serving schema must be defined")
+            .to_string(),
         "gaia_dr3".to_string(),
         spec.dataset_manifest_hash.clone(),
         seed,
         serde_json::to_value(&spec.config).unwrap_or(serde_json::Value::Null),
-        option_env!("LUNAR_AI_GIT_REV")
-            .unwrap_or("unknown")
-            .to_string(),
+        crate::artifacts::current_git_revision(),
         format!("cuda:{}", spec.gpu_index),
     );
     manifest.evaluation_metrics = Some(serde_json::json!({ "best_val_loss": best_val_loss }));
@@ -483,14 +473,7 @@ pub fn run_evaluate(spec: &TrainingSpec) -> Result<RunOutcome> {
         Some(saved_norm),
     )?;
     drop(train_ds);
-    let val_loss = evaluate_infer(
-        &infer,
-        &val_ds.inputs_cpu,
-        &val_ds.targets_cpu,
-        val_ds.n_samples,
-        spec.batch_size as usize,
-        &device,
-    );
+    let val_loss = evaluate_infer(&infer, &val_ds, spec.batch_size as usize, &device);
     drop(infer);
     println!("=== Read-only evaluation (no weight updates) ===");
     println!("Validation data loss: {val_loss:.6}");
@@ -549,42 +532,56 @@ pub fn run_benchmark(spec: &TrainingSpec, iters: u32, warmup: u32) -> Result<Run
 
 fn evaluate_infer(
     model: &StellarSiren<InferBackend>,
-    inputs: &[f32],
-    targets: &[f32],
-    n_samples: usize,
+    dataset: &SirenDataset,
     batch_size: usize,
     device: &CudaDevice,
 ) -> f64 {
-    let mut current = 0;
-    let mut total_loss = 0.0f64;
-    let mut n = 0usize;
-
-    while current < n_samples {
-        let end = (current + batch_size).min(n_samples);
-        let rows = end - current;
-
-        let inp_slice = &inputs[current * SIREN_INPUT_DIM..end * SIREN_INPUT_DIM];
-        let tgt_slice = &targets[current * TARGET_DIM..end * TARGET_DIM];
-
-        let batch_inputs = Tensor::<InferBackend, 2>::from_data(
-            TensorData::new(inp_slice.to_vec(), [rows, SIREN_INPUT_DIM]),
-            device,
-        );
-        let batch_targets = Tensor::<InferBackend, 2>::from_data(
-            TensorData::new(tgt_slice.to_vec(), [rows, TARGET_DIM]),
-            device,
-        );
-
+    let mut mean = WeightedMean::default();
+    let mut batches = PrefetchBatcher::new(dataset, batch_size);
+    while let Some((batch_inputs, batch_targets)) = batches.next_batch::<InferBackend>(device) {
+        let rows = batch_targets.dims()[0];
         let preds = model.forward(batch_inputs);
         let loss = compute_data_loss(preds, batch_targets);
         let value: f32 = loss.into_scalar().elem();
-        total_loss += value as f64;
-        n += 1;
-
-        current = end;
+        mean.add(value as f64, rows);
     }
 
-    total_loss / n.max(1) as f64
+    mean.mean()
+}
+
+#[derive(Default)]
+struct WeightedMean {
+    sum: f64,
+    count: usize,
+}
+
+impl WeightedMean {
+    fn add(&mut self, loss: f64, rows: usize) {
+        self.sum += loss * rows as f64;
+        self.count += rows;
+    }
+
+    fn mean(&self) -> f64 {
+        self.sum / self.count.max(1) as f64
+    }
+}
+
+#[cfg(test)]
+mod weighted_loss_tests {
+    use super::WeightedMean;
+
+    #[test]
+    fn incomplete_pixel_batch_changes_checkpoint_order() {
+        let loss = |first: f64, last: f64| {
+            let mut mean = WeightedMean::default();
+            mean.add(first, 8);
+            mean.add(last, 4);
+            mean.mean()
+        };
+        assert!((loss(0.0, 9.0) - 3.0).abs() < 1e-12);
+        assert!(loss(0.0, 9.0) < loss(3.2, 3.2));
+        assert!((0.0 + 9.0) / 2.0 > (3.2 + 3.2) / 2.0);
+    }
 }
 
 fn cosine_annealing(epoch: usize, total_epochs: usize, initial_lr: f64, min_lr: f64) -> f64 {

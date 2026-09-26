@@ -16,7 +16,7 @@ use burn::backend::cuda::CudaDevice;
 use burn::grad_clipping::GradientClippingConfig;
 use burn::module::{AutodiffModule, Module};
 use burn::optim::{AdamWConfig, GradientsAccumulator, GradientsParams, Optimizer};
-use burn::tensor::Tensor;
+use burn::tensor::{ElementConversion, Tensor};
 use burn_store::{BurnpackStore, ModuleSnapshot};
 use lnai_models::{MLP_INPUT_DIM, StellarMlp, StellarMlpConfig};
 use std::path::Path;
@@ -134,14 +134,23 @@ pub fn run_train_with_cancel(spec: &TrainingSpec, cancel: &CancelFlag) -> Result
             .load_from(&mut store)
             .map_err(|e| anyhow::anyhow!("failed to load model: {e}"))?;
 
-        let dataset: StellarDataset<TrainBackend> =
-            StellarDataset::load_with_norm(data_path.as_path(), loaded_norm.clone(), &device, spec.max_rows, spec.tiles.clone())?;
+        let dataset: StellarDataset<TrainBackend> = StellarDataset::load_with_norm(
+            data_path.as_path(),
+            loaded_norm.clone(),
+            &device,
+            spec.max_rows,
+            spec.tiles.clone(),
+        )?;
 
         println!("=== Fine-tuning mode (using loaded normalization) ===");
         (loaded_model, loaded_norm, dataset)
     } else {
-        let dataset: StellarDataset<TrainBackend> =
-            StellarDataset::load(data_path.as_path(), &device, spec.max_rows, spec.tiles.clone())?;
+        let dataset: StellarDataset<TrainBackend> = StellarDataset::load(
+            data_path.as_path(),
+            &device,
+            spec.max_rows,
+            spec.tiles.clone(),
+        )?;
         let norm = dataset.norm.clone();
         let fresh = StellarMlpConfig::new().init::<TrainBackend>(&device);
         (fresh, norm, dataset)
@@ -243,14 +252,15 @@ pub fn run_train_with_cancel(spec: &TrainingSpec, cancel: &CancelFlag) -> Result
             spec.batch_size as usize,
             seed.wrapping_add(epoch as u64),
         );
-        let mut n_batches = 0usize;
-        let mut loss_sum = Tensor::<TrainBackend, 1>::zeros([1], &device);
+        let mut train_loss_sum = 0.0f64;
+        let mut train_rows = 0usize;
 
         let mut accumulator: GradientsAccumulator<StellarMlp<TrainBackend>> =
             GradientsAccumulator::new();
         let mut accum_count = 0usize;
 
         while let Some((batch_inputs, batch_targets)) = batcher.next_batch() {
+            let batch_rows = batch_targets.dims()[0];
             let (physics_weight, loss_kind, huber_delta, target_weights) = match &spec.config {
                 crate::spec::ModelConfig::Pinn(cfg) => (
                     cfg.physics_weight,
@@ -281,13 +291,13 @@ pub fn run_train_with_cancel(spec: &TrainingSpec, cancel: &CancelFlag) -> Result
             } else {
                 loss.clone()
             };
-            loss_sum = loss_sum + loss.detach();
+            train_loss_sum += loss.clone().into_scalar().elem::<f32>() as f64 * batch_rows as f64;
+            train_rows += batch_rows;
             let grads = scaled_loss.backward();
             drop(scaled_loss);
             let grads = GradientsParams::from_grads(grads, &model);
 
             accumulator.accumulate(&model, grads);
-            n_batches += 1;
             accum_count += 1;
 
             if accum_count >= spec.grad_accum as usize {
@@ -303,9 +313,8 @@ pub fn run_train_with_cancel(spec: &TrainingSpec, cancel: &CancelFlag) -> Result
             model = optim.step(lr, model, grads);
         }
 
-        let epoch_train_loss = if n_batches > 0 {
-            let total: f32 = (loss_sum / n_batches as f32).into_scalar();
-            total as f64
+        let epoch_train_loss = if train_rows > 0 {
+            train_loss_sum / train_rows as f64
         } else {
             0.0
         };
@@ -389,10 +398,14 @@ pub fn run_train_with_cancel(spec: &TrainingSpec, cancel: &CancelFlag) -> Result
             anyhow::bail!("holdout file not found: {}", holdout_path.display());
         }
         {
-            let holdout_ds: StellarDataset<TrainBackend> =
-                StellarDataset::load(holdout_path, &device, spec.max_rows, spec.tiles.clone())?;
-            let (holdout_val, _) = holdout_ds.split_with_seed(0.0, seed);
-            if holdout_val.n_samples == 0 {
+            let holdout_ds: StellarDataset<TrainBackend> = StellarDataset::load_holdout_with_norm(
+                holdout_path,
+                norm.clone(),
+                &device,
+                spec.max_rows,
+                spec.tiles.clone(),
+            )?;
+            if holdout_ds.n_samples == 0 {
                 anyhow::bail!(
                     "holdout file is empty after filtering: {}",
                     holdout_path.display()
@@ -401,13 +414,13 @@ pub fn run_train_with_cancel(spec: &TrainingSpec, cancel: &CancelFlag) -> Result
             let infer_model = model.valid();
             let holdout_loss = evaluate_infer(
                 &infer_model,
-                &holdout_val.inputs.clone().valid(),
-                &holdout_val.targets.clone().valid(),
+                &holdout_ds.inputs.clone().valid(),
+                &holdout_ds.targets.clone().valid(),
                 spec.batch_size as usize,
             );
             let holdout_phys = evaluate_physics_infer(
                 &infer_model,
-                &holdout_val.inputs.clone().valid(),
+                &holdout_ds.inputs.clone().valid(),
                 spec.batch_size as usize,
                 &norm,
             );
@@ -451,14 +464,14 @@ fn write_artifact_manifest(
         architecture_version(&ModelKind::Pinn).to_string(),
         model_hash,
         norm_hash,
-        String::new(),
+        crate::artifacts::expected_feature_schema_hash(&ModelKind::Pinn)
+            .expect("PINN serving schema must be defined")
+            .to_string(),
         "gaia_dr3".to_string(),
         spec.dataset_manifest_hash.clone(),
         seed,
         serde_json::to_value(&spec.config).unwrap_or(serde_json::Value::Null),
-        option_env!("LUNAR_AI_GIT_REV")
-            .unwrap_or("unknown")
-            .to_string(),
+        crate::artifacts::current_git_revision(),
         format!("cuda:{}", spec.gpu_index),
     );
     manifest.evaluation_metrics = Some(serde_json::json!({ "best_val_loss": best_val_loss }));
@@ -538,23 +551,27 @@ pub fn run_evaluate(spec: &TrainingSpec) -> Result<RunOutcome> {
             anyhow::bail!("holdout file not found: {holdout_path}");
         }
         {
-            let holdout_ds: StellarDataset<TrainBackend> =
-                StellarDataset::load(Path::new(holdout_path), &device, None, None)?;
-            let (holdout_val, _) = holdout_ds.split_with_seed(0.0, seed);
-            if holdout_val.n_samples == 0 {
+            let holdout_ds: StellarDataset<TrainBackend> = StellarDataset::load_holdout_with_norm(
+                Path::new(holdout_path),
+                norm.clone(),
+                &device,
+                None,
+                None,
+            )?;
+            if holdout_ds.n_samples == 0 {
                 anyhow::bail!("holdout file is empty after filtering: {holdout_path}");
             }
             let holdout_loss = evaluate_infer(
                 &infer_model,
-                &holdout_val.inputs.clone().valid(),
-                &holdout_val.targets.clone().valid(),
+                &holdout_ds.inputs.clone().valid(),
+                &holdout_ds.targets.clone().valid(),
                 spec.batch_size as usize,
             );
             println!("Holdout data loss:       {holdout_loss:.6}");
             let (pred_rows, truth_rows) = evaluate_per_target_infer(
                 &infer_model,
-                &holdout_val.inputs.clone().valid(),
-                &holdout_val.targets.clone().valid(),
+                &holdout_ds.inputs.clone().valid(),
+                &holdout_ds.targets.clone().valid(),
                 spec.batch_size as usize,
             )?;
             print_per_target_table(
@@ -722,7 +739,6 @@ fn evaluate_infer(
     }
 
     let mut loss_sum = Tensor::<InferBackend, 1>::zeros([1], &inputs.device());
-    let mut n_batches = 0usize;
     let mut current = 0usize;
 
     while current < n {
@@ -730,13 +746,12 @@ fn evaluate_infer(
 
         let preds = model.forward(inputs.clone().slice([current..end, 0..INPUT_DIM]));
         let loss = compute_data_loss(preds, targets.clone().slice([current..end, 0..TARGET_DIM]));
-        loss_sum = loss_sum + loss;
-        n_batches += 1;
+        loss_sum = add_weighted_loss(loss_sum, loss, end - current);
 
         current = end;
     }
 
-    let total: f32 = (loss_sum / n_batches as f32).into_scalar();
+    let total: f32 = (loss_sum / n as f32).into_scalar();
     total as f64
 }
 
@@ -752,7 +767,6 @@ fn evaluate_physics_infer(
     }
 
     let mut loss_sum = Tensor::<InferBackend, 1>::zeros([1], &inputs.device());
-    let mut n_batches = 0usize;
     let mut current = 0usize;
 
     while current < n {
@@ -760,14 +774,43 @@ fn evaluate_physics_infer(
 
         let preds = model.forward(inputs.clone().slice([current..end, 0..INPUT_DIM]));
         let loss = compute_physics_loss(preds, norm);
-        loss_sum = loss_sum + loss;
-        n_batches += 1;
+        loss_sum = add_weighted_loss(loss_sum, loss, end - current);
 
         current = end;
     }
 
-    let total: f32 = (loss_sum / n_batches as f32).into_scalar();
+    let total: f32 = (loss_sum / n as f32).into_scalar();
     total as f64
+}
+
+fn add_weighted_loss<B: burn::tensor::backend::Backend>(
+    sum: Tensor<B, 1>,
+    batch_loss: Tensor<B, 1>,
+    rows: usize,
+) -> Tensor<B, 1> {
+    sum + batch_loss.mul_scalar(rows as f32)
+}
+
+#[cfg(test)]
+mod weighted_loss_tests {
+    use super::*;
+    use burn::backend::NdArray;
+
+    #[test]
+    fn incomplete_batch_weights_checkpoint_selection_by_rows() {
+        let device = burn::backend::ndarray::NdArrayDevice::default();
+        let loss = |first: f32, last: f32| {
+            let mut sum = Tensor::<NdArray<f32>, 1>::zeros([1], &device);
+            for (value, rows) in [(first, 2), (last, 1)] {
+                sum = add_weighted_loss(sum, Tensor::from_data([value], &device), rows);
+            }
+            let mean: f32 = (sum / 3.0).into_scalar();
+            mean
+        };
+        assert!((loss(0.0, 9.0) - 3.0).abs() < 1e-6);
+        assert!(loss(0.0, 9.0) < loss(3.2, 3.2));
+        assert!((0.0 + 9.0) / 2.0 > (3.2 + 3.2) / 2.0);
+    }
 }
 
 pub fn cosine_annealing(epoch: usize, total_epochs: usize, initial_lr: f64, min_lr: f64) -> f64 {

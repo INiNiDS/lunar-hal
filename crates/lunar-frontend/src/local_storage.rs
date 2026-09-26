@@ -40,7 +40,10 @@ impl CameraStorageRecord {
         {
             return None;
         }
-        Some(SceneCamera::new((self.offset[0], self.offset[1]), self.zoom))
+        Some(SceneCamera::new(
+            (self.offset[0], self.offset[1]),
+            self.zoom,
+        ))
     }
 }
 
@@ -57,8 +60,12 @@ fn camera_key(scene_id: &str) -> String {
 
 #[cfg(feature = "web")]
 pub fn save_scene_camera(scene_id: &str, camera: SceneCamera) {
-    let Some(window) = web_sys::window() else { return };
-    let Ok(Some(storage)) = window.local_storage() else { return };
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+    let Ok(Some(storage)) = window.local_storage() else {
+        return;
+    };
     let record = CameraStorageRecord::new(scene_id, camera);
     match serde_json::to_string(&record) {
         Ok(value) => {
@@ -88,7 +95,10 @@ pub fn load_scene_camera(scene_id: &str) -> Option<SceneCamera> {
     match decode_camera_record(&raw, scene_id) {
         Some(camera) => Some(camera),
         None => {
-            warn!(scene_id, "discarding corrupt or incompatible saved scene camera");
+            warn!(
+                scene_id,
+                "discarding corrupt or incompatible saved scene camera"
+            );
             let _ = storage.remove_item(&key);
             None
         }
@@ -129,14 +139,15 @@ pub fn save_scene_camera(scene_id: &str, camera: SceneCamera) {
     }
 
     let temporary = path.with_extension(format!("{}.tmp", std::process::id()));
-    let write_result = fs::write(&temporary, payload).and_then(|_| match fs::rename(&temporary, &path) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-            fs::remove_file(&path)?;
-            fs::rename(&temporary, &path)
-        }
-        Err(error) => Err(error),
-    });
+    let write_result =
+        fs::write(&temporary, payload).and_then(|_| match fs::rename(&temporary, &path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                fs::remove_file(&path)?;
+                fs::rename(&temporary, &path)
+            }
+            Err(error) => Err(error),
+        });
     if let Err(error) = write_result {
         let _ = fs::remove_file(&temporary);
         warn!(%error, scene_id, "failed to persist scene camera");
@@ -162,7 +173,10 @@ pub fn load_scene_camera(scene_id: &str) -> Option<SceneCamera> {
     match decode_camera_record(&raw, scene_id) {
         Some(camera) => Some(camera),
         None => {
-            warn!(scene_id, "discarding corrupt or incompatible saved scene camera");
+            warn!(
+                scene_id,
+                "discarding corrupt or incompatible saved scene camera"
+            );
             let _ = std::fs::remove_file(path);
             None
         }

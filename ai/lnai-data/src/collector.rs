@@ -2,6 +2,7 @@ use crate::integrity::{count_tap_csv_rows, sha256_file};
 use crate::manifest::{DatasetManifestV1, ShardState, ShardStatus};
 use sha2::Digest;
 use std::fs;
+use std::io::BufRead;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -24,6 +25,7 @@ pub const MAX_SUBDIVIDE_DEPTH: u32 = 6;
 pub const MAX_LIFETIME_RETRIES_PER_SHARD: u32 = 8;
 
 const MIN_TARGET_ROWS_PER_SHARD: usize = 10;
+const TAP_CSV_HEADER: &str = "source_id,ra_deg,dec_deg,parallax_mas,pm_ra_mas_yr,pm_dec_mas_yr,radial_velocity_kms,mag_g,mag_bp,mag_rp,ruwe,astrometric_excess_noise";
 
 fn current_ms() -> u64 {
     SystemTime::now()
@@ -761,6 +763,7 @@ fn fetch_shard(
     if rows > row_budget as u64 {
         return Err(FetchError::TooManyRows { limit: row_budget });
     }
+    validate_tap_csv_schema(dest).map_err(FetchError::Protocol)?;
     // Sanity: the file must parse as a CSV whose row count matches what the
     // fetcher reported (guards against truncated transports).
     let on_disk = count_tap_csv_rows(dest).map_err(FetchError::Protocol)?;
@@ -770,6 +773,43 @@ fn fetch_shard(
         )));
     }
     Ok(rows)
+}
+
+fn validate_tap_csv_schema(path: &Path) -> Result<(), String> {
+    let file =
+        fs::File::open(path).map_err(|e| format!("cannot open TAP CSV {}: {e}", path.display()))?;
+    let mut header = String::new();
+    std::io::BufReader::new(file)
+        .read_line(&mut header)
+        .map_err(|e| format!("read TAP CSV header {}: {e}", path.display()))?;
+    let header = header.trim_start_matches('\u{feff}');
+    let actual: Vec<String> = header
+        .trim_end_matches(['\r', '\n'])
+        .split(',')
+        .map(|column| column.trim().trim_matches('"').to_ascii_lowercase())
+        .collect();
+    let expected: Vec<&str> = TAP_CSV_HEADER.split(',').collect();
+    let missing: Vec<&str> = expected
+        .iter()
+        .copied()
+        .filter(|column| !actual.iter().any(|actual| actual.as_str() == *column))
+        .collect();
+    let reordered = actual
+        .iter()
+        .zip(&expected)
+        .any(|(actual, expected)| actual.as_str() != *expected);
+    if actual.len() != expected.len() || !missing.is_empty() || reordered {
+        return Err(format!(
+            "TAP CSV schema mismatch: expected exact header `{TAP_CSV_HEADER}`, got `{}`; missing: {}",
+            actual.join(","),
+            if missing.is_empty() {
+                "none".to_string()
+            } else {
+                missing.join(", ")
+            }
+        ));
+    }
+    Ok(())
 }
 
 fn persist_locked(manifest: &Arc<Mutex<DatasetManifestV1>>, path: &Path) -> Result<(), String> {
@@ -801,9 +841,13 @@ mod tests {
             let mut f = std::fs::File::create(dest).unwrap();
             let rows = self.rows_per_shard;
             use std::io::Write;
-            writeln!(f, "source_id,ra_deg,dec_deg").unwrap();
+            writeln!(f, "{TAP_CSV_HEADER}").unwrap();
             for i in 0..rows {
-                writeln!(f, "{}{i},0.5,0.5", fake_source_prefix(query)).unwrap();
+                let mut row = format!("{}{i},0.5,0.5", fake_source_prefix(query));
+                for _ in 3..TAP_CSV_HEADER.split(',').count() {
+                    row.push(',');
+                }
+                writeln!(f, "{row}").unwrap();
             }
             f.flush().unwrap();
             Ok(rows as u64)
@@ -832,6 +876,28 @@ mod tests {
             retry_max_attempts: 2,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn fetch_validation_rejects_missing_or_extra_tap_columns() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("shard.csv");
+        std::fs::write(&path, "source_id,ra_deg,dec_deg\n1,0.5,0.5\n").unwrap();
+        let error = validate_tap_csv_schema(&path).unwrap_err();
+        assert!(error.contains("missing: parallax_mas"), "{error}");
+
+        std::fs::write(&path, format!("{TAP_CSV_HEADER},unexpected\n")).unwrap();
+        let error = validate_tap_csv_schema(&path).unwrap_err();
+        assert!(error.contains("expected exact header"), "{error}");
+
+        let mut reordered: Vec<_> = TAP_CSV_HEADER.split(',').collect();
+        reordered.swap(0, 1);
+        std::fs::write(&path, format!("{}\n", reordered.join(","))).unwrap();
+        let error = validate_tap_csv_schema(&path).unwrap_err();
+        assert!(error.contains("expected exact header"), "{error}");
+
+        std::fs::write(&path, format!("\u{feff}{TAP_CSV_HEADER}\r\n")).unwrap();
+        validate_tap_csv_schema(&path).expect("contracted TAP header should be accepted");
     }
 
     #[test]

@@ -20,7 +20,7 @@ serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 burn = "0.21"
 burn-store = { version = "0.21", features = ["burnpack"] }
-lnai-models = { path = "../../ai/lnai-models", features = ["pinn", "gnn", "image", "siren"] }
+lnai-models = { path = "../../ai/lnai-models", features = ["pinn", "gnn", "image", "siren", "localization"] }
 lnai-training = { path = "../../ai/lnai-training" }
 lunar-structures = { path = "../lunar-structures" }
 tower-http = { version = "0.7.0", features = ["cors"] }

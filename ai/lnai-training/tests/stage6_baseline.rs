@@ -1,7 +1,7 @@
-//! Stage 6.8: living approved baseline.
+//! Stage 6.8: living contract baseline; not a trained-model quality approval.
 //!
 //! `ai/fixtures/stage6-approved-baseline.json` records the frozen
-//! correctness suite state at the approved commit. This test pins it:
+//! contract-suite state at the approved commit. This test pins it:
 //! the record must parse and cover all six frozen suites, and the key
 //! Stage 6 behaviours (finite metrics, determinism, star-disjoint
 //! splits, spec gates) are re-asserted through the real library paths so
@@ -62,6 +62,14 @@ fn baseline_record_covers_all_frozen_suites() {
             .is_some_and(|s| s.len() == 40),
         "baseline must reference the approved full commit hash"
     );
+}
+
+#[test]
+fn baseline_does_not_claim_trained_checkpoint_quality() {
+    let base = baseline();
+    assert_eq!(base["release_qualification"], "not_qualified");
+    assert_eq!(base["evidence_scope"]["real_checkpoint_evaluation"], false);
+    assert_eq!(base["evidence_scope"]["production_release_eligible"], false);
 }
 
 #[test]

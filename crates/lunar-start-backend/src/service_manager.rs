@@ -5,8 +5,8 @@ use std::time::Duration;
 
 use anyhow::Result;
 use lunar_start::{
-    BackendSettings, FrontendLaunchConfig, FrontendSettings, LauncherConfig, LogBackend, LogEvent, ServiceConfig,
-    ServiceConfigSchema, ServiceConfigValues, ServiceRuntime, ServiceStatus,
+    BackendSettings, FrontendLaunchConfig, FrontendSettings, LauncherConfig, LogBackend, LogEvent,
+    ServiceConfig, ServiceConfigSchema, ServiceConfigValues, ServiceRuntime, ServiceStatus,
     TestbenchBackendSettings, ValidationResult, validate_service_config,
 };
 use serde::{Deserialize, Serialize};
@@ -276,17 +276,14 @@ impl ServiceManager {
                 .ok_or_else(|| ConfigError::UnknownService(name.to_string()))?;
             let new_platform = FrontendLaunchConfig::from_values(&values.env, &values.extra_args)
                 .map(|launch| launch.platform.as_str().to_string())
-                .unwrap_or_else(|_| values
-                .env
-                .get("LUNAR_FRONTEND_PLATFORM")
-                .cloned()
-                .unwrap_or_else(|| "web".to_string()));
-            old_platform != new_platform
-                && self
-                    .backend
-                    .lock()
-                    .await
-                    .is_running("frontend")
+                .unwrap_or_else(|_| {
+                    values
+                        .env
+                        .get("LUNAR_FRONTEND_PLATFORM")
+                        .cloned()
+                        .unwrap_or_else(|| "web".to_string())
+                });
+            old_platform != new_platform && self.backend.lock().await.is_running("frontend")
         } else {
             false
         };

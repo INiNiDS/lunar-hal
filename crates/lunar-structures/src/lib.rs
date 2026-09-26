@@ -63,7 +63,7 @@ pub struct ImageResponse {
     pub latent_surface_parameters: Vec<f32>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct StellarMetadata {
     pub spectral_class: String,
     pub category: String,
@@ -184,15 +184,16 @@ pub struct SectorRequest {
     pub search_radius: Option<f32>,
 }
 
+pub mod ai;
 pub mod gallery;
 pub mod live_scene;
 
+pub use ai::*;
 pub use gallery::{
-    CreateGalleryStarRequest, GalleryListResponse, GallerySource, GalleryStar,
-    StarDragPayload, StarDragSource, StarModelInputs, UpdateGalleryStarRequest,
-    GALLERY_SCHEMA_VERSION,
+    CreateGalleryStarRequest, GALLERY_SCHEMA_VERSION, GalleryListResponse, GallerySource,
+    GalleryStar, StarDragPayload, StarDragSource, StarModelInputs, UpdateGalleryStarRequest,
 };
 pub use live_scene::{
     ClearSceneRequest, CreateSceneStarRequest, FrontendUiEvent, GenerateSceneStarsRequest,
-    LiveSceneSnapshot, SceneEvent, UpdateSceneStarRequest, LIVE_SCENE_SCHEMA_VERSION,
+    LIVE_SCENE_SCHEMA_VERSION, LiveSceneSnapshot, SceneEvent, UpdateSceneStarRequest,
 };

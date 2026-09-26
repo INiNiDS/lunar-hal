@@ -1,11 +1,9 @@
 #!/usr/bin/env bash
-# Stage 3 E2E foundation: one command that produces the full AI report set.
+# Stage 3 contract/surrogate checks; this does not evaluate trained serving weights.
 #
-#   * regenerates the frozen stellar-e2e-v1 fixture deterministically and
-#     verifies its checksum/manifest (tasks 1-2)
-#   * runs the correctness suites: PINN per-target + Stefan-Boltzmann
-#     residual, GNN oracle/chained/baseline, position rollout, the
-#     PINN->GNN chain contract and leakage proofs (tasks 4-6)
+#   * regenerates the 256-row synthetic stellar-e2e-v1 fixture and checks its
+#     checksum/manifest
+#   * runs contract, synthetic-surrogate, seeded-untrained, and leakage suites
 #
 # Reports land in $LUNAR_AI_REPORT_DIR (default: target/ai-reports).
 set -euo pipefail
@@ -19,7 +17,7 @@ export LUNAR_AI_GIT_REV="${LUNAR_AI_GIT_REV:-$(git -C "$ROOT" rev-parse --short 
 echo "== [e2e-ai] regenerate frozen fixture (must be byte-identical) =="
 cargo run -q -p lnai-training --example gen-fixture
 
-echo "== [e2e-ai] correctness suites =="
+echo "== [e2e-ai] contract and surrogate suites (not checkpoint quality) =="
 cargo test -p lnai-training \
   --test fixture_leakage \
   --test pinn_accuracy \

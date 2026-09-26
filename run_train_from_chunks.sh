@@ -6,9 +6,7 @@ set -e
 CHUNKS_DIR="data/chunks"
 AI_DATA_DIR="ai_data"
 COMBINED="$AI_DATA_DIR/combined_chunks.parquet"
-FINAL="$AI_DATA_DIR/final.parquet"
 EPOCHS_BASELINE="${EPOCHS_BASELINE:-200}"
-EPOCHS_FINAL="${EPOCHS_FINAL:-200}"
 VAL_FRAC="${VAL_FRAC:-0.1}"
 
 mkdir -p "$AI_DATA_DIR"
@@ -59,20 +57,9 @@ if [ -f "$HOLDOUT" ]; then
   cargo run --release -p lnai -- \
     --data "$COMBINED" \
     --holdout "$HOLDOUT"
-
-  echo "🔀 Финальный заезд: объединяем чанки + holdout..."
-  cargo run --release -p lunar-ai-cli -- \
-    combine \
-    --inputs "$COMBINED" "$HOLDOUT" \
-    --output "$FINAL"
-
-  echo "🔥 Дообучение на полном датасете ($EPOCHS_FINAL эпох)..."
-  cargo run --release -p lnai -- \
-    --data "$FINAL" \
-    --epochs "$EPOCHS_FINAL"
 else
   echo "⏭️  [5/5] $HOLDOUT не найден — пропускаем holdout-этап"
-  echo "   (закинь holdout.parquet в $AI_DATA_DIR/ и перезапусти для финальной фазы)"
+  echo "   (добавь holdout.parquet в $AI_DATA_DIR/ для независимой проверки)"
 fi
 
-echo "👑 Готово! Веса: stellar_model.safetensors"
+echo "👑 Готово! Контрольный набор не включался в обучение; веса см. в каталоге обучения (.bpk)."

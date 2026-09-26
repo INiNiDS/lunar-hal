@@ -1,6 +1,6 @@
 use crate::ai::{
     PinnInputs, SimpleRng, StarFeatures, apparent_g_for_member, generate_hybrid_metadata, get_gnn,
-    get_lore_cache, get_pinn, gnn_infer, infer_pinn_batch_async, pinn_infer,
+    get_lore_cache, gnn_infer, infer_pinn_batch_async,
 };
 use axum::{
     Json,
@@ -38,11 +38,16 @@ pub fn calculate_absolute_magnitude(x: f32, y: f32, z: f32, g_mag: f32) -> f32 {
     }
 }
 
-pub async fn infer_pinn_async(inputs: PinnInputs) -> [f32; 4] {
-    let pinn = get_pinn().await;
-    tokio::task::spawn_blocking(move || pinn_infer(&pinn.model, &pinn.device, &pinn.norm, inputs))
-        .await
-        .unwrap_or([0.0, 0.0, 0.0, 0.0])
+pub async fn infer_pinn_async(inputs: PinnInputs) -> anyhow::Result<[f32; 4]> {
+    let mut rows = infer_pinn_batch_async(vec![inputs]).await?;
+    Ok(rows.remove(0))
+}
+
+fn inference_unavailable(error: anyhow::Error) -> (StatusCode, String) {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        format!("model inference unavailable: {error:#}"),
+    )
 }
 
 pub fn sector_seed(cx: f32, cy: f32, cz: f32) -> u64 {
@@ -99,7 +104,7 @@ pub async fn infer_sector_stars(
     seed: u64,
     bp_rp: f32,
     g_mag: f32,
-) -> Vec<StarFeatures> {
+) -> anyhow::Result<Vec<StarFeatures>> {
     let positions = generate_sector_positions(SectorSeed {
         center,
         search_radius,
@@ -114,15 +119,11 @@ pub async fn infer_sector_stars(
             g_mag: apparent_g_for_member(position, mg_center, g_mag),
         })
         .collect();
-    let outputs = infer_pinn_batch_async(inputs).await;
+    let outputs = infer_pinn_batch_async(inputs).await?;
 
-    positions
+    Ok(positions
         .iter()
-        .zip(
-            outputs
-                .iter()
-                .chain(std::iter::repeat(&[0.0, 0.0, 0.0, 0.0])),
-        )
+        .zip(outputs.iter())
         .map(|(&coords, &[teff, rad, mass, lum])| StarFeatures {
             coords,
             log_teff: teff.max(0.01).log10(),
@@ -131,34 +132,29 @@ pub async fn infer_sector_stars(
             log_lum: lum.max(0.01).log10(),
             mg: mg_center,
         })
-        .take(STARS_PER_SECTOR)
-        .collect()
+        .collect())
 }
 
-pub async fn compile_response_stars(stars: &[StarFeatures], temperature: f32) -> Vec<ResponseStar> {
+pub async fn compile_response_stars(
+    stars: &[StarFeatures],
+    temperature: f32,
+) -> anyhow::Result<Vec<ResponseStar>> {
     if stars.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
 
-    let gnn_opt = get_gnn().await;
+    let gnn = get_gnn()
+        .await
+        .ok_or_else(|| anyhow::anyhow!("GNN model unavailable"))?;
     let lore = get_lore_cache().await;
 
-    let velocities = if let Some(gnn) = gnn_opt {
-        let stars_clone = stars.to_vec();
-        tokio::task::spawn_blocking(move || {
-            gnn_infer(&gnn, &stars_clone, 8.min(stars_clone.len()), temperature)
-        })
-        .await
-        .unwrap_or_else(|join_err| Err(anyhow::anyhow!("gnn blocking task failed: {join_err}")))
-        .unwrap_or_else(|err| {
-            eprintln!("warning: gnn_infer failed, zero velocities: {err:#}");
-            vec![[0.0, 0.0, 0.0]; stars.len()]
-        })
-    } else {
-        vec![[0.0, 0.0, 0.0]; stars.len()]
-    };
+    let stars_clone = stars.to_vec();
+    let velocities = tokio::task::spawn_blocking(move || {
+        gnn_infer(&gnn, &stars_clone, 8.min(stars_clone.len()), temperature)
+    })
+    .await??;
 
-    stars
+    Ok(stars
         .iter()
         .zip(velocities.iter())
         .enumerate()
@@ -185,7 +181,7 @@ pub async fn compile_response_stars(stars: &[StarFeatures], temperature: f32) ->
                 velocity_vector: *vel,
             }
         })
-        .collect()
+        .collect())
 }
 
 pub struct SectorQuery {
@@ -197,12 +193,7 @@ pub struct SectorQuery {
     pub seed: u64,
 }
 
-pub async fn generate_sector_internal(query: SectorQuery) -> Vec<ResponseStar> {
-    let gnn_opt = get_gnn().await;
-    if gnn_opt.is_none() {
-        return Vec::new();
-    }
-
+pub async fn generate_sector_internal(query: SectorQuery) -> anyhow::Result<Vec<ResponseStar>> {
     let stars = infer_sector_stars(
         query.center,
         query.search_radius,
@@ -210,28 +201,33 @@ pub async fn generate_sector_internal(query: SectorQuery) -> Vec<ResponseStar> {
         query.bp_rp,
         query.g_mag,
     )
-    .await;
+    .await?;
 
     compile_response_stars(&stars, query.temperature).await
 }
 
-pub async fn pinn(Json(payload): Json<PinnRequest>) -> Json<PinnResponse> {
+pub async fn pinn(
+    Json(payload): Json<PinnRequest>,
+) -> Result<Json<PinnResponse>, (StatusCode, String)> {
     let result = infer_pinn_async(PinnInputs {
         position: [payload.x_pc, payload.y_pc, payload.z_pc],
         bp_rp: payload.bp_rp,
         g_mag: payload.g_mag,
     })
-    .await;
+    .await
+    .map_err(inference_unavailable)?;
 
-    Json(PinnResponse {
+    Ok(Json(PinnResponse {
         temperature_k: result[0],
         radius_solar: result[1],
         mass_solar: result[2],
         luminosity_solar: result[3],
-    })
+    }))
 }
 
-pub async fn gnn(Json(payload): Json<GnnRequest>) -> Json<GnnResponse> {
+pub async fn gnn(
+    Json(payload): Json<GnnRequest>,
+) -> Result<Json<GnnResponse>, (StatusCode, String)> {
     let seed = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -246,12 +242,15 @@ pub async fn gnn(Json(payload): Json<GnnRequest>) -> Json<GnnResponse> {
         g_mag: payload.g_mag,
         seed,
     })
-    .await;
+    .await
+    .map_err(inference_unavailable)?;
 
-    Json(GnnResponse { stars })
+    Ok(Json(GnnResponse { stars }))
 }
 
-pub async fn sector_stars(Json(payload): Json<SectorRequest>) -> Json<GnnResponse> {
+pub async fn sector_stars(
+    Json(payload): Json<SectorRequest>,
+) -> Result<Json<GnnResponse>, (StatusCode, String)> {
     let seed = sector_seed(payload.sector_cx, payload.sector_cy, payload.sector_cz);
     let stars = generate_sector_internal(SectorQuery {
         center: [payload.sector_cx, payload.sector_cy, payload.sector_cz],
@@ -261,8 +260,9 @@ pub async fn sector_stars(Json(payload): Json<SectorRequest>) -> Json<GnnRespons
         g_mag: payload.g_mag,
         seed,
     })
-    .await;
-    Json(GnnResponse { stars })
+    .await
+    .map_err(inference_unavailable)?;
+    Ok(Json(GnnResponse { stars }))
 }
 
 #[derive(Default)]
@@ -384,7 +384,10 @@ pub async fn create_scene(
 ) -> Result<Json<LiveSceneSnapshot>, (StatusCode, String)> {
     let name = req.name.trim();
     if name.is_empty() {
-        return Err((StatusCode::BAD_REQUEST, "StarScene name cannot be empty".into()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "StarScene name cannot be empty".into(),
+        ));
     }
 
     let (stars, bp_rp, g_mag) = generate_initial_scene_stars(&req)
@@ -452,18 +455,20 @@ fn event_scene_id(event: &SceneEvent) -> &str {
 pub async fn scene_events(
     State(state): State<AppState>,
     Path(id): Path<String>,
-) -> Result<Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>>, (StatusCode, String)> {
+) -> Result<Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>>, (StatusCode, String)>
+{
     if state.scenes.get(&id).await.is_none() {
         return Err((StatusCode::NOT_FOUND, format!("StarScene {id} not found")));
     }
-    let stream = BroadcastStream::new(state.scene_events.subscribe()).filter_map(move |message| {
-        match message {
-            Ok(event) if event_scene_id(&event) == id => serde_json::to_string(&event)
-                .ok()
-                .map(|data| Ok::<Event, Infallible>(Event::default().data(data))),
-            _ => None,
-        }
-    });
+    let stream =
+        BroadcastStream::new(state.scene_events.subscribe()).filter_map(
+            move |message| match message {
+                Ok(event) if event_scene_id(&event) == id => serde_json::to_string(&event)
+                    .ok()
+                    .map(|data| Ok::<Event, Infallible>(Event::default().data(data))),
+                _ => None,
+            },
+        );
     Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
 }
 
@@ -535,7 +540,11 @@ async fn archive_scene_star(
 ) -> Option<String> {
     let request = gallery_request_for_scene_star(request_id, source, star, inputs);
     let texture = crate::gallery::texture_for(&request).await;
-    state.gallery.create(request, texture).ok().map(|record| record.id)
+    state
+        .gallery
+        .create(request, texture)
+        .ok()
+        .map(|record| record.id)
 }
 
 pub async fn generate_scene_stars(
@@ -565,7 +574,8 @@ pub async fn generate_scene_stars(
         g_mag: scene.g_mag,
         seed,
     })
-    .await;
+    .await
+    .map_err(inference_unavailable)?;
     let mut next_id = next_star_id(&scene);
     let mut created = Vec::new();
     for index in 0..count as usize {
@@ -625,12 +635,19 @@ pub async fn create_scene_star(
             .gallery
             .get(gallery_id)
             .map(|record| record.star)
-            .ok_or_else(|| (StatusCode::NOT_FOUND, format!("Gallery star {gallery_id} not found")))?
+            .ok_or_else(|| {
+                (
+                    StatusCode::NOT_FOUND,
+                    format!("Gallery star {gallery_id} not found"),
+                )
+            })?
     } else {
-        request
-            .star
-            .clone()
-            .ok_or_else(|| (StatusCode::BAD_REQUEST, "star or gallery_id is required".into()))?
+        request.star.clone().ok_or_else(|| {
+            (
+                StatusCode::BAD_REQUEST,
+                "star or gallery_id is required".into(),
+            )
+        })?
     };
     star.id = next_star_id(&scene);
     let inputs = request
@@ -678,13 +695,27 @@ pub async fn update_scene_star(
         .iter_mut()
         .find(|star| star.id == star_id)
         .ok_or_else(|| (StatusCode::NOT_FOUND, format!("Star {star_id} not found")))?;
-    if let Some(value) = update.name { star.name = value; }
-    if let Some(value) = update.description { star.description = value; }
-    if let Some(value) = update.type_hint { star.type_hint = value; }
-    if let Some(value) = update.temperature_k { star.temperature_k = value; }
-    if let Some(value) = update.radius { star.radius = value; }
-    if let Some(value) = update.mass { star.mass = value; }
-    if let Some(value) = update.luminosity { star.luminosity = value; }
+    if let Some(value) = update.name {
+        star.name = value;
+    }
+    if let Some(value) = update.description {
+        star.description = value;
+    }
+    if let Some(value) = update.type_hint {
+        star.type_hint = value;
+    }
+    if let Some(value) = update.temperature_k {
+        star.temperature_k = value;
+    }
+    if let Some(value) = update.radius {
+        star.radius = value;
+    }
+    if let Some(value) = update.mass {
+        star.mass = value;
+    }
+    if let Some(value) = update.luminosity {
+        star.luminosity = value;
+    }
     let updated = star.clone();
     state
         .scenes
@@ -713,7 +744,10 @@ pub async fn delete_scene_star(
     if state.scenes.insert(scene).await.is_err() {
         return StatusCode::INTERNAL_SERVER_ERROR;
     }
-    let _ = state.scene_events.send(SceneEvent::StarRemoved { scene_id: id, star_id });
+    let _ = state.scene_events.send(SceneEvent::StarRemoved {
+        scene_id: id,
+        star_id,
+    });
     StatusCode::NO_CONTENT
 }
 
@@ -732,7 +766,9 @@ pub async fn clear_scene(
     if state.scenes.insert(scene).await.is_err() {
         return StatusCode::INTERNAL_SERVER_ERROR;
     }
-    let _ = state.scene_events.send(SceneEvent::SceneCleared { scene_id: id });
+    let _ = state
+        .scene_events
+        .send(SceneEvent::SceneCleared { scene_id: id });
     StatusCode::NO_CONTENT
 }
 
@@ -762,13 +798,15 @@ async fn generate_initial_scene_stars(
         scene_bp_rp,
         scene_g_mag,
     )
-    .await;
+    .await
+    .map_err(|err| err.to_string())?;
 
-    let response_stars = compile_response_stars(&features, req.temperature).await;
+    let response_stars = compile_response_stars(&features, req.temperature)
+        .await
+        .map_err(|err| err.to_string())?;
 
     Ok((response_stars, scene_bp_rp, scene_g_mag))
 }
-
 
 #[cfg(test)]
 mod live_scene_tests {
@@ -806,11 +844,13 @@ mod live_scene_tests {
         assert!((back - g_mag).abs() < 1e-3, "got {back}");
     }
 
-
     fn temporary_directory() -> PathBuf {
         std::env::temp_dir().join(format!(
             "lunar-scene-store-{}",
-            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
         ))
     }
 
@@ -851,7 +891,9 @@ mod live_scene_tests {
 
     #[test]
     fn event_ids_are_scoped_to_their_scene() {
-        let event = SceneEvent::SceneCleared { scene_id: "scene-a".into() };
+        let event = SceneEvent::SceneCleared {
+            scene_id: "scene-a".into(),
+        };
         assert_eq!(event_scene_id(&event), "scene-a");
     }
 }

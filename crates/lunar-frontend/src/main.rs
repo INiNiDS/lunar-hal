@@ -2,9 +2,9 @@ use dioxus::prelude::*;
 
 mod assets;
 mod components;
-mod stellar_state;
 mod local_storage;
 mod runtime_config;
+mod stellar_state;
 
 use crate::stellar_state::use_provide_stellar_scene;
 use components::{About, Contact, Editor, HeroSection};

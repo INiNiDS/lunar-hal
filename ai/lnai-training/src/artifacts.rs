@@ -1,6 +1,9 @@
 use crate::spec::ModelKind;
 use lunar_utils::time::current_time_ms;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::io::Read;
+use std::path::{Component, Path};
 
 /// Version of the artifact manifest structure itself.
 pub const ARTIFACT_MANIFEST_VERSION: &str = "1.0.0";
@@ -18,8 +21,7 @@ where
 {
     let tmp = final_path.with_extension(tmp_ext);
     write(&tmp)?;
-    std::fs::rename(&tmp, final_path)
-        .map_err(|e| format!("publish {}: {e}", final_path.display()))
+    std::fs::rename(&tmp, final_path).map_err(|e| format!("publish {}: {e}", final_path.display()))
 }
 
 /// Top-level manifest for a trained model artifact.
@@ -119,12 +121,94 @@ impl ArtifactManifestV1 {
         dataset_version: &str,
         schema_hash: &str,
     ) -> bool {
-        &self.model_kind == model_kind
+        !norm_hash.is_empty()
+            && !dataset_id.is_empty()
+            && !dataset_version.is_empty()
+            && !schema_hash.is_empty()
+            && !self.git_revision.is_empty()
+            && self.git_revision != "unknown"
+            && &self.model_kind == model_kind
             && self.architecture_version == architecture_version
             && self.norm_hash == norm_hash
             && self.dataset_id == dataset_id
             && self.dataset_version == dataset_version
             && self.feature_schema_hash == schema_hash
+    }
+
+    /// Missing evidence for promotion. `verify_manifest_against_files` only
+    /// establishes file integrity, not dataset provenance or model quality.
+    pub fn release_blockers(&self) -> Vec<&'static str> {
+        let mut blockers = Vec::new();
+        if expected_feature_schema_hash(&self.model_kind)
+            .is_none_or(|expected| self.feature_schema_hash != expected)
+        {
+            blockers.push("feature_schema_hash");
+        }
+        if self.dataset_id.trim().is_empty() {
+            blockers.push("dataset_id");
+        }
+        if self.dataset_version.trim().is_empty() {
+            blockers.push("dataset_version");
+        }
+        if self.git_revision.trim().is_empty() || self.git_revision == "unknown" {
+            blockers.push("git_revision");
+        }
+        if !self.has_bound_spatial_holdout_evaluation() {
+            blockers.push("spatial_holdout_evaluation");
+        }
+        blockers
+    }
+
+    fn has_bound_spatial_holdout_evaluation(&self) -> bool {
+        let Some(holdout) = self
+            .evaluation_metrics
+            .as_ref()
+            .and_then(|metrics| metrics.get("spatial_holdout"))
+        else {
+            return false;
+        };
+        let matches_artifact = |field: &str, expected: &str| {
+            holdout.get(field).and_then(serde_json::Value::as_str) == Some(expected)
+        };
+        let report_file = holdout
+            .get("report_file")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        let report_hash = holdout
+            .get("report_sha256")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        holdout.get("passed").and_then(serde_json::Value::as_bool) == Some(true)
+            && matches_artifact("model_hash", &self.model_hash)
+            && matches_artifact("norm_hash", &self.norm_hash)
+            && matches_artifact("dataset_id", &self.dataset_id)
+            && matches_artifact("dataset_version", &self.dataset_version)
+            && matches_artifact("feature_schema_hash", &self.feature_schema_hash)
+            && is_safe_relative_report_path(report_file)
+            && report_hash.len() == 64
+            && report_hash.bytes().all(|byte| byte.is_ascii_hexdigit())
+    }
+}
+
+fn is_safe_relative_report_path(path: &str) -> bool {
+    !path.is_empty()
+        && Path::new(path)
+            .components()
+            .all(|component| matches!(component, Component::Normal(_)))
+}
+
+/// Stable serving feature identifiers. These values pin both feature meaning
+/// and order; a non-empty but unrelated identifier is not sufficient.
+pub fn expected_feature_schema_hash(model_kind: &ModelKind) -> Option<&'static str> {
+    match model_kind {
+        ModelKind::Pinn => Some("pinn-input-x,y,z,bp_rp,g_mag-v1"),
+        ModelKind::GnnKinematics => {
+            Some("gnn-serving-pinn-derived-log_teff,log_rad,log_mass,log_lum,mg,x,y,z-v1")
+        }
+        ModelKind::Siren => Some("siren-serving-uv,bp_rp,m_g,log_teff-v1"),
+        // Localization remains experimental until a versioned serving
+        // schema and trained artifact are published.
+        ModelKind::GnnLocalization => None,
     }
 }
 
@@ -221,9 +305,80 @@ pub fn architecture_version(model: &ModelKind) -> &'static str {
 
 /// SHA-256 of a file's bytes as lowercase hex.
 pub fn sha256_file_hex(path: &std::path::Path) -> Result<String, ArtifactError> {
-    let bytes = std::fs::read(path)
+    let mut file = std::fs::File::open(path)
         .map_err(|_| ArtifactError::FileNotFound(format!("missing file: {}", path.display())))?;
-    Ok(crate::e2e::sha256_hex(&bytes))
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let read = file.read(&mut buffer).map_err(|error| {
+            ArtifactError::ChecksumMismatch(format!("read {} for hashing: {error}", path.display()))
+        })?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
+}
+
+/// Fingerprints the exact training input together with any sibling canonical
+/// dataset/view manifests. This remains content-addressed when a manually
+/// edited parquet no longer agrees with its older manifest checksum.
+pub fn dataset_fingerprint(path: &std::path::Path) -> Result<String, ArtifactError> {
+    let input_hash = sha256_file_hex(path)?;
+    let mut identity = format!("dataset-input-v1\nfile_sha256:{input_hash}\n");
+    if let Some(parent) = path.parent() {
+        for name in ["manifest.json", "views_manifest.json"] {
+            let manifest_path = parent.join(name);
+            if manifest_path.is_file() {
+                identity.push_str(&format!(
+                    "{name}_sha256:{}\n",
+                    sha256_file_hex(&manifest_path)?
+                ));
+            }
+        }
+    }
+    Ok(crate::e2e::sha256_hex(identity.as_bytes()))
+}
+
+/// Resolves the build revision at runtime for workers built without an
+/// explicit compile-time revision, and marks tracked local modifications.
+pub fn current_git_revision() -> String {
+    let revision = option_env!("LUNAR_AI_GIT_REV")
+        .filter(|revision| !revision.trim().is_empty() && *revision != "unknown")
+        .map(str::to_string)
+        .or_else(|| {
+            std::env::var("LUNAR_AI_GIT_REV")
+                .ok()
+                .filter(|revision| !revision.trim().is_empty() && revision != "unknown")
+        })
+        .or_else(|| {
+            std::process::Command::new("git")
+                .args(["rev-parse", "--verify", "HEAD"])
+                .output()
+                .ok()
+                .filter(|output| output.status.success())
+                .and_then(|output| String::from_utf8(output.stdout).ok())
+                .map(|revision| revision.trim().to_string())
+                .filter(|revision| !revision.is_empty())
+        });
+    let Some(mut revision) = revision else {
+        return "unknown".to_string();
+    };
+    let has_tracked_changes = std::process::Command::new("git")
+        .args(["status", "--porcelain", "--untracked-files=no"])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .is_some_and(|output| !output.stdout.is_empty());
+    if has_tracked_changes && !revision.ends_with("-dirty") {
+        revision.push_str("-dirty");
+    }
+    revision
 }
 
 /// On-disk rendering of a norm snapshot: pretty JSON. Every trainer must
@@ -269,11 +424,13 @@ pub fn manifest_file_name(model: &ModelKind) -> &'static str {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum RegistryStatus {
-    /// Manifest present, frozen version, matching arch, weight/norm hashes
-    /// reproduce from disk.
+    /// Manifest and artifact integrity are valid, and all release evidence
+    /// is present.
     Verified,
-    /// Weight + norm files present but no manifest: servable, provenance
-    /// unverified (pre-Stage-6 deployments).
+    /// File integrity is valid, but required provenance or evaluation
+    /// evidence is missing; serving and promotion must refuse this bundle.
+    ReleaseBlocked(Vec<String>),
+    /// Weight + norm files present but no manifest; not safe to serve.
     LegacyUnverified,
     /// Entry found but failed validation; the reason is carried along and
     /// serving/reload paths must refuse it.
@@ -293,6 +450,19 @@ pub struct RegisteredArtifact {
     pub status: RegistryStatus,
 }
 
+fn release_status(manifest: &ArtifactManifestV1) -> RegistryStatus {
+    let blockers: Vec<String> = manifest
+        .release_blockers()
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+    if blockers.is_empty() {
+        RegistryStatus::Verified
+    } else {
+        RegistryStatus::ReleaseBlocked(blockers)
+    }
+}
+
 /// Loads `dir/artifact.json` and verifies it against itself: frozen
 /// manifest version, expected architecture line, and weight/norm SHA-256
 /// reproducing from the sibling files.
@@ -304,6 +474,7 @@ pub fn discover_bundle(dir: &std::path::Path) -> Result<RegisteredArtifact, Arti
         .map_err(|e| ArtifactError::DeserializationError(e.to_string()))?;
     verify_manifest_against_files(dir, &manifest)?;
     let (weight_path, norm_path) = bundle_file_paths(dir, &manifest.model_kind);
+    let status = release_status(&manifest);
     Ok(RegisteredArtifact {
         kind: manifest.model_kind.clone(),
         dir: dir.display().to_string(),
@@ -316,7 +487,7 @@ pub fn discover_bundle(dir: &std::path::Path) -> Result<RegisteredArtifact, Arti
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_default(),
         manifest: Some(manifest),
-        status: RegistryStatus::Verified,
+        status,
     })
 }
 
@@ -373,6 +544,99 @@ pub fn verify_manifest_against_files(
                 path.display()
             )));
         }
+    }
+    verify_spatial_holdout_report(dir, manifest)?;
+    Ok(())
+}
+
+fn verify_spatial_holdout_report(
+    dir: &Path,
+    manifest: &ArtifactManifestV1,
+) -> Result<(), ArtifactError> {
+    let Some(holdout) = manifest
+        .evaluation_metrics
+        .as_ref()
+        .and_then(|metrics| metrics.get("spatial_holdout"))
+    else {
+        return Ok(());
+    };
+    if holdout.get("passed").and_then(serde_json::Value::as_bool) != Some(true) {
+        return Ok(());
+    }
+    let report_file = holdout
+        .get("report_file")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    if !is_safe_relative_report_path(report_file) {
+        return Err(ArtifactError::IncompatibleArchitecture(
+            "spatial holdout report path must be relative to the artifact directory".into(),
+        ));
+    }
+    let root = dir
+        .canonicalize()
+        .map_err(|error| ArtifactError::FileNotFound(format!("artifact directory: {error}")))?;
+    let report_path = dir.join(report_file);
+    let report_path = report_path.canonicalize().map_err(|error| {
+        ArtifactError::FileNotFound(format!(
+            "spatial holdout report {}: {error}",
+            report_path.display()
+        ))
+    })?;
+    if !report_path.starts_with(&root) || !report_path.is_file() {
+        return Err(ArtifactError::IncompatibleArchitecture(
+            "spatial holdout report must be a regular file inside the artifact directory".into(),
+        ));
+    }
+    let report_hash = holdout
+        .get("report_sha256")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    let report_bytes = std::fs::read(&report_path).map_err(|error| {
+        ArtifactError::FileNotFound(format!("{}: {error}", report_path.display()))
+    })?;
+    let actual_hash = crate::e2e::sha256_hex(&report_bytes);
+    if actual_hash != report_hash {
+        return Err(ArtifactError::ChecksumMismatch(format!(
+            "spatial holdout report {}: manifest {report_hash}, actual {actual_hash}",
+            report_path.display()
+        )));
+    }
+    let report: serde_json::Value = serde_json::from_slice(&report_bytes)
+        .map_err(|error| ArtifactError::DeserializationError(error.to_string()))?;
+    let report_kind = serde_json::to_value(&manifest.model_kind)
+        .map_err(|error| ArtifactError::DeserializationError(error.to_string()))?;
+    let bound = report.get("passed").and_then(serde_json::Value::as_bool) == Some(true)
+        && report
+            .get("gate_version")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|version| !version.trim().is_empty())
+        && report
+            .get("metrics")
+            .and_then(serde_json::Value::as_object)
+            .is_some_and(|metrics| !metrics.is_empty())
+        && report.get("model_kind") == Some(&report_kind)
+        && report
+            .get("architecture_version")
+            .and_then(serde_json::Value::as_str)
+            == Some(manifest.architecture_version.as_str())
+        && report.get("model_hash").and_then(serde_json::Value::as_str)
+            == Some(manifest.model_hash.as_str())
+        && report.get("norm_hash").and_then(serde_json::Value::as_str)
+            == Some(manifest.norm_hash.as_str())
+        && report.get("dataset_id").and_then(serde_json::Value::as_str)
+            == Some(manifest.dataset_id.as_str())
+        && report
+            .get("dataset_version")
+            .and_then(serde_json::Value::as_str)
+            == Some(manifest.dataset_version.as_str())
+        && report
+            .get("feature_schema_hash")
+            .and_then(serde_json::Value::as_str)
+            == Some(manifest.feature_schema_hash.as_str());
+    if !bound {
+        return Err(ArtifactError::IncompatibleDataset(
+            "spatial holdout report does not bind a passing result to this artifact".into(),
+        ));
     }
     Ok(())
 }
@@ -437,17 +701,26 @@ pub fn scan_model_registry(models_dir: &std::path::Path) -> Vec<RegisteredArtifa
                         .map_err(|e| ArtifactError::DeserializationError(e.to_string()))
                 })
                 .and_then(|manifest| {
+                    if &manifest.model_kind != &kind {
+                        return Err(ArtifactError::IncompatibleArchitecture(format!(
+                            "manifest kind {:?} != registry kind {:?}",
+                            manifest.model_kind, kind
+                        )));
+                    }
                     verify_manifest_against_files(models_dir, &manifest)?;
                     Ok(manifest)
                 }) {
-                Ok(manifest) => entries.push(RegisteredArtifact {
-                    kind: kind.clone(),
-                    dir: models_dir.display().to_string(),
-                    weight_file: weight_file_name(&kind).to_string(),
-                    norm_file: norm_file_name(&kind).to_string(),
-                    manifest: Some(manifest),
-                    status: RegistryStatus::Verified,
-                }),
+                Ok(manifest) => {
+                    let status = release_status(&manifest);
+                    entries.push(RegisteredArtifact {
+                        kind: kind.clone(),
+                        dir: models_dir.display().to_string(),
+                        weight_file: weight_file_name(&kind).to_string(),
+                        norm_file: norm_file_name(&kind).to_string(),
+                        manifest: Some(manifest),
+                        status,
+                    });
+                }
                 Err(err) => entries.push(RegisteredArtifact {
                     kind: kind.clone(),
                     dir: models_dir.display().to_string(),
@@ -462,11 +735,9 @@ pub fn scan_model_registry(models_dir: &std::path::Path) -> Vec<RegisteredArtifa
         let has_files = models_dir.join(weight_file_name(&kind)).exists()
             && models_dir.join(norm_file_name(&kind)).exists();
         if has_files
-            && !entries.iter().any(|e| {
-                e.kind == kind
-                    && e.status == RegistryStatus::Verified
-                    && e.dir == models_dir.display().to_string()
-            })
+            && !entries
+                .iter()
+                .any(|e| e.kind == kind && e.dir == models_dir.display().to_string())
         {
             entries.push(RegisteredArtifact {
                 kind: kind.clone(),
@@ -525,19 +796,35 @@ mod tests {
     use crate::spec::ModelKind;
 
     fn sample_manifest(model_kind: ModelKind) -> ArtifactManifestV1 {
-        ArtifactManifestV1::new(
+        let report_file = format!("{}_spatial_holdout_report.json", model_kind.slug());
+        let schema_hash = expected_feature_schema_hash(&model_kind)
+            .unwrap_or("gnn-localization-unreleased-schema-v1");
+        let mut manifest = ArtifactManifestV1::new(
             model_kind,
             "gnn-loc-v1".into(),
             "model-hash".into(),
             "norm-hash".into(),
-            "schema-hash".into(),
+            schema_hash.into(),
             "gaia_dr3".into(),
             "manifest-v1".into(),
             42,
             serde_json::json!({ "epochs": 120 }),
             "git-rev".into(),
             "cuda:0".into(),
-        )
+        );
+        manifest.evaluation_metrics = Some(serde_json::json!({
+            "spatial_holdout": {
+                "passed": true,
+                "model_hash": manifest.model_hash.clone(),
+                "norm_hash": manifest.norm_hash.clone(),
+                "dataset_id": manifest.dataset_id.clone(),
+                "dataset_version": manifest.dataset_version.clone(),
+                "feature_schema_hash": manifest.feature_schema_hash.clone(),
+                "report_file": report_file,
+                "report_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+            }
+        }));
+        manifest
     }
 
     #[test]
@@ -551,6 +838,7 @@ mod tests {
     #[test]
     fn compatibility_requires_model_norm_schema_and_dataset_match() {
         let manifest = sample_manifest(ModelKind::GnnLocalization);
+        let schema_hash = manifest.feature_schema_hash.clone();
         let ok = |m: &ArtifactManifestV1| {
             m.is_compatible_with(
                 &ModelKind::GnnLocalization,
@@ -558,7 +846,7 @@ mod tests {
                 "norm-hash",
                 "gaia_dr3",
                 "manifest-v1",
-                "schema-hash",
+                &schema_hash,
             )
         };
         assert!(ok(&manifest), "identical context must be compatible");
@@ -582,6 +870,147 @@ mod tests {
         let mut mismatched = manifest;
         mismatched.architecture_version = "gnn-loc-v2".into();
         assert!(!ok(&mismatched), "architecture version must participate");
+
+        let mut incomplete = sample_manifest(ModelKind::GnnLocalization);
+        incomplete.dataset_version.clear();
+        assert!(
+            !incomplete.is_compatible_with(
+                &ModelKind::GnnLocalization,
+                "gnn-loc-v1",
+                "norm-hash",
+                "gaia_dr3",
+                "",
+                &schema_hash
+            ),
+            "matching empty provenance must not be compatible"
+        );
+    }
+
+    #[test]
+    fn file_integrity_does_not_certify_model_quality() {
+        let mut manifest = sample_manifest(ModelKind::Pinn);
+        manifest.dataset_version.clear();
+        manifest.git_revision = "unknown".into();
+        manifest.evaluation_metrics = Some(serde_json::json!({"best_val_loss": 0.1}));
+        assert!(manifest.release_blockers().contains(&"dataset_version"));
+        assert!(manifest.release_blockers().contains(&"git_revision"));
+        assert!(
+            manifest
+                .release_blockers()
+                .contains(&"spatial_holdout_evaluation")
+        );
+    }
+
+    #[test]
+    fn spatial_holdout_must_explicitly_pass_before_release() {
+        let mut manifest = sample_manifest(ModelKind::Pinn);
+        manifest.evaluation_metrics = Some(serde_json::json!({
+            "spatial_holdout": {
+                "passed": false,
+                "model_hash": manifest.model_hash.clone(),
+                "norm_hash": manifest.norm_hash.clone(),
+                "dataset_id": manifest.dataset_id.clone(),
+                "dataset_version": manifest.dataset_version.clone(),
+                "feature_schema_hash": manifest.feature_schema_hash.clone(),
+                "report_file": "spatial_holdout_report.json",
+                "report_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+            }
+        }));
+        assert!(
+            manifest
+                .release_blockers()
+                .contains(&"spatial_holdout_evaluation")
+        );
+
+        manifest.evaluation_metrics = Some(serde_json::json!({
+            "spatial_holdout": {
+                "passed": true,
+                "model_hash": manifest.model_hash.clone(),
+                "norm_hash": manifest.norm_hash.clone(),
+                "dataset_id": manifest.dataset_id.clone(),
+                "dataset_version": manifest.dataset_version.clone(),
+                "feature_schema_hash": manifest.feature_schema_hash.clone(),
+                "report_file": "spatial_holdout_report.json",
+                "report_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+            }
+        }));
+        assert!(
+            !manifest
+                .release_blockers()
+                .contains(&"spatial_holdout_evaluation")
+        );
+    }
+
+    #[test]
+    fn spatial_holdout_evaluation_must_bind_to_this_artifact() {
+        let mut manifest = sample_manifest(ModelKind::Pinn);
+        manifest.evaluation_metrics.as_mut().unwrap()["spatial_holdout"]["model_hash"] =
+            serde_json::Value::String("different-model-hash".into());
+        assert!(
+            manifest
+                .release_blockers()
+                .contains(&"spatial_holdout_evaluation")
+        );
+
+        manifest = sample_manifest(ModelKind::Pinn);
+        manifest.evaluation_metrics.as_mut().unwrap()["spatial_holdout"]["report_sha256"] =
+            serde_json::Value::String("not-a-sha256".into());
+        assert!(
+            manifest
+                .release_blockers()
+                .contains(&"spatial_holdout_evaluation")
+        );
+    }
+
+    #[test]
+    fn release_gate_rejects_unknown_feature_schema_ids() {
+        let mut manifest = sample_manifest(ModelKind::Pinn);
+        manifest.feature_schema_hash = "some-nonempty-but-unrelated-schema".into();
+        assert!(manifest.release_blockers().contains(&"feature_schema_hash"));
+
+        let localization = sample_manifest(ModelKind::GnnLocalization);
+        assert!(
+            localization
+                .release_blockers()
+                .contains(&"feature_schema_hash")
+        );
+    }
+
+    #[test]
+    fn integrity_valid_bundle_without_release_evidence_is_blocked() {
+        let root = tempfile::tempdir().expect("tmpdir");
+        let models = root.path();
+        std::fs::write(models.join(weight_file_name(&ModelKind::Pinn)), b"w").unwrap();
+        std::fs::write(models.join(norm_file_name(&ModelKind::Pinn)), b"n").unwrap();
+        let mut manifest = sample_manifest(ModelKind::Pinn);
+        manifest.architecture_version = "pinn-v1".into();
+        manifest.dataset_version.clear();
+        manifest.evaluation_metrics = None;
+        manifest.model_hash =
+            sha256_file_hex(&models.join(weight_file_name(&ModelKind::Pinn))).unwrap();
+        manifest.norm_hash =
+            sha256_file_hex(&models.join(norm_file_name(&ModelKind::Pinn))).unwrap();
+        std::fs::write(
+            models.join(manifest_file_name(&ModelKind::Pinn)),
+            serde_json::to_string_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+
+        let entries = scan_model_registry(models);
+        let entry = entries
+            .iter()
+            .find(|entry| entry.kind == ModelKind::Pinn)
+            .unwrap();
+        assert!(matches!(
+            &entry.status,
+            RegistryStatus::ReleaseBlocked(blockers)
+                if blockers.contains(&"dataset_version".to_string())
+                    && blockers.contains(&"spatial_holdout_evaluation".to_string())
+        ));
+        assert!(
+            entry.manifest.is_some(),
+            "hash-valid manifest remains inspectable"
+        );
     }
 
     #[test]
@@ -651,8 +1080,48 @@ mod tests {
             sha256_file_hex(&dir.join(weight_file_name(&manifest.model_kind))).unwrap();
         manifest.norm_hash =
             sha256_file_hex(&dir.join(norm_file_name(&manifest.model_kind))).unwrap();
+        {
+            let spatial = manifest
+                .evaluation_metrics
+                .as_mut()
+                .and_then(|metrics| metrics.get_mut("spatial_holdout"))
+                .unwrap();
+            spatial["model_hash"] = serde_json::Value::String(manifest.model_hash.clone());
+            spatial["norm_hash"] = serde_json::Value::String(manifest.norm_hash.clone());
+            spatial["dataset_version"] =
+                serde_json::Value::String(manifest.dataset_version.clone());
+            spatial["feature_schema_hash"] =
+                serde_json::Value::String(manifest.feature_schema_hash.clone());
+        }
+        write_spatial_holdout_report(dir, &mut manifest);
         write_artifact_bundle(dir, &manifest).expect("write bundle");
         manifest
+    }
+
+    fn write_spatial_holdout_report(dir: &std::path::Path, manifest: &mut ArtifactManifestV1) {
+        let report_file = format!("{}_spatial_holdout_report.json", manifest.model_kind.slug());
+        let report = serde_json::json!({
+            "passed": true,
+            "gate_version": "fixture-test-v1",
+            "model_kind": manifest.model_kind.clone(),
+            "architecture_version": manifest.architecture_version.clone(),
+            "model_hash": manifest.model_hash.clone(),
+            "norm_hash": manifest.norm_hash.clone(),
+            "dataset_id": manifest.dataset_id.clone(),
+            "dataset_version": manifest.dataset_version.clone(),
+            "feature_schema_hash": manifest.feature_schema_hash.clone(),
+            "metrics": { "fixture_metric": 0.0 }
+        });
+        let report_path = dir.join(&report_file);
+        std::fs::write(&report_path, serde_json::to_vec_pretty(&report).unwrap()).unwrap();
+        let report_hash = sha256_file_hex(&report_path).unwrap();
+        let spatial = manifest
+            .evaluation_metrics
+            .as_mut()
+            .and_then(|metrics| metrics.get_mut("spatial_holdout"))
+            .unwrap();
+        spatial["report_file"] = serde_json::Value::String(report_file);
+        spatial["report_sha256"] = serde_json::Value::String(report_hash);
     }
 
     #[test]
@@ -673,6 +1142,19 @@ mod tests {
         pinn.model_hash =
             sha256_file_hex(&models.join(weight_file_name(&ModelKind::Pinn))).unwrap();
         pinn.norm_hash = sha256_file_hex(&models.join(norm_file_name(&ModelKind::Pinn))).unwrap();
+        {
+            let spatial = pinn
+                .evaluation_metrics
+                .as_mut()
+                .and_then(|metrics| metrics.get_mut("spatial_holdout"))
+                .unwrap();
+            spatial["model_hash"] = serde_json::Value::String(pinn.model_hash.clone());
+            spatial["norm_hash"] = serde_json::Value::String(pinn.norm_hash.clone());
+            spatial["dataset_version"] = serde_json::Value::String(pinn.dataset_version.clone());
+            spatial["feature_schema_hash"] =
+                serde_json::Value::String(pinn.feature_schema_hash.clone());
+        }
+        write_spatial_holdout_report(models, &mut pinn);
         std::fs::write(
             models.join(manifest_file_name(&ModelKind::Pinn)),
             serde_json::to_string_pretty(&pinn).unwrap(),
@@ -729,6 +1211,24 @@ mod tests {
     }
 
     #[test]
+    fn registry_flags_missing_or_tampered_holdout_report_as_invalid() {
+        let root = tempfile::tempdir().expect("tmpdir");
+        let run = root.path().join("pinn-v1");
+        write_run_bundle(&run, ModelKind::Pinn, "pinn-v1");
+        let report_file = format!("{}_spatial_holdout_report.json", ModelKind::Pinn.slug());
+        std::fs::write(run.join(report_file), b"tampered report").unwrap();
+
+        let entries = scan_model_registry(root.path());
+        assert_eq!(entries.len(), 1);
+        assert!(
+            matches!(entries[0].status, RegistryStatus::Invalid(_)),
+            "tampered quality report must invalidate release evidence: {:?}",
+            entries[0].status
+        );
+        assert!(entries[0].manifest.is_none());
+    }
+
+    #[test]
     fn registry_on_missing_dir_is_empty() {
         let entries = scan_model_registry(std::path::Path::new("/nonexistent-models-dir-xyz"));
         assert!(entries.is_empty());
@@ -773,6 +1273,31 @@ mod tests {
             sha256_file_hex(&path).unwrap(),
             hash_norm_rendered(&rendered)
         );
+    }
+
+    #[test]
+    fn dataset_fingerprint_tracks_input_bytes_and_sibling_manifests() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock")
+            .as_nanos();
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target")
+            .join(format!("dataset-fingerprint-{nonce}"));
+        std::fs::create_dir_all(&root).unwrap();
+        let input = root.join("view_pinn.parquet");
+        std::fs::write(&input, b"input-v1").unwrap();
+        let first = dataset_fingerprint(&input).unwrap();
+        std::fs::write(root.join("views_manifest.json"), b"manifest-v1").unwrap();
+        let with_manifest = dataset_fingerprint(&input).unwrap();
+        assert_ne!(first, with_manifest);
+        std::fs::write(&input, b"input-v2").unwrap();
+        let with_new_input = dataset_fingerprint(&input).unwrap();
+        assert_ne!(with_manifest, with_new_input);
+        std::fs::write(root.join("manifest.json"), b"canonical-manifest-v1").unwrap();
+        let with_both_manifests = dataset_fingerprint(&input).unwrap();
+        assert_ne!(with_new_input, with_both_manifests);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

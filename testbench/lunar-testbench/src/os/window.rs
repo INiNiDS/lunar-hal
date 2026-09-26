@@ -9,14 +9,10 @@ pub fn Window(win: WindowState) -> Element {
     let mut os = use_os_state();
 
     let id = win.id;
-    let mut style = format!(
+    let style = format!(
         "left: {}px; top: {}px; width: {}px; height: {}px; z-index: {};",
         win.x, win.y, win.width, win.height, win.z
     );
-
-    if win.minimized {
-        style.push_str(" display: none; visibility: hidden; pointer-events: none;");
-    }
 
     let title = win.title.clone();
     let app_id = win.app_id.clone();
@@ -33,7 +29,7 @@ pub fn Window(win: WindowState) -> Element {
             style: "{style}",
             "data-app-id": "{app_id}",
             "data-testid": "webos-window",
-            aria_hidden: if win.minimized { "true" } else { "false" },
+            aria_hidden: "false",
             onmousedown: move |_| os.focus_window(id),
 
             div {
