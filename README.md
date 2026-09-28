@@ -111,7 +111,14 @@ Detailed model documentation, specifications, and weight checksums can be found 
 
 ## 🚀 Quick Start Guide
 
-### 1. Automated Setup
+### 1. Clone the Repository
+
+```bash
+git clone https://github.com/INiNiDS/lunar-hal.git
+cd lunar-hal
+```
+
+### 2. Automated Setup
 
 Run the installation script to verify your toolchain and initialize workspace dependencies:
 
@@ -120,7 +127,7 @@ chmod +x install.sh
 ./install.sh
 ```
 
-### 2. Managed Multi-Service Launch
+### 3. Managed Multi-Service Launch
 
 Launch all services simultaneously with unified logs and automatic health-checking:
 
@@ -133,7 +140,7 @@ This starts:
 - **Web Frontend:** `http://127.0.0.1:8080`
 - **Management API:** `http://127.0.0.1:16181`
 
-### 3. Individual Service Execution
+### 4. Individual Service Execution
 
 To run services individually in dedicated terminals:
 
