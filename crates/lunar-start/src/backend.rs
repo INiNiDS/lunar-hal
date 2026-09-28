@@ -525,14 +525,27 @@ fn service_command(kind: &ServiceKind) -> String {
     }
 }
 
-/// Builds command for executing a precompiled release binary located at `target/release/<name>`.
+/// Resolves precompiled binary path: prefers `target/release/<name>`, falls back to `target/debug/<name>`.
+pub fn resolve_binary_path(ws: &Path, name: &str) -> PathBuf {
+    let release_bin = ws.join("target").join("release").join(name);
+    let debug_bin = ws.join("target").join("debug").join(name);
+    if release_bin.exists() {
+        release_bin
+    } else if debug_bin.exists() {
+        debug_bin
+    } else {
+        release_bin
+    }
+}
+
+/// Builds command for executing a precompiled binary located in `target/release/` or `target/debug/`.
 pub fn build_binary_cmd(
     ws: &Path,
     name: &str,
     extra_args: &[String],
     env: &HashMap<String, String>,
 ) -> tokio::process::Command {
-    let bin = ws.join("target").join("release").join(name);
+    let bin = resolve_binary_path(ws, name);
     let mut cmd = tokio::process::Command::new(&bin);
     cmd.args(extra_args)
         .envs(env)
@@ -543,16 +556,39 @@ pub fn build_binary_cmd(
     cmd
 }
 
-/// Spawns a precompiled release binary.
+/// Spawns a precompiled binary (release or debug), or falls back to `cargo run` if not yet built.
 fn spawn_binary(
     ws: &Path,
     name: &str,
     extra_args: &[String],
     env: &HashMap<String, String>,
 ) -> Result<Child> {
-    build_binary_cmd(ws, name, extra_args, env)
-        .spawn()
-        .with_context(|| format!("failed to spawn binary at target/release/{name}"))
+    let release_bin = ws.join("target").join("release").join(name);
+    let debug_bin = ws.join("target").join("debug").join(name);
+
+    if !release_bin.exists() && !debug_bin.exists() {
+        eprintln!(
+            "[lns] [{name}] Precompiled binary not found in target/release or target/debug; compiling and launching via cargo run..."
+        );
+        return spawn_cargo_run(ws, name, &[], &[], extra_args, env);
+    }
+
+    let bin = if release_bin.exists() {
+        release_bin
+    } else {
+        debug_bin
+    };
+
+    let mut cmd = tokio::process::Command::new(&bin);
+    cmd.args(extra_args)
+        .envs(env)
+        .current_dir(ws)
+        .kill_on_drop(true)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    cmd.spawn()
+        .with_context(|| format!("failed to spawn binary at {}", bin.display()))
 }
 
 /// Builds command for `cargo run --bin <name> <cargo_args> -- <extra_args>`.
