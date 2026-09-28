@@ -120,12 +120,19 @@ cd lunar-hal
 
 ### 2. Automated Setup
 
-Run the installation script to verify your toolchain and initialize workspace dependencies:
+Run the installation script to verify your toolchain, initialize directories, and compile core binaries in release mode:
 
+**Linux / macOS:**
 ```bash
-chmod +x install.sh
 ./install.sh
 ```
+*(If needed, ensure execution permission with `chmod +x install.sh`)*
+
+**Windows (PowerShell):**
+```powershell
+.\install.ps1
+```
+*(If PowerShell script execution is restricted on Windows, run `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass` first).*
 
 ### 3. Managed Multi-Service Launch
 
