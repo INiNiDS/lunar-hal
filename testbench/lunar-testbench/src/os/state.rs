@@ -267,25 +267,31 @@ impl OsState {
     }
 
     pub fn register_instance_snapshot(&mut self, instance_id: &str, snapshot: serde_json::Value) {
+        if self.snapshot_providers.peek().get(instance_id) == Some(&snapshot) {
+            return;
+        }
         let mut map = self.snapshot_providers.write();
         map.insert(instance_id.to_string(), snapshot);
     }
 
     pub fn get_instance_snapshot(&self, instance_id: &str) -> Option<serde_json::Value> {
-        self.snapshot_providers.read().get(instance_id).cloned()
+        self.snapshot_providers.peek().get(instance_id).cloned()
     }
 
     pub fn register_app_snapshot(&mut self, app_id: &str, snapshot: serde_json::Value) {
+        if self.snapshot_providers.peek().get(app_id) == Some(&snapshot) {
+            return;
+        }
         let mut map = self.snapshot_providers.write();
         map.insert(app_id.to_string(), snapshot);
     }
 
     pub fn get_app_snapshot(&self, app_id: &str) -> Option<serde_json::Value> {
-        self.snapshot_providers.read().get(app_id).cloned()
+        self.snapshot_providers.peek().get(app_id).cloned()
     }
 
     pub fn get_snapshot(&self, instance_id: &str, app_id: &str) -> Option<serde_json::Value> {
-        let providers = self.snapshot_providers.read();
+        let providers = self.snapshot_providers.peek();
         providers
             .get(instance_id)
             .cloned()

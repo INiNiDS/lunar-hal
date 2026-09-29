@@ -44,15 +44,17 @@ pub fn LogWindow(service: String) -> Element {
     let scroll_offset = use_signal(|| initial.scroll_offset);
     let app_id = format!("log:{service}");
 
+    let instance_id = use_window_instance_id();
     {
         let svc_for_snapshot = service.clone();
+        let inst_id = instance_id.clone();
         use_effect(move || {
             let snap = LogWindowSnapshot {
                 service: svc_for_snapshot.clone(),
                 scroll_offset: scroll_offset(),
             };
-            if let Some(inst_id) = use_window_instance_id() {
-                os.register_instance_snapshot(&inst_id, snap.capture_snapshot());
+            if let Some(id) = &inst_id {
+                os.register_instance_snapshot(id, snap.capture_snapshot());
             }
             os.register_app_snapshot(&app_id, snap.capture_snapshot());
         });
@@ -60,23 +62,28 @@ pub fn LogWindow(service: String) -> Element {
 
     let svc = service.clone();
 
-    use_effect(move || {
+    use_future(move || {
         let svc = svc.clone();
-        spawn(async move {
+        async move {
             let already_has_logs = os
                 .logs
-                .read()
+                .peek()
                 .get(&svc)
                 .map(|v| !v.is_empty())
                 .unwrap_or(false);
             if !already_has_logs {
                 if let Ok(tail) = api::service_log_tail(&svc, 200).await {
-                    os.logs.with_mut(|logs| {
-                        logs.entry(svc.clone()).or_default().extend(tail);
-                    });
+                    if !tail.is_empty() {
+                        os.logs.with_mut(|logs| {
+                            let buf = logs.entry(svc.clone()).or_default();
+                            if buf.is_empty() {
+                                *buf = tail;
+                            }
+                        });
+                    }
                 }
             }
-        });
+        }
     });
 
     let lines = os.logs.read().get(&service).cloned().unwrap_or_default();
