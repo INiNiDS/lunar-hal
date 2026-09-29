@@ -1,5 +1,5 @@
 # Stage 1: Build Rust backend binaries and WebAssembly frontend
-FROM rust:1.85-slim-bookworm AS builder
+FROM rust:bookworm AS builder
 
 WORKDIR /app
 
@@ -11,7 +11,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     tar \
     && rm -rf /var/lib/apt/lists/*
 
-RUN rustup target add wasm32-unknown-unknown
+RUN rustup update stable && rustup default stable && rustup target add wasm32-unknown-unknown
 
 # Download prebuilt dx CLI for ultra-fast compilation
 RUN curl -sL https://github.com/DioxusLabs/dioxus/releases/download/v0.7.10/dx-x86_64-unknown-linux-gnu.tar.gz | tar -xz -C /usr/local/bin && chmod +x /usr/local/bin/dx
