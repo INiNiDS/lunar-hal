@@ -8,6 +8,26 @@ use serde_json::Value;
 
 use lunar_utils::env::{get_start_backend_url, get_testbench_url, get_url};
 
+pub fn current_backend_url() -> String {
+    #[cfg(target_arch = "wasm32")]
+    if let Some(origin) = web_sys::window().and_then(|w| w.location().origin().ok()) {
+        if !origin.is_empty() && !origin.contains("localhost:16180") && !origin.contains("127.0.0.1:16180") {
+            return origin;
+        }
+    }
+    get_url()
+}
+
+pub fn current_start_backend_url() -> String {
+    #[cfg(target_arch = "wasm32")]
+    if let Some(origin) = web_sys::window().and_then(|w| w.location().origin().ok()) {
+        if !origin.is_empty() && !origin.contains("localhost:16180") && !origin.contains("127.0.0.1:16180") {
+            return origin;
+        }
+    }
+    get_start_backend_url()
+}
+
 fn err_to_string(e: impl std::fmt::Display) -> String {
     e.to_string()
 }
@@ -124,7 +144,7 @@ async fn decode_service_json<T: DeserializeOwned>(resp: Response) -> Result<T, S
 }
 
 async fn service_get<T: DeserializeOwned>(path: &str) -> Result<T, ServiceApiError> {
-    let url = format!("{}{path}", get_start_backend_url());
+    let url = format!("{}{path}", current_start_backend_url());
     let response = Request::get(&url).send().await.map_err(network_error)?;
     decode_service_json(response).await
 }
@@ -133,7 +153,7 @@ async fn service_put<B: Serialize, T: DeserializeOwned>(
     path: &str,
     body: &B,
 ) -> Result<T, ServiceApiError> {
-    let url = format!("{}{path}", get_start_backend_url());
+    let url = format!("{}{path}", current_start_backend_url());
     let response = Request::put(&url)
         .json(body)
         .map_err(network_error)?
@@ -147,7 +167,7 @@ async fn service_post<B: Serialize, T: DeserializeOwned>(
     path: &str,
     body: &B,
 ) -> Result<T, ServiceApiError> {
-    let url = format!("{}{path}", get_start_backend_url());
+    let url = format!("{}{path}", current_start_backend_url());
     let response = Request::post(&url)
         .json(body)
         .map_err(network_error)?
@@ -158,7 +178,7 @@ async fn service_post<B: Serialize, T: DeserializeOwned>(
 }
 
 async fn service_post_empty<T: DeserializeOwned>(path: &str) -> Result<T, ServiceApiError> {
-    let url = format!("{}{path}", get_start_backend_url());
+    let url = format!("{}{path}", current_start_backend_url());
     let response = Request::post(&url).send().await.map_err(network_error)?;
     decode_service_json(response).await
 }
@@ -452,23 +472,23 @@ pub async fn cancel_job(id: &str) -> Result<(), String> {
 
 /// List services managed by `lunar-start-backend` (testbench, testbench-backend, etc.).
 pub async fn list_start_services() -> Result<Vec<ServiceInfo>, String> {
-    get_json(&get_start_backend_url(), "/services").await
+    get_json(&current_start_backend_url(), "/services").await
 }
 
 /// Cheap liveness probe used to detect when `lunar-start-backend` itself has come online.
 pub async fn health() -> Result<HealthResponse, String> {
-    get_json(&get_start_backend_url(), "/health").await
+    get_json(&current_start_backend_url(), "/health").await
 }
 
 /// Static manifest of managed services (display metadata + dock app `provides`/`depends_on`).
 pub async fn services_meta() -> Result<Vec<ServiceMeta>, String> {
-    get_json(&get_start_backend_url(), "/services/meta").await
+    get_json(&current_start_backend_url(), "/services/meta").await
 }
 
 /// Last `tail` buffered log lines for a service, so a newly opened log window isn't empty.
 pub async fn service_log_tail(name: &str, tail: usize) -> Result<Vec<ServiceLogEvent>, String> {
     get_json(
-        &get_start_backend_url(),
+        &current_start_backend_url(),
         &format!("/services/{name}/logs?tail={tail}"),
     )
     .await
@@ -476,15 +496,15 @@ pub async fn service_log_tail(name: &str, tail: usize) -> Result<Vec<ServiceLogE
 
 /// Aggregated warn/error counts for a service, used for LED badges on the rack.
 pub async fn service_stats(name: &str) -> Result<ServiceStats, String> {
-    get_json(&get_start_backend_url(), &format!("/services/{name}/stats")).await
+    get_json(&current_start_backend_url(), &format!("/services/{name}/stats")).await
 }
 
 pub async fn start_all_services() -> Result<(), String> {
-    get_ok(&get_start_backend_url(), "/start").await
+    get_ok(&current_start_backend_url(), "/start").await
 }
 
 pub async fn stop_all_services() -> Result<(), String> {
-    get_ok(&get_start_backend_url(), "/stop").await
+    get_ok(&current_start_backend_url(), "/stop").await
 }
 
 pub async fn get_service_config_schema(name: &str) -> Result<ServiceConfigSchema, ServiceApiError> {
@@ -537,31 +557,31 @@ pub async fn restart_service(name: &str) -> Result<ServiceActionResponse, Servic
 
 /// SSE endpoint that streams `ServiceLogEvent`s for all services managed by `lunar-start-backend`.
 pub fn start_backend_logs_url() -> String {
-    format!("{}/logs", get_start_backend_url())
+    format!("{}/logs", current_start_backend_url())
 }
 
 pub async fn pinn_infer(body: &Value) -> Result<Value, String> {
-    post_json_value(&get_url(), "/pinn", body).await
+    post_json_value(&current_backend_url(), "/pinn", body).await
 }
 
 pub async fn gnn_infer(body: &Value) -> Result<Value, String> {
-    post_json_value(&get_url(), "/gnn", body).await
+    post_json_value(&current_backend_url(), "/gnn", body).await
 }
 
 pub async fn siren_texture(body: &Value) -> Result<Value, String> {
-    post_json_value(&get_url(), "/siren/texture", body).await
+    post_json_value(&current_backend_url(), "/siren/texture", body).await
 }
 
 pub async fn random_star(body: &Value) -> Result<Value, String> {
-    post_json_value(&get_url(), "/random_star", body).await
+    post_json_value(&current_backend_url(), "/random_star", body).await
 }
 
 pub async fn description(body: &Value) -> Result<Value, String> {
-    post_json_value(&get_url(), "/description", body).await
+    post_json_value(&current_backend_url(), "/description", body).await
 }
 
 pub async fn pipeline(body: &Value) -> Result<Value, String> {
-    post_json_value(&get_url(), "/pipeline", body).await
+    post_json_value(&current_backend_url(), "/pipeline", body).await
 }
 
 #[derive(serde::Deserialize, serde::Serialize, Debug, Clone, PartialEq)]
@@ -579,7 +599,7 @@ pub async fn pipeline_png(q: &PipelinePngQuery) -> Result<(Vec<u8>, u32, u32), S
         "/pipeline/png?x_pc={}&y_pc={}&z_pc={}&bp_rp={}&g_mag={}&size={}",
         q.x_pc, q.y_pc, q.z_pc, q.bp_rp, q.g_mag, q.size
     );
-    let url = format!("{}{}", get_url(), path);
+    let url = format!("{}{}", current_backend_url(), path);
     let resp = Request::get(&url).send().await.map_err(err_to_string)?;
     if !(200..300).contains(&resp.status()) {
         return Err(format!("HTTP {}", resp.status()));
@@ -603,7 +623,7 @@ pub async fn siren_png(q: &SirenPngQuery) -> Result<(Vec<u8>, u32, u32), String>
         "/siren/png?width={}&height={}&bp_rp={}&m_g={}&temperature_k={}",
         q.width, q.height, q.bp_rp, q.m_g, q.temperature_k
     );
-    let url = format!("{}{}", get_url(), path);
+    let url = format!("{}{}", current_backend_url(), path);
     let resp = Request::get(&url).send().await.map_err(err_to_string)?;
     if !(200..300).contains(&resp.status()) {
         return Err(format!("HTTP {}", resp.status()));
@@ -721,21 +741,21 @@ async fn post_ok<B: Serialize>(base: &str, path: &str, body: &B) -> Result<(), S
 
 /// Public backend base URL used by iframe-adjacent WebOS pages.
 pub fn stellar_backend_url() -> String {
-    get_url()
+    current_backend_url()
 }
 
 pub async fn list_star_scenes() -> Result<StarSceneListResponse, String> {
-    get_json(&get_url(), "/scenes").await
+    get_json(&current_backend_url(), "/scenes").await
 }
 
 pub async fn get_live_scene(id: &str) -> Result<LiveSceneSnapshot, String> {
-    get_json(&get_url(), &format!("/scenes/{id}")).await
+    get_json(&current_backend_url(), &format!("/scenes/{id}")).await
 }
 
 pub async fn create_star_scene(
     request: &CreateStarSceneRequest,
 ) -> Result<LiveSceneSnapshot, String> {
-    post_json(&get_url(), "/scenes/create", request).await
+    post_json(&current_backend_url(), "/scenes/create", request).await
 }
 
 pub async fn generate_scene_stars(
@@ -743,7 +763,7 @@ pub async fn generate_scene_stars(
     request: &GenerateSceneStarsRequest,
 ) -> Result<Vec<ResponseStar>, String> {
     post_json(
-        &get_url(),
+        &current_backend_url(),
         &format!("/scenes/{scene_id}/stars/generate"),
         request,
     )
@@ -754,7 +774,7 @@ pub async fn create_scene_star(
     scene_id: &str,
     request: &CreateSceneStarRequest,
 ) -> Result<ResponseStar, String> {
-    post_json(&get_url(), &format!("/scenes/{scene_id}/stars"), request).await
+    post_json(&current_backend_url(), &format!("/scenes/{scene_id}/stars"), request).await
 }
 
 pub async fn update_scene_star(
@@ -763,7 +783,7 @@ pub async fn update_scene_star(
     request: &UpdateSceneStarRequest,
 ) -> Result<ResponseStar, String> {
     patch_json(
-        &get_url(),
+        &current_backend_url(),
         &format!("/scenes/{scene_id}/stars/{star_id}"),
         request,
     )
@@ -771,11 +791,11 @@ pub async fn update_scene_star(
 }
 
 pub async fn delete_scene_star(scene_id: &str, star_id: u32) -> Result<(), String> {
-    delete_ok(&get_url(), &format!("/scenes/{scene_id}/stars/{star_id}")).await
+    delete_ok(&current_backend_url(), &format!("/scenes/{scene_id}/stars/{star_id}")).await
 }
 
 pub async fn clear_live_scene(scene_id: &str, request: &ClearSceneRequest) -> Result<(), String> {
-    post_ok(&get_url(), &format!("/scenes/{scene_id}/clear"), request).await
+    post_ok(&current_backend_url(), &format!("/scenes/{scene_id}/clear"), request).await
 }
 
 pub async fn list_gallery_stars(
@@ -794,36 +814,36 @@ pub async fn list_gallery_stars(
     if let Some(query) = query.filter(|value| !value.is_empty()) {
         params.push(format!("query={}", urlencoding(query)));
     }
-    get_json(&get_url(), &format!("/gallery/stars?{}", params.join("&"))).await
+    get_json(&current_backend_url(), &format!("/gallery/stars?{}", params.join("&"))).await
 }
 
 pub async fn create_gallery_star(
     request: &CreateGalleryStarRequest,
 ) -> Result<GalleryStar, String> {
-    post_json(&get_url(), "/gallery/stars", request).await
+    post_json(&current_backend_url(), "/gallery/stars", request).await
 }
 
 pub async fn get_gallery_star(id: &str) -> Result<GalleryStar, String> {
-    get_json(&get_url(), &format!("/gallery/stars/{id}")).await
+    get_json(&current_backend_url(), &format!("/gallery/stars/{id}")).await
 }
 
 pub async fn update_gallery_star(
     id: &str,
     request: &UpdateGalleryStarRequest,
 ) -> Result<GalleryStar, String> {
-    patch_json(&get_url(), &format!("/gallery/stars/{id}"), request).await
+    patch_json(&current_backend_url(), &format!("/gallery/stars/{id}"), request).await
 }
 
 pub async fn delete_gallery_star(id: &str) -> Result<(), String> {
-    delete_ok(&get_url(), &format!("/gallery/stars/{id}")).await
+    delete_ok(&current_backend_url(), &format!("/gallery/stars/{id}")).await
 }
 
 pub fn gallery_texture_url(id: &str) -> String {
-    format!("{}/gallery/stars/{id}/texture.png", get_url())
+    format!("{}/gallery/stars/{id}/texture.png", current_backend_url())
 }
 
 pub fn gallery_thumbnail_url(id: &str) -> String {
-    format!("{}/gallery/stars/{id}/thumbnail", get_url())
+    format!("{}/gallery/stars/{id}/thumbnail", current_backend_url())
 }
 
 pub fn read_png_dims(bytes: &[u8]) -> Option<(u32, u32)> {
