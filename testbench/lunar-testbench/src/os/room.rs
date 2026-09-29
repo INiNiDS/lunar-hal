@@ -45,6 +45,13 @@ pub fn Room() -> Element {
 
             div { class: "room-vignette pointer-events-none z-[25]" }
 
+            a {
+                href: "/",
+                class: "fixed top-3 left-4 z-40 flex items-center gap-2 rounded-full border border-white/10 bg-black/40 px-3.5 py-1.5 text-xs text-white/70 backdrop-blur-md transition-all hover:bg-white/10 hover:text-white",
+                title: "Return to Lunar Site",
+                "← Lunar Site"
+            }
+
             if matches!(phase, BootPhase::Ready) {
                 WindowManager {}
                 Dock {}

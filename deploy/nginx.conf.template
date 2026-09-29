@@ -25,7 +25,7 @@ server {
     }
 
     # lunar-backend neural network inference and data endpoints
-    location ~ ^/(pinn|gnn|siren|random_star|description|pipeline|scenes|gallery|version) {
+    location ~ ^/(pinn|gnn|siren|random_star|description|pipeline|scenes|gallery|version|sector|localization|models) {
         proxy_pass http://127.0.0.1:25255;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
@@ -37,7 +37,12 @@ server {
         proxy_read_timeout 300s;
     }
 
-    # Static WebOS Dioxus files with SPA fallback
+    # Static WebOS Testbench SPA
+    location /testbench {
+        try_files $uri $uri/ /testbench/index.html;
+    }
+
+    # Static Lunar Frontend SPA
     location / {
         try_files $uri $uri/ /index.html;
     }

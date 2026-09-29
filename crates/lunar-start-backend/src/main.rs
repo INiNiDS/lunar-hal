@@ -432,6 +432,18 @@ async fn main() -> anyhow::Result<()> {
     if let Ok(environment) = std::env::var("LUNAR_ENV") {
         config.set_env("LUNAR_ENV", &environment);
     }
+    if let Ok(models_dir) = std::env::var("LUNAR_MODELS_DIR") {
+        config.set_env("LUNAR_MODELS_DIR", &models_dir);
+    }
+    if let Ok(scenes_dir) = std::env::var("LUNAR_SCENES_DIR") {
+        config.set_env("LUNAR_SCENES_DIR", &scenes_dir);
+    }
+    if let Ok(gallery_dir) = std::env::var("LUNAR_GALLERY_DIR") {
+        config.set_env("LUNAR_GALLERY_DIR", &gallery_dir);
+    }
+    if let Ok(allow_unapproved) = std::env::var("LUNAR_ALLOW_UNAPPROVED_MODELS") {
+        config.set_env("LUNAR_ALLOW_UNAPPROVED_MODELS", &allow_unapproved);
+    }
     let manager = ServiceManager::new(&config)?;
     let state = Arc::new(AppState {
         log_tx: manager.log_sender(),

@@ -121,9 +121,9 @@ impl Default for BackendSettings {
         Self {
             host: DEFAULT_BACKEND_HOST.to_string(),
             port: DEFAULT_BACKEND_PORT,
-            models_dir: None,
-            scenes_dir: None,
-            env_mode: None,
+            models_dir: std::env::var("LUNAR_MODELS_DIR").ok(),
+            scenes_dir: std::env::var("LUNAR_SCENES_DIR").ok(),
+            env_mode: std::env::var("LUNAR_ENV").ok(),
             compute_backend: ComputeBackend::Wgpu,
             siren: true,
             extra_args: Vec::new(),
@@ -155,19 +155,22 @@ impl BackendSettings {
         port.min = Some(1.0);
         port.max = Some(65535.0);
 
+        let default_models = std::env::var("LUNAR_MODELS_DIR").unwrap_or_default();
+        let default_scenes = std::env::var("LUNAR_SCENES_DIR").unwrap_or_default();
+
         let models_dir = field(
             "LUNAR_MODELS_DIR",
             "Models directory",
             "Leave empty to use the platform data directory: lunar/models.",
             FieldType::Path,
-            "",
+            default_models,
         );
         let scenes_dir = field(
             "LUNAR_SCENES_DIR",
             "Star scenes directory",
             "Leave empty to use the platform data directory: lunar/scenes.",
             FieldType::Path,
-            "",
+            default_scenes,
         );
         let env_mode = field(
             "LUNAR_ENV",

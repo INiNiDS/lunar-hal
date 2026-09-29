@@ -51,6 +51,11 @@ impl RuntimeConfig {
 
         let window = web_sys::window()?;
         let location = window.location();
+        if let Ok(origin) = location.origin() {
+            if !origin.contains("localhost") && !origin.contains("127.0.0.1") && !origin.trim().is_empty() {
+                return Some(origin.trim_end_matches('/').to_string());
+            }
+        }
         let protocol = location.protocol().ok()?;
         let hostname = location.hostname().ok()?;
 

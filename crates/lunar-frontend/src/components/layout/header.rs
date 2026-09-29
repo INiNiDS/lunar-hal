@@ -21,6 +21,16 @@ pub fn Header() -> Element {
                     class: "hover:text-white transition-colors duration-300",
                     "Contact"
                 }
+                a {
+                    href: "/editor",
+                    class: "hover:text-white transition-colors duration-300",
+                    "Editor"
+                }
+                a {
+                    href: "/testbench",
+                    class: "hover:text-cyan-300 text-cyan-400/90 font-medium transition-colors duration-300",
+                    "WebOS Testbench"
+                }
             }
 
             div { class: "flex items-center gap-5 text-[11px] tracking-widest uppercase font-light",

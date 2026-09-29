@@ -2,7 +2,7 @@
 
 [web.app]
 title = "Lunar Testbench"
-base_path = ""
+base_path = "testbench"
 
 [web.resource]
 script = []
