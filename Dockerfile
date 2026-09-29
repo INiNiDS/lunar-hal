@@ -1,9 +1,13 @@
 # Stage 1: Build Rust backend binaries and WebAssembly frontend
-FROM rust:bookworm AS builder
+FROM ubuntu:24.04 AS builder
 
 WORKDIR /app
 
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PATH="/root/.cargo/bin:${PATH}"
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
     pkg-config \
     libssl-dev \
     curl \
@@ -11,9 +15,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     tar \
     && rm -rf /var/lib/apt/lists/*
 
-RUN rustup update stable && rustup default stable && rustup target add wasm32-unknown-unknown
+# Install latest Rust stable and wasm target
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable && \
+    rustup target add wasm32-unknown-unknown
 
-# Download prebuilt dx CLI for ultra-fast compilation
+# Download prebuilt dx CLI (compiled against glibc 2.39)
 RUN curl -sL https://github.com/DioxusLabs/dioxus/releases/download/v0.7.10/dx-x86_64-unknown-linux-gnu.tar.gz | tar -xz -C /usr/local/bin && chmod +x /usr/local/bin/dx
 
 COPY . .
