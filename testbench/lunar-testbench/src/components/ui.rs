@@ -16,7 +16,7 @@ pub fn bytes_human(n: u64) -> String {
 }
 
 pub fn now_ms() -> i64 {
-    chrono::Utc::now().timestamp_millis()
+    lunar_utils::time::current_time_ms() as i64
 }
 
 pub fn fmt_ms(ms: i64) -> String {

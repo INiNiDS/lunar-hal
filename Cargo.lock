@@ -6254,6 +6254,7 @@ dependencies = [
 name = "lunar-structures-testbench"
 version = "0.1.0"
 dependencies = [
+ "lunar-utils",
  "serde",
  "serde_json",
 ]
@@ -6325,6 +6326,7 @@ name = "lunar-utils"
 version = "0.1.0"
 dependencies = [
  "dirs",
+ "js-sys",
 ]
 
 [[package]]

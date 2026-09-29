@@ -8,3 +8,6 @@ authors.workspace = true
 
 [dependencies]
 dirs = "6.0.0"
+
+[target.'cfg(all(target_family = "wasm", not(target_os = "wasi")))'.dependencies]
+js-sys = "0.3"

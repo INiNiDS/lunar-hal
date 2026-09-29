@@ -197,11 +197,7 @@ impl Job {
 }
 
 fn new_job_id() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
+    let nanos = lunar_utils::time::current_time_nanos();
     use std::sync::atomic::{AtomicU64, Ordering};
     static CTR: AtomicU64 = AtomicU64::new(0);
     let ctr = CTR.fetch_add(1, Ordering::Relaxed);
@@ -209,11 +205,7 @@ fn new_job_id() -> String {
 }
 
 fn now_ms() -> u64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
+    lunar_utils::time::current_time_ms()
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
