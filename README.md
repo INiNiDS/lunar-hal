@@ -136,33 +136,36 @@ Run the installation script to verify your toolchain, initialize directories, an
 
 ### 3. Managed Multi-Service Launch
 
-Launch all services simultaneously with unified logs and automatic health-checking:
+Launch the interactive WebOS diagnostic and runtime suite:
 
 ```bash
-cargo run -p lunar-start
+cargo run --release -p lunar-start
 ```
 
 This starts:
-- **Backend API:** `http://127.0.0.1:25255`
-- **Web Frontend:** `http://127.0.0.1:8080`
-- **Management API:** `http://127.0.0.1:16181`
+- **WebOS Testbench Desktop:** `http://127.0.0.1:16180` *(Open this in your browser!)*
+- **Service Management API:** `http://127.0.0.1:16181`
+
+From within the WebOS desktop (`:16180`), you can launch, monitor, inspect, and configure the Backend (`:25255`), Testbench Backend (`:25256`), and Frontend (`:8080`) directly from the dock.
 
 ### 4. Individual Service Execution
 
 To run services individually in dedicated terminals:
 
 ```bash
-# Terminal 1: Run AI & Scene Backend
-cargo run -p lunar-backend
+# Terminal 1: Run AI & Scene Backend (Port 25255)
+cargo run --release -p lunar-backend
 
-# Terminal 2: Run Dioxus Web Frontend
+# Terminal 2: Run Dioxus Web Frontend (Default: Port 8080)
 cd crates/lunar-frontend
 dx serve --platform web
+# Note: If port 8080 is occupied by another local service (e.g. SearXNG), run with:
+# dx serve --platform web --port 8088
 
-# Terminal 3 (Optional): Run WebOS Testbench
+# Terminal 3 (Optional): Run WebOS Testbench directly (Port 16180)
 cd testbench/lunar-testbench
 npm run build:css
-cargo run -p lunar-testbench --bin lunar-testbench
+cargo run --release -p lunar-testbench --bin lunar-testbench
 ```
 
 ---

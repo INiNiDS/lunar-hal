@@ -111,11 +111,12 @@ Write-Host "`n✦ ========================================================== ✦
 Write-Host "   LUNAR-HAL is ready to launch!                             " -ForegroundColor Green
 Write-Host "✦ ========================================================== ✦" -ForegroundColor Green
 Write-Host "`nQuick start options:"
-Write-Host "  1. Launch full managed suite (backend + frontend + testbench):"
+Write-Host "  1. Launch WebOS managed suite (Testbench UI + Service Manager):"
 Write-Host "     cargo run --release -p lunar-start" -ForegroundColor Cyan
+Write-Host "     -> Open in browser: http://127.0.0.1:16180" -ForegroundColor Yellow
 Write-Host "`n  2. Run backend manually:"
 Write-Host "     cargo run --release -p lunar-backend" -ForegroundColor Cyan
-Write-Host "`n  3. Run WebOS Testbench:"
+Write-Host "`n  3. Run WebOS Testbench directly:"
 Write-Host "     cargo run --release -p lunar-testbench --bin lunar-testbench" -ForegroundColor Cyan
-Write-Host "`n  4. Launch Dioxus Frontend directly:"
+Write-Host "`n  4. Launch Dioxus Frontend directly (default port 8080):"
 Write-Host "     cd crates/lunar-frontend; dx serve --platform web`n" -ForegroundColor Cyan
