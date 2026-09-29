@@ -101,6 +101,7 @@ pub fn SirenGallery() -> Element {
     let mut status = use_signal(|| initial.status.clone());
     let mut busy = use_signal(|| initial.busy);
     let lifecycle = use_window_lifecycle();
+    let mut previous_lifecycle = use_signal(|| WindowLifecycle::Blocked);
     let is_blocked = lifecycle
         .map(|signal| *signal.read() == WindowLifecycle::Blocked)
         .unwrap_or(false);
@@ -219,7 +220,8 @@ pub fn SirenGallery() -> Element {
                     detail_tags.set(record.tags.join(", "));
                     detail_notes.set(record.notes.clone().unwrap_or_default());
                     selected.set(Some(record));
-                    refresh_tick.set(refresh_tick().wrapping_add(1));
+                    let next = (*refresh_tick.peek()).wrapping_add(1);
+                    refresh_tick.set(next);
                     status.set(Some(
                         "Texture generated and saved to the persistent Gallery.".into(),
                     ));
@@ -243,7 +245,8 @@ pub fn SirenGallery() -> Element {
             match api::update_gallery_star(&id, &request).await {
                 Ok(updated) => {
                     selected.set(Some(updated));
-                    refresh_tick.set(refresh_tick().wrapping_add(1));
+                    let next = (*refresh_tick.peek()).wrapping_add(1);
+                    refresh_tick.set(next);
                     status.set(Some("Gallery metadata saved.".into()));
                 }
                 Err(error) => status.set(Some(error)),
@@ -260,7 +263,8 @@ pub fn SirenGallery() -> Element {
             match api::delete_gallery_star(&id).await {
                 Ok(()) => {
                     selected.set(None);
-                    refresh_tick.set(refresh_tick().wrapping_add(1));
+                    let next = (*refresh_tick.peek()).wrapping_add(1);
+                    refresh_tick.set(next);
                     status.set(Some("Gallery record deleted.".into()));
                 }
                 Err(error) => status.set(Some(error)),
@@ -271,8 +275,15 @@ pub fn SirenGallery() -> Element {
 
     use_effect(move || {
         if let Some(lifecycle) = lifecycle {
-            if *lifecycle.read() == WindowLifecycle::Visible {
-                refresh_tick.set(refresh_tick().wrapping_add(1));
+            let current = *lifecycle.read();
+            let previous = *previous_lifecycle.peek();
+            if current == previous {
+                return;
+            }
+            previous_lifecycle.set(current);
+            if current == WindowLifecycle::Visible && previous != WindowLifecycle::Visible {
+                let next_tick = (*refresh_tick.peek()).wrapping_add(1);
+                refresh_tick.set(next_tick);
             }
         }
     });

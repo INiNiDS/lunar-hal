@@ -414,29 +414,32 @@ impl OsState {
     }
 
     pub fn open_window(&mut self, app_id: &str, title: &str) {
-        if self.is_transition_in_flight(app_id) {
-            return;
-        }
-        self.mark_transition_started(app_id);
-
         if self.ram_store.read().is_app_minimized(app_id) {
             let (vw, vh) = crate::os::viewport_size();
             self.restore_window(app_id, vw, vh);
             return;
         }
 
+        if self.is_transition_in_flight(app_id) {
+            return;
+        }
+        self.mark_transition_started(app_id);
+
         let existing_id = self
             .windows
             .with_mut(|windows| restore_existing_window(windows, app_id));
         if let Some(id) = existing_id {
             self.focus_window(id);
+            self.clear_transition(app_id);
             return;
         }
         if !self.is_app_available(app_id) {
+            self.clear_transition(app_id);
             return;
         }
 
         self.spawn_new_window(app_id, title);
+        self.clear_transition(app_id);
     }
 
     pub fn open_new_window(&mut self, app_id: &str, title: &str) -> u64 {
@@ -517,11 +520,6 @@ impl OsState {
     }
 
     pub fn activate_instance(&mut self, instance_id: &str) {
-        if self.is_transition_in_flight(instance_id) {
-            return;
-        }
-        self.mark_transition_started(instance_id);
-
         let entry = self.ram_store.read().get_entry(instance_id).cloned();
         if let Some(entry) = entry {
             if entry.state == crate::os::ram::RamLifecycleState::Minimized {
@@ -531,20 +529,21 @@ impl OsState {
             }
         }
 
+        if self.is_transition_in_flight(instance_id) {
+            return;
+        }
+        self.mark_transition_started(instance_id);
+
         if let Some(id) = instance_id
             .strip_prefix("win-")
             .and_then(|s| s.parse::<u64>().ok())
         {
             self.focus_window(id);
         }
+        self.clear_transition(instance_id);
     }
 
     pub fn activate_app(&mut self, app_id: &str) {
-        if self.is_transition_in_flight(app_id) {
-            return;
-        }
-        self.mark_transition_started(app_id);
-
         let entry = self.ram_store.read().find_minimized_by_app(app_id).cloned();
         if let Some(entry) = entry {
             let instance_id = entry.instance_id.clone();
@@ -553,12 +552,18 @@ impl OsState {
             return;
         }
 
+        if self.is_transition_in_flight(app_id) {
+            return;
+        }
+        self.mark_transition_started(app_id);
+
         let id = self
             .windows
             .with_mut(|windows| restore_existing_window(windows, app_id));
         if let Some(id) = id {
             self.focus_window(id);
         }
+        self.clear_transition(app_id);
     }
 
     fn upsert_service(&mut self, service: ServiceInfo) {
@@ -719,8 +724,18 @@ impl OsState {
                 Ok(result) => {
                     if let Some(state) = settings.write().as_mut() {
                         state.validating = false;
+                        let mut msg = "Service configuration is invalid".to_string();
+                        if !result.field_errors.is_empty() {
+                            let details = result
+                                .field_errors
+                                .iter()
+                                .map(|(k, v)| format!("{k}: {v}"))
+                                .collect::<Vec<_>>()
+                                .join("; ");
+                            msg = format!("{msg}: {details}");
+                        }
                         state.server_field_errors = result.field_errors;
-                        state.error = Some("Service configuration is invalid.".into());
+                        state.error = Some(msg);
                     }
                     return;
                 }
@@ -1058,6 +1073,8 @@ impl OsState {
             });
         });
         self.focus_window(id);
+        self.clear_transition(instance_id);
+        self.clear_transition(&entry.app_id);
     }
 
     pub fn restore_window(&mut self, app_id: &str, viewport_w: f64, viewport_h: f64) {
@@ -1827,6 +1844,41 @@ mod settings_tests {
                 os.get_instance_snapshot("win-2"),
                 Some(serde_json::json!({ "cursor": 20 }))
             );
+            rsx! {}
+        });
+        dom.rebuild_in_place();
+    }
+
+    #[test]
+    fn window_minimize_and_restore_via_activate_instance_and_open_window() {
+        let mut dom = VirtualDom::new(|| {
+            let mut os = OsState::new();
+            let win1_id = os.open_new_window("log:backend", "Log 1");
+            assert_eq!(os.windows.read().len(), 1);
+
+            // Minimize win1
+            os.minimize_window(win1_id);
+            assert_eq!(os.windows.read().len(), 0);
+            assert!(os.ram_store.read().is_app_minimized("log:backend"));
+
+            // Restore via activate_instance (Dock click)
+            os.activate_instance("win-1");
+            assert_eq!(os.windows.read().len(), 1);
+            let restored_id = os.windows.read()[0].id;
+            assert!(!os.ram_store.read().is_app_minimized("log:backend"));
+            assert!(!os.is_transition_in_flight("win-1"));
+
+            // Minimize again
+            os.minimize_window(restored_id);
+            assert_eq!(os.windows.read().len(), 0);
+            assert!(os.ram_store.read().is_app_minimized("log:backend"));
+
+            // Restore via open_window (Desktop click)
+            os.open_window("log:backend", "Log 1");
+            assert_eq!(os.windows.read().len(), 1);
+            assert!(!os.ram_store.read().is_app_minimized("log:backend"));
+            assert!(!os.is_transition_in_flight("log:backend"));
+
             rsx! {}
         });
         dom.rebuild_in_place();

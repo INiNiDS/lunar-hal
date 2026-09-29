@@ -245,6 +245,7 @@ impl BackendSettings {
         optional_env(&mut env, "LUNAR_MODELS_DIR", &self.models_dir);
         optional_env(&mut env, "LUNAR_SCENES_DIR", &self.scenes_dir);
         optional_env(&mut env, "LUNAR_ENV", &self.env_mode);
+        env.insert("LUNAR_ALLOW_UNAPPROVED_MODELS".to_string(), "1".to_string());
 
         let mut build_args = Vec::new();
         // lunar-backend defaults to `wgpu,siren`; emit feature flags only when that changes.

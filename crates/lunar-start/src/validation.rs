@@ -82,12 +82,19 @@ fn validate_required_host(
     }
 }
 
-fn validate_models_dir(result: &mut ValidationResult, config: &ServiceConfig) {
+fn validate_models_dir(result: &mut ValidationResult, config: &ServiceConfig, workspace: &Path) {
     let path = config
         .env
         .get("LUNAR_MODELS_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(get_lunar_models_dir);
+        .unwrap_or_else(|| {
+            let ws_models = workspace.join("models");
+            if ws_models.is_dir() {
+                ws_models
+            } else {
+                get_lunar_models_dir()
+            }
+        });
     if !path.is_dir() {
         result.add("LUNAR_MODELS_DIR", "Models directory does not exist");
     }
@@ -149,10 +156,12 @@ fn validate_binary(result: &mut ValidationResult, config: &ServiceConfig, worksp
         return;
     };
     let mut binary = workspace.join("target").join("release").join(bin_name);
+    let mut debug_binary = workspace.join("target").join("debug").join(bin_name);
     if cfg!(windows) {
         binary.set_extension("exe");
+        debug_binary.set_extension("exe");
     }
-    if !binary.is_file() {
+    if !binary.is_file() && !debug_binary.is_file() {
         result.add(
             "binary",
             format!("Release binary does not exist: {}", binary.display()),
@@ -309,7 +318,7 @@ pub fn validate_service_config(
     match config.name.as_str() {
         "backend" => {
             validate_required_host(&mut result, config, "LUNAR_BACKEND_HOST");
-            validate_models_dir(&mut result, config);
+            validate_models_dir(&mut result, config, workspace);
             validate_writable_dir(&mut result, config);
             validate_backend_features(&mut result, config);
         }
@@ -469,6 +478,30 @@ mod tests {
         backend.build_args = vec!["--features".into(), "quantum".into()];
         let unknown = validate_service_config(&backend, &workspace, &[]);
         assert!(unknown.field_errors.contains_key("COMPUTE_BACKEND"));
+        fs::remove_dir_all(workspace).unwrap();
+    }
+
+    #[test]
+    fn accepts_debug_binary_and_workspace_models_dir() {
+        let workspace = temp_workspace();
+        let debug_dir = workspace.join("target/debug");
+        fs::create_dir_all(&debug_dir).unwrap();
+        fs::write(debug_dir.join("lunar-backend"), b"test").unwrap();
+        let models = workspace.join("models");
+        fs::create_dir_all(&models).unwrap();
+        let scenes = workspace.join("scenes");
+        fs::create_dir_all(&scenes).unwrap();
+        let mut backend = ServiceConfig::backend();
+        backend
+            .env
+            .insert("LUNAR_SCENES_DIR".into(), scenes.display().to_string());
+
+        let result = validate_service_config(&backend, &workspace, &[]);
+        assert!(
+            result.ok,
+            "validation should succeed with debug binary and workspace models dir, but got errors: {:?}",
+            result.field_errors
+        );
         fs::remove_dir_all(workspace).unwrap();
     }
 }

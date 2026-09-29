@@ -98,8 +98,18 @@ pub fn get_start_backend_url() -> String {
 
 pub fn get_lunar_models_dir() -> PathBuf {
     if let Ok(dir) = std::env::var("LUNAR_MODELS_DIR") {
-        PathBuf::from(dir)
+        let path = PathBuf::from(dir);
+        if !path.join("stellar_model.bpk").exists()
+            && path.join("models").join("stellar_model.bpk").exists()
+        {
+            return path.join("models");
+        }
+        path
     } else {
+        let repo_models = PathBuf::from("models");
+        if repo_models.is_dir() {
+            return repo_models;
+        }
         dirs::data_dir()
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
             .join("lunar")

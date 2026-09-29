@@ -78,6 +78,11 @@ async fn main() -> anyhow::Result<()> {
     }
     if let Some(dir) = &cli.models_dir {
         config.set_env("LUNAR_MODELS_DIR", dir);
+    } else {
+        let ws_models = config.workspace.join("models");
+        if ws_models.is_dir() {
+            config.set_env("LUNAR_MODELS_DIR", &ws_models.display().to_string());
+        }
     }
     if let Some(dir) = &cli.scenes_dir {
         config.set_env("LUNAR_SCENES_DIR", dir);
