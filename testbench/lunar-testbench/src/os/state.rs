@@ -200,7 +200,7 @@ pub struct DragOp {
 }
 
 /// Global reactive state for the Lunar-OS shell, installed into context once by
-/// [`provide_os_state`] and read anywhere via [`use_os_state`].
+/// [`use_provide_os_state`] and read anywhere via [`use_os_state`].
 #[derive(Clone, Copy)]
 pub struct OsState {
     pub backend_online: Signal<bool>,
@@ -1528,11 +1528,11 @@ pub fn validate_form(
 }
 
 /// Installs [`OsState`] into context. Call exactly once, near the app root (in `Room`).
-pub fn provide_os_state() -> OsState {
+pub fn use_provide_os_state() -> OsState {
     use_context_provider(OsState::new)
 }
 
-/// Reads the [`OsState`] previously installed by [`provide_os_state`].
+/// Reads the [`OsState`] previously installed by [`use_provide_os_state`].
 pub fn use_os_state() -> OsState {
     use_context::<OsState>()
 }

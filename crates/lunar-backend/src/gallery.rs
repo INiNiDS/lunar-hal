@@ -32,6 +32,17 @@ pub struct GalleryStore {
     dir: PathBuf,
 }
 
+pub(crate) fn is_safe_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 64
+        && !id.contains("..")
+        && !id.contains('/')
+        && !id.contains('\\')
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
 impl GalleryStore {
     pub fn new(dir: PathBuf) -> Self {
         let store = Self {
@@ -57,6 +68,9 @@ impl GalleryStore {
                 // from loading. The file remains available for diagnostics.
                 continue;
             };
+            if !is_safe_id(&star.id) {
+                continue;
+            }
             if let Some(request_id) = &star.request_id {
                 if let Ok(mut requests) = self.request_ids.write() {
                     requests.insert(request_id.clone(), star.id.clone());
@@ -88,8 +102,15 @@ impl GalleryStore {
         format!("g{:016x}", seed)
     }
 
-    fn record_dir(&self, id: &str) -> PathBuf {
-        self.dir.join(id)
+    fn record_dir(&self, id: &str) -> Option<PathBuf> {
+        if !is_safe_id(id) {
+            return None;
+        }
+        let candidate = self.dir.join(id);
+        if candidate.parent() != Some(&self.dir) {
+            return None;
+        }
+        Some(candidate)
     }
 
     fn atomic_write(path: &StdPath, bytes: &[u8]) -> Result<(), String> {
@@ -111,7 +132,9 @@ impl GalleryStore {
     }
 
     fn persist(&self, record: &GalleryStar, texture: Option<&[u8]>) -> Result<(), String> {
-        let root = self.record_dir(&record.id);
+        let root = self
+            .record_dir(&record.id)
+            .ok_or_else(|| format!("invalid gallery record id: {}", record.id))?;
         let metadata = serde_json::to_vec_pretty(record).map_err(|error| error.to_string())?;
         Self::atomic_write(&root.join("metadata.json"), &metadata)?;
         if let Some(texture) = texture {
@@ -177,6 +200,9 @@ impl GalleryStore {
     }
 
     pub fn get(&self, id: &str) -> Option<GalleryStar> {
+        if !is_safe_id(id) {
+            return None;
+        }
         self.inner.read().ok()?.get(id).cloned()
     }
 
@@ -235,6 +261,9 @@ impl GalleryStore {
         id: &str,
         update: UpdateGalleryStarRequest,
     ) -> Result<GalleryStar, String> {
+        if !is_safe_id(id) {
+            return Err(format!("Invalid gallery star id: {id}"));
+        }
         let mut record = self
             .get(id)
             .ok_or_else(|| format!("Gallery star {id} not found"))?;
@@ -257,6 +286,9 @@ impl GalleryStore {
     }
 
     pub fn delete(&self, id: &str) -> bool {
+        if !is_safe_id(id) {
+            return false;
+        }
         let Some(record) = self
             .inner
             .write()
@@ -270,13 +302,19 @@ impl GalleryStore {
                 request_ids.remove(&request_id);
             }
         }
-        let _ = std::fs::remove_dir_all(self.record_dir(id));
+        if let Some(dir) = self.record_dir(id) {
+            let _ = std::fs::remove_dir_all(dir);
+        }
         true
     }
 
     pub fn asset(&self, id: &str, name: &str) -> Option<Vec<u8>> {
+        if !is_safe_id(id) || !matches!(name, "texture.png" | "thumb.png") {
+            return None;
+        }
         self.get(id)?;
-        std::fs::read(self.record_dir(id).join(name)).ok()
+        let dir = self.record_dir(id)?;
+        std::fs::read(dir.join(name)).ok()
     }
 }
 
@@ -360,6 +398,12 @@ pub async fn get_gallery_star(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<GalleryStar>, (StatusCode, String)> {
+    if !is_safe_id(&id) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Invalid gallery star id".to_string(),
+        ));
+    }
     state.gallery.get(&id).map(Json).ok_or_else(|| {
         (
             StatusCode::NOT_FOUND,
@@ -373,6 +417,12 @@ pub async fn update_gallery_star(
     Path(id): Path<String>,
     Json(update): Json<UpdateGalleryStarRequest>,
 ) -> Result<Json<GalleryStar>, (StatusCode, String)> {
+    if !is_safe_id(&id) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Invalid gallery star id".to_string(),
+        ));
+    }
     state
         .gallery
         .update(&id, update)
@@ -391,6 +441,9 @@ pub async fn delete_gallery_star(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> StatusCode {
+    if !is_safe_id(&id) {
+        return StatusCode::BAD_REQUEST;
+    }
     if state.gallery.delete(&id) {
         StatusCode::NO_CONTENT
     } else {
@@ -408,6 +461,12 @@ pub async fn gallery_texture(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Response, (StatusCode, String)> {
+    if !is_safe_id(&id) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Invalid gallery star id".to_string(),
+        ));
+    }
     image_response(state.gallery.asset(&id, "texture.png"))
 }
 
@@ -415,6 +474,12 @@ pub async fn gallery_thumbnail(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Response, (StatusCode, String)> {
+    if !is_safe_id(&id) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Invalid gallery star id".to_string(),
+        ));
+    }
     image_response(state.gallery.asset(&id, "thumb.png"))
 }
 
@@ -497,6 +562,22 @@ mod tests {
         let reloaded = GalleryStore::new(dir.clone());
         assert!(reloaded.get(&record.id).is_some());
         assert!(reloaded.get("broken").is_none());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn path_traversal_is_rejected() {
+        let dir = temporary_directory("path-traversal");
+        let store = GalleryStore::new(dir.clone());
+        assert!(!is_safe_id("../etc/passwd"));
+        assert!(!is_safe_id(".."));
+        assert!(!is_safe_id("/root"));
+        assert!(!is_safe_id("foo/bar"));
+        assert!(!is_safe_id("foo\\bar"));
+        assert!(store.get("../etc/passwd").is_none());
+        assert!(!store.delete("../etc/passwd"));
+        assert!(store.asset("../etc/passwd", "texture.png").is_none());
+        assert!(store.asset("g1234", "../etc/passwd").is_none());
         let _ = std::fs::remove_dir_all(dir);
     }
 }

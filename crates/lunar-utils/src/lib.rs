@@ -1,11 +1,17 @@
 pub mod env;
 pub mod time;
 
-pub fn encode_rgb_png(rgb: &[u8], width: u32, height: u32) -> Vec<u8> {
-    let w = width as usize;
-    let h = height as usize;
+pub const MAX_PNG_DIMENSION: usize = 4096;
 
-    let mut raw = Vec::with_capacity(h * (1 + w * 3));
+pub fn encode_rgb_png(rgb: &[u8], width: u32, height: u32) -> Vec<u8> {
+    let w = (width as usize).min(MAX_PNG_DIMENSION);
+    let h = (height as usize).min(MAX_PNG_DIMENSION);
+    let expected = w.saturating_mul(h).saturating_mul(3);
+    if w == 0 || h == 0 || rgb.len() < expected {
+        return Vec::new();
+    }
+
+    let mut raw = Vec::with_capacity(h.saturating_mul(1 + w * 3));
     for y in 0..h {
         raw.push(0);
         for x in 0..w {

@@ -19,9 +19,15 @@ pub fn siren_generate_texture(
     let n_mg = (m_g - siren.norm.mg_mean) / siren.norm.mg_std;
     let n_teff = (log_teff - siren.norm.log_teff_mean) / siren.norm.log_teff_std;
 
+    if width == 0 || height == 0 {
+        return Vec::new();
+    }
+    const MAX_TEXTURE_PIXELS: usize = 1024 * 1024;
     const TEXTURE_CHUNK_PIXELS: usize = 8192;
-    let total = width as usize * height as usize;
-    let mut pixels = Vec::with_capacity(total * 3);
+    let total = (width as usize)
+        .saturating_mul(height as usize)
+        .min(MAX_TEXTURE_PIXELS);
+    let mut pixels = Vec::with_capacity(total.saturating_mul(3));
     for start in (0..total).step_by(TEXTURE_CHUNK_PIXELS) {
         let count = (total - start).min(TEXTURE_CHUNK_PIXELS);
         let mut input_data = Vec::with_capacity(count * SIREN_INPUT_DIM);

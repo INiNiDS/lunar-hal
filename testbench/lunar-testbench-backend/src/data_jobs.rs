@@ -188,9 +188,30 @@ fn default_workers() -> usize {
     4
 }
 
-fn collect_command(spec: &DataCollectSpec) -> Command {
+fn validate_safe_arg(arg: &str) -> Result<&str, String> {
+    if arg.is_empty()
+        || arg.starts_with('-')
+        || arg.contains('\0')
+        || arg.contains('\n')
+        || arg.contains('\r')
+    {
+        return Err("argument is invalid or starts with a dash".to_string());
+    }
+    if arg.chars().any(|c| {
+        matches!(
+            c,
+            ';' | '&' | '|' | '`' | '$' | '(' | ')' | '<' | '>' | '\\'
+        )
+    }) {
+        return Err("argument contains forbidden shell characters".to_string());
+    }
+    Ok(arg)
+}
+
+fn collect_command(spec: &DataCollectSpec) -> Result<Command, String> {
+    let out_dir = validate_safe_arg(&spec.out_dir)?;
     let mut cmd = Command::new(lnaicli_path());
-    cmd.arg("collect-data").arg("--out-dir").arg(&spec.out_dir);
+    cmd.arg("collect-data").arg("--out-dir").arg(out_dir);
     cmd.arg("--ra-min").arg(spec.ra_min.to_string());
     cmd.arg("--ra-max").arg(spec.ra_max.to_string());
     cmd.arg("--mag-limit-g").arg(spec.mag_limit_g.to_string());
@@ -201,22 +222,25 @@ fn collect_command(spec: &DataCollectSpec) -> Command {
         cmd.arg("--retry-failed");
     }
     if let Some(only) = &spec.only {
-        cmd.arg("--only").arg(only);
+        let safe_only = validate_safe_arg(only)?;
+        cmd.arg("--only").arg(safe_only);
     }
-    cmd
+    Ok(cmd)
 }
 
-fn verify_command(out_dir: &str) -> Command {
+fn verify_command(out_dir: &str) -> Result<Command, String> {
+    let safe_out_dir = validate_safe_arg(out_dir)?;
     let mut cmd = Command::new(lnaicli_path());
-    cmd.arg("collect-data").arg("--out-dir").arg(out_dir);
+    cmd.arg("collect-data").arg("--out-dir").arg(safe_out_dir);
     cmd.arg("--verify");
-    cmd
+    Ok(cmd)
 }
 
-fn build_command(out_dir: &str) -> Command {
+fn build_command(out_dir: &str) -> Result<Command, String> {
+    let safe_out_dir = validate_safe_arg(out_dir)?;
     let mut cmd = Command::new(lnaicli_path());
-    cmd.arg("build-dataset").arg("--out-dir").arg(out_dir);
-    cmd
+    cmd.arg("build-dataset").arg("--out-dir").arg(safe_out_dir);
+    Ok(cmd)
 }
 
 async fn spawn_data_job(
@@ -238,11 +262,12 @@ pub async fn start_collect(
     State(state): State<AppState>,
     Json(spec): Json<DataCollectSpec>,
 ) -> Result<Json<Job>, String> {
+    let cmd = collect_command(&spec)?;
     let title = format!(
         "Data collect · RA[{:.0},{:.0}) · {}",
         spec.ra_min, spec.ra_max, spec.out_dir
     );
-    spawn_data_job(state, DATA_COLLECT_KIND, title, collect_command(&spec)).await
+    spawn_data_job(state, DATA_COLLECT_KIND, title, cmd).await
 }
 
 #[derive(Deserialize)]
@@ -255,14 +280,16 @@ pub async fn start_verify(
     State(state): State<AppState>,
     Json(p): Json<DataDirPayload>,
 ) -> Result<Json<Job>, String> {
+    let cmd = verify_command(&p.out_dir)?;
     let title = format!("Data verify · {}", p.out_dir);
-    spawn_data_job(state, DATA_VERIFY_KIND, title, verify_command(&p.out_dir)).await
+    spawn_data_job(state, DATA_VERIFY_KIND, title, cmd).await
 }
 
 pub async fn start_build(
     State(state): State<AppState>,
     Json(p): Json<DataDirPayload>,
 ) -> Result<Json<Job>, String> {
+    let cmd = build_command(&p.out_dir)?;
     let title = format!("Dataset build · {}", p.out_dir);
-    spawn_data_job(state, DATA_BUILD_KIND, title, build_command(&p.out_dir)).await
+    spawn_data_job(state, DATA_BUILD_KIND, title, cmd).await
 }

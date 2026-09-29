@@ -66,7 +66,7 @@ pub fn fetch_stellar_data(opts: &FetchOptions<'_>) -> Result<()> {
         }
 
         if let (Some(user), Some(pass)) = (opts.username, opts.password) {
-            println!("Authenticating with ESA Gaia Archive as {}...", user);
+            println!("Authenticating with ESA Gaia Archive...");
             let login_url = "https://gea.esac.esa.int/tap-server/login";
             let login_resp = client
                 .post(login_url)

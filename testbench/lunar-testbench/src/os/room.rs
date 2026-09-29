@@ -2,14 +2,14 @@ use crate::os::desktop::Desktop;
 use crate::os::dock::Dock;
 use crate::os::lamp::Lamp;
 use crate::os::service_settings::ServiceSettings;
-use crate::os::state::{BootPhase, provide_os_state, use_os_runtime};
+use crate::os::state::{BootPhase, use_os_runtime, use_provide_os_state};
 use crate::os::viewport::use_viewport_resize;
 use crate::os::window_manager::WindowManager;
 use dioxus::prelude::*;
 
 #[component]
 pub fn Room() -> Element {
-    let os = provide_os_state();
+    let os = use_provide_os_state();
     use_os_runtime();
     use_viewport_resize();
 
