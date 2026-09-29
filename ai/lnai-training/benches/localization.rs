@@ -18,10 +18,12 @@ fn synthetic_output(anchors: usize, slots: usize, seed: u64) -> Vec<Localization
     (0..anchors)
         .map(|_| LocalizationOutput {
             candidates: (0..slots)
-                .map(|_| lnai_models::StarCandidate {
-                    existence_prob: next(),
-                    relative_position: [next() * 20.0 - 10.0; 3],
-                    covariance: [next() * 0.1; 6],
+                .map(|_| {
+                    lnai_models::StarCandidate::new(
+                        next(),
+                        [next() * 20.0 - 10.0; 3],
+                        [next() * 0.1; 6],
+                    )
                 })
                 .collect(),
         })

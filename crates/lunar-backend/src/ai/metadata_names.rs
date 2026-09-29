@@ -2,9 +2,35 @@ use super::rng::SimpleRng;
 
 pub(crate) fn generate_name(rng: &mut SimpleRng, entropy: f32) -> String {
     let catalog_prefixes = [
-        "UVS", "AX", "KX", "ZQ", "HD", "TYC", "GSC", "BD", "LP", "LHS", "Wolf", "Ross",
-        "Gliese", "Kepler", "TrES", "XO", "HAT-P", "WASP", "K2", "TOI", "LTT", "GJ", "HIP",
-        "SAO", "NGC", "IC", "Melotte", "Collinder", "Trumpler",
+        "UVS",
+        "AX",
+        "KX",
+        "ZQ",
+        "HD",
+        "TYC",
+        "GSC",
+        "BD",
+        "LP",
+        "LHS",
+        "Wolf",
+        "Ross",
+        "Gliese",
+        "Kepler",
+        "TrES",
+        "XO",
+        "HAT-P",
+        "WASP",
+        "K2",
+        "TOI",
+        "LTT",
+        "GJ",
+        "HIP",
+        "SAO",
+        "NGC",
+        "IC",
+        "Melotte",
+        "Collinder",
+        "Trumpler",
     ];
 
     let greek = ["α", "β", "γ", "δ", "ε", "ζ", "η", "θ", "ι", "κ", "λ", "μ"];

@@ -72,8 +72,7 @@ fn serving_manifest_requires_bound_release_evidence() {
         }
     }));
     std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
-    check_serving_manifest(&models_dir, &kind)
-        .expect("bound passing report should be accepted");
+    check_serving_manifest(&models_dir, &kind).expect("bound passing report should be accepted");
     std::fs::write(&report_path, b"tampered report").unwrap();
     let rejected = check_serving_manifest(&models_dir, &kind).unwrap_err();
     assert!(rejected.contains("checksum mismatch"), "{rejected}");

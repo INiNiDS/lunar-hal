@@ -92,7 +92,13 @@ fn main() -> Result<()> {
             run_spike_mast(args.ra, args.dec, args.radius)?;
         }
         Commands::SpikeIrsa(args) => {
-            run_spike_irsa(args.ra_min, args.ra_max, args.dec_min, args.dec_max, args.top)?;
+            run_spike_irsa(
+                args.ra_min,
+                args.ra_max,
+                args.dec_min,
+                args.dec_max,
+                args.top,
+            )?;
         }
         Commands::JplScenes(args) => {
             run_jpl_scenes(

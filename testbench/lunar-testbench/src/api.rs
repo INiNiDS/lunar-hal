@@ -11,7 +11,10 @@ use lunar_utils::env::{get_start_backend_url, get_testbench_url, get_url};
 pub fn current_backend_url() -> String {
     #[cfg(target_arch = "wasm32")]
     if let Some(origin) = web_sys::window().and_then(|w| w.location().origin().ok()) {
-        if !origin.is_empty() && !origin.contains("localhost:16180") && !origin.contains("127.0.0.1:16180") {
+        if !origin.is_empty()
+            && !origin.contains("localhost:16180")
+            && !origin.contains("127.0.0.1:16180")
+        {
             return origin;
         }
     }
@@ -21,7 +24,10 @@ pub fn current_backend_url() -> String {
 pub fn current_start_backend_url() -> String {
     #[cfg(target_arch = "wasm32")]
     if let Some(origin) = web_sys::window().and_then(|w| w.location().origin().ok()) {
-        if !origin.is_empty() && !origin.contains("localhost:16180") && !origin.contains("127.0.0.1:16180") {
+        if !origin.is_empty()
+            && !origin.contains("localhost:16180")
+            && !origin.contains("127.0.0.1:16180")
+        {
             return origin;
         }
     }
@@ -496,7 +502,11 @@ pub async fn service_log_tail(name: &str, tail: usize) -> Result<Vec<ServiceLogE
 
 /// Aggregated warn/error counts for a service, used for LED badges on the rack.
 pub async fn service_stats(name: &str) -> Result<ServiceStats, String> {
-    get_json(&current_start_backend_url(), &format!("/services/{name}/stats")).await
+    get_json(
+        &current_start_backend_url(),
+        &format!("/services/{name}/stats"),
+    )
+    .await
 }
 
 pub async fn start_all_services() -> Result<(), String> {
@@ -774,7 +784,12 @@ pub async fn create_scene_star(
     scene_id: &str,
     request: &CreateSceneStarRequest,
 ) -> Result<ResponseStar, String> {
-    post_json(&current_backend_url(), &format!("/scenes/{scene_id}/stars"), request).await
+    post_json(
+        &current_backend_url(),
+        &format!("/scenes/{scene_id}/stars"),
+        request,
+    )
+    .await
 }
 
 pub async fn update_scene_star(
@@ -791,11 +806,20 @@ pub async fn update_scene_star(
 }
 
 pub async fn delete_scene_star(scene_id: &str, star_id: u32) -> Result<(), String> {
-    delete_ok(&current_backend_url(), &format!("/scenes/{scene_id}/stars/{star_id}")).await
+    delete_ok(
+        &current_backend_url(),
+        &format!("/scenes/{scene_id}/stars/{star_id}"),
+    )
+    .await
 }
 
 pub async fn clear_live_scene(scene_id: &str, request: &ClearSceneRequest) -> Result<(), String> {
-    post_ok(&current_backend_url(), &format!("/scenes/{scene_id}/clear"), request).await
+    post_ok(
+        &current_backend_url(),
+        &format!("/scenes/{scene_id}/clear"),
+        request,
+    )
+    .await
 }
 
 pub async fn list_gallery_stars(
@@ -814,7 +838,11 @@ pub async fn list_gallery_stars(
     if let Some(query) = query.filter(|value| !value.is_empty()) {
         params.push(format!("query={}", urlencoding(query)));
     }
-    get_json(&current_backend_url(), &format!("/gallery/stars?{}", params.join("&"))).await
+    get_json(
+        &current_backend_url(),
+        &format!("/gallery/stars?{}", params.join("&")),
+    )
+    .await
 }
 
 pub async fn create_gallery_star(
@@ -831,7 +859,12 @@ pub async fn update_gallery_star(
     id: &str,
     request: &UpdateGalleryStarRequest,
 ) -> Result<GalleryStar, String> {
-    patch_json(&current_backend_url(), &format!("/gallery/stars/{id}"), request).await
+    patch_json(
+        &current_backend_url(),
+        &format!("/gallery/stars/{id}"),
+        request,
+    )
+    .await
 }
 
 pub async fn delete_gallery_star(id: &str) -> Result<(), String> {

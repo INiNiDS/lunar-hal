@@ -7,7 +7,11 @@ use std::sync::Arc;
 
 use crate::util::sha256_file;
 
-pub fn clean_and_transform_gnn(input_path: &str, output_path: &str, print_sha256: bool) -> Result<()> {
+pub fn clean_and_transform_gnn(
+    input_path: &str,
+    output_path: &str,
+    print_sha256: bool,
+) -> Result<()> {
     println!(
         "Reading and preprocessing (GNN velocity mode): {}",
         input_path

@@ -28,7 +28,13 @@ pub fn run_spike_mast(ra: f64, dec: f64, radius: f64) -> Result<()> {
     Ok(())
 }
 
-pub fn run_spike_irsa(ra_min: f64, ra_max: f64, dec_min: f64, dec_max: f64, top: usize) -> Result<()> {
+pub fn run_spike_irsa(
+    ra_min: f64,
+    ra_max: f64,
+    dec_min: f64,
+    dec_max: f64,
+    top: usize,
+) -> Result<()> {
     let query = lnai_data::sources::irsa::adql_query(ra_min, ra_max, dec_min, dec_max, top);
     let csv = lnai_data::sources::irsa::fetch_box_csv(&query).map_err(anyhow::Error::msg)?;
     let rows = lnai_data::sources::irsa::parse_two_mass_csv(&csv).map_err(anyhow::Error::msg)?;

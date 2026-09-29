@@ -1,6 +1,6 @@
 use lnai_training::artifacts::{
-    ArtifactManifestV1, RegisteredArtifact, RegistryStatus, manifest_file_name, scan_model_registry,
-    verify_manifest_against_files,
+    ArtifactManifestV1, RegisteredArtifact, RegistryStatus, manifest_file_name,
+    scan_model_registry, verify_manifest_against_files,
 };
 use lnai_training::spec::ModelKind;
 use lunar_utils::env::get_lunar_models_dir;

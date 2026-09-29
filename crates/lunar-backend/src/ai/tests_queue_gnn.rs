@@ -3,9 +3,7 @@ use super::backend_type::B;
 #[cfg(test)]
 use super::gnn::{GnnModel, GnnNorm};
 #[cfg(test)]
-use super::gnn_decode::{
-    compute_deterministic_velocities, compute_variational_velocities,
-};
+use super::gnn_decode::{compute_deterministic_velocities, compute_variational_velocities};
 #[cfg(test)]
 use super::gnn_infer::{gnn_infer, serving_rng_seed};
 #[cfg(test)]

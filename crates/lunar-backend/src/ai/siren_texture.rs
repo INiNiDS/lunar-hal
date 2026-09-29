@@ -1,8 +1,5 @@
 #[cfg(feature = "siren")]
-use {
-    burn::prelude::*,
-    lnai_models::SIREN_INPUT_DIM,
-};
+use {burn::prelude::*, lnai_models::SIREN_INPUT_DIM};
 
 #[cfg(feature = "siren")]
 use super::backend_type::B;
