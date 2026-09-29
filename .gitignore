@@ -17,7 +17,8 @@ AGENT_OFF
 AGENT_MODEL
 models/stellar_norm.json
 node_modules/
-tailwind.css
+/crates/lunar-frontend/tailwind.css
+!testbench/lunar-testbench/assets/tailwind.css
 playwright-report/
 .junie/
 notion_plan.txt
