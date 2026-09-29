@@ -38,3 +38,10 @@ inherits = "dev"
 
 [profile.android-dev]
 inherits = "dev"
+
+[profile.release]
+opt-level = 2
+debug = false
+strip = true
+lto = false
+codegen-units = 16
