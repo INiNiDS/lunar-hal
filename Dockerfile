@@ -31,12 +31,22 @@ RUN cargo build --release --bin lunar-backend --bin lunar-start-backend
 WORKDIR /app/testbench/lunar-testbench
 RUN dx build --platform web --release
 
-# Stage 2: Minimal runtime image with Nginx
-FROM nginx:alpine
+# Stage 2: Runtime image with Nginx on Ubuntu 24.04 (matching glibc)
+FROM ubuntu:24.04
 
 WORKDIR /app
 
-RUN apk add --no-cache gettext ca-certificates libgcc libssl3
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    nginx \
+    gettext-base \
+    ca-certificates \
+    libssl3 \
+    libvulkan1 \
+    mesa-vulkan-drivers \
+    && rm -rf /var/lib/apt/lists/* \
+    && rm -f /etc/nginx/sites-enabled/default \
+    && mkdir -p /etc/nginx/templates /usr/share/nginx/html
 
 # Copy compiled backend binaries
 COPY --from=builder /app/target/release/lunar-backend /app/lunar-backend
