@@ -75,7 +75,7 @@ fi
 
 # 4. Prepare required runtime directories & .env
 echo -e "\n${BOLD}[4/6] Initializing runtime directories & configuration...${NC}"
-mkdir -p ai_data data scenes docs/assets/covers models/covers target
+mkdir -p ai_data data scenes target
 if [ ! -f .env ] && [ -f .env.example ]; then
     echo -e "  ${CYAN}→${NC} Creating .env from .env.example..."
     cp .env.example .env

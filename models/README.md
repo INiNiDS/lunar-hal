@@ -43,10 +43,6 @@ All models run **locally** with strict offline evaluation, deterministic seeding
 
 ## 1. Physics-Informed Neural Network (PINN)
 
-<div align="center">
-  <img src="covers/pinn_model_cover.jpg" alt="PINN Stellar Astrophysics Model" width="900" style="border-radius: 8px;" />
-</div>
-
 ### Architecture & Specification
 
 | Property | Value |
@@ -77,10 +73,6 @@ $$\mathcal{L}_{\text{total}} = \mathcal{L}_{\text{data}}(\hat{y}, y) + \lambda_{
 
 ## 2. Graph Neural Network for Kinematics (GNN)
 
-<div align="center">
-  <img src="covers/gnn_kinematics_cover.jpg" alt="GNN Kinematics Galactic Dynamics Model" width="900" style="border-radius: 8px;" />
-</div>
-
 ### Architecture & Specification
 
 | Property | Value |
@@ -107,10 +99,6 @@ $$h_i^{(l+1)} = \sigma \left( W^{(l)} h_i^{(l)} + \sum_{j \in \mathcal{N}(i)} \f
 
 ## 3. Sinusoidal Representation Networks (SIREN)
 
-<div align="center">
-  <img src="covers/siren_photosphere_cover.jpg" alt="SIREN Implicit Photosphere Synthesis" width="900" style="border-radius: 8px;" />
-</div>
-
 ### Architecture & Specification
 
 | Property | Value |
@@ -135,10 +123,6 @@ SIREN represents stellar photospheres implicitly as continuous coordinate functi
 ---
 
 ## 4. GNN Localization & Astrometric Infilling (Experimental)
-
-<div align="center">
-  <img src="covers/gnn_localization_cover.jpg" alt="GNN Localization & Astrometric Infilling" width="900" style="border-radius: 8px;" />
-</div>
 
 ### Architecture & Specification
 

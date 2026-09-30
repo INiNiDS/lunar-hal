@@ -73,7 +73,7 @@ if (Get-Command dx -ErrorAction SilentlyContinue) {
 
 # 4. Prepare required runtime directories & .env
 Write-Host "`n[4/6] Initializing runtime directories & configuration..." -ForegroundColor White
-$dirs = @("ai_data", "data", "scenes", "docs/assets/covers", "models/covers", "target")
+$dirs = @("ai_data", "data", "scenes", "target")
 foreach ($dir in $dirs) {
     if (-not (Test-Path $dir)) {
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
