@@ -27,7 +27,7 @@ pub fn Header() -> Element {
                     "Editor"
                 }
                 a {
-                    href: "/testbench",
+                    href: "/testbench/",
                     class: "hover:text-cyan-300 text-cyan-400/90 font-medium transition-colors duration-300",
                     "WebOS Testbench"
                 }
