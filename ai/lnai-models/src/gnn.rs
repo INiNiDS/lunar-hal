@@ -1,11 +1,6 @@
 use burn::nn::{LayerNorm, LayerNormConfig, Linear, LinearConfig};
 use burn::prelude::*;
 
-/// Stage 7: Compressed Sparse Row (CSR) edge representation for graph batches.
-///
-/// Encodes a sparse graph of `num_nodes` and `num_edges`.
-/// `row_ptr` has length `num_nodes + 1`, indexing into `col_indices` and `edge_weights`.
-/// Avoids allocating and transferring dense `N×N` matrices for inference and message passing.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct GraphBatch {
     pub num_nodes: usize,
@@ -56,8 +51,6 @@ impl GraphBatch {
         }
     }
 
-    /// Converts this sparse CSR graph to a dense `[N, N]` adjacency tensor.
-    /// Used for dense path parity benchmarks and validation against legacy paths.
     pub fn to_dense_adjacency<B: Backend>(&self, device: &Device<B>) -> Tensor<B, 2> {
         let n = self.num_nodes;
         let mut dense = vec![0.0f32; n * n];
@@ -73,8 +66,6 @@ impl GraphBatch {
         Tensor::<B, 2>::from_data(TensorData::new(dense, [n, n]), device)
     }
 
-    /// Propagates node features `H` of shape `[N, D]` along the sparse edges:
-    /// `H_out[i] = sum_{j in N(i)} W_ij * H_in[j]`.
     pub fn propagate<B: Backend>(&self, features: Tensor<B, 2>) -> Tensor<B, 2> {
         let [n, d] = features.dims();
         assert_eq!(
@@ -124,9 +115,6 @@ impl<B: Backend> GcnLayer<B> {
         burn::tensor::activation::silu(self.norm.forward(propagated))
     }
 
-    /// Stage 7: sparse message passing over a CSR [`GraphBatch`].
-    /// Avoids materializing the `N×N` dense adjacency tensor and
-    /// scales linearly with the number of edges.
     pub fn forward_sparse(&self, nodes: Tensor<B, 2>, graph: &GraphBatch) -> Tensor<B, 2> {
         let projected = self.linear.forward(nodes);
         let propagated = graph.propagate(projected);
@@ -176,9 +164,6 @@ impl<B: Backend> StellarGnn<B> {
         self.readout.forward(h3)
     }
 
-    /// Stage 7: sparse 3-layer GCN forward pass over a [`GraphBatch`].
-    /// Yields identical values to [`forward`] (pinned by parity test)
-    /// without building dense `N×N` intermediate matrices.
     pub fn forward_sparse(&self, nodes: Tensor<B, 2>, graph: &GraphBatch) -> Tensor<B, 2> {
         let h1 = self.gcn1.forward_sparse(nodes, graph);
         let h2 = self.gcn2.forward_sparse(h1.clone(), graph);
@@ -191,12 +176,6 @@ pub const GNN_INPUT_DIM: usize = 8;
 pub const GNN_OUTPUT_DIM: usize = 3;
 pub const GNN_VARIATIONAL_DIM: usize = 6;
 
-/// Stage 6: explicit readout-head contract for GNN-Kinematics.
-///
-/// * `Deterministic` — `[N, 3]` mean velocities `(vx, vy, vz)`.
-/// * `Variational` — `[N, 6]` mean velocities followed by per-component
-///   `logvar`; sampling goes through [`split_mean_logvar`] so train,
-///   eval and serving can never disagree on the layout.
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GnnHeadKind {
     Deterministic,
@@ -204,7 +183,6 @@ pub enum GnnHeadKind {
 }
 
 impl GnnHeadKind {
-    /// Maps a readout width to its head; `None` for unsupported widths.
     pub fn from_output_dim(width: usize) -> Option<Self> {
         match width {
             GNN_OUTPUT_DIM => Some(GnnHeadKind::Deterministic),
@@ -221,7 +199,6 @@ impl GnnHeadKind {
     }
 }
 
-/// Stage 7: explicit Deterministic readout head `[N, hidden] -> [N, 3]`.
 #[derive(Module, Debug)]
 pub struct DeterministicGnnHead<B: Backend> {
     pub readout: Linear<B>,
@@ -239,7 +216,6 @@ impl<B: Backend> DeterministicGnnHead<B> {
     }
 }
 
-/// Stage 7: explicit Variational readout head `[N, hidden] -> (mean [N, 3], logvar [N, 3])`.
 #[derive(Module, Debug)]
 pub struct VariationalGnnHead<B: Backend> {
     pub mean_head: Linear<B>,
@@ -267,8 +243,6 @@ impl<B: Backend> VariationalGnnHead<B> {
     }
 }
 
-/// Splits a `[N, W]` readout into mean `[N, 3]` and — for the variational
-/// head — `logvar [N, 3]`, following [`GnnHeadKind`].
 pub fn split_mean_logvar<B: Backend>(
     readout: Tensor<B, 2>,
     head: GnnHeadKind,
@@ -284,9 +258,6 @@ pub fn split_mean_logvar<B: Backend>(
     (mean, logvar)
 }
 
-/// Standard VAE KL of `N(mean, exp(logvar))` against `N(0, 1)`, averaged
-/// over nodes and components (normalized velocity space, so the unit
-/// prior matches the dataset scale).
 pub fn variational_kl<B: Backend>(mean: Tensor<B, 2>, logvar: Tensor<B, 2>) -> Tensor<B, 1> {
     let one = Tensor::<B, 2>::ones_like(&logvar);
     let kl = one + logvar.clone() - mean.square() - logvar.exp();
@@ -294,22 +265,14 @@ pub fn variational_kl<B: Backend>(mean: Tensor<B, 2>, logvar: Tensor<B, 2>) -> T
     kl.sum().mul_scalar(-0.5).div_scalar(n)
 }
 
-/// Frozen output contract of the GNN-Kinematics model.
-/// Per contract v1 the readout head must produce Cartesian velocity
-/// components `vx/vy/vz` in km/s (Galactic frame) for every star node.
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub struct KinematicsOutput {
-    /// Cartesian velocity X in km/s (Galactic)
     pub vx: f32,
-    /// Cartesian velocity Y in km/s (Galactic)
     pub vy: f32,
-    /// Cartesian velocity Z in km/s (Galactic)
     pub vz: f32,
 }
 
 impl KinematicsOutput {
-    /// Builds the contract from a raw `[N, 3]` readout slice for a single star.
-    /// Returns `None` when the row does not contain exactly three components.
     pub fn from_row(row: &[f32]) -> Option<Self> {
         match row {
             [vx, vy, vz] => Some(Self {
@@ -321,7 +284,6 @@ impl KinematicsOutput {
         }
     }
 
-    /// Component accessor matching schema column order (`vx_kms`, `vy_kms`, `vz_kms`).
     pub fn as_components(&self) -> [f32; 3] {
         [self.vx, self.vy, self.vz]
     }
@@ -455,8 +417,6 @@ pub fn sample_stellar_dynamics<B: Backend>(
     };
     let (mean, logvar) = split_mean_logvar(gnn_output, head);
 
-    // Stage 7: deterministic head has no learned variance, so variational
-    // sampling is invalid and returns the mean directly.
     if temperature <= 0.0 || head == GnnHeadKind::Deterministic {
         return mean;
     }
@@ -497,7 +457,6 @@ pub fn compute_knn_adjacency(coords: &[[f32; 3]], k: usize) -> Vec<Vec<f32>> {
             })
             .collect();
 
-        // Stage 7: linear-time partial selection O(N) replaces O(N log N) full sort.
         let effective_k = k.min(dists.len());
         if effective_k > 0 && effective_k < dists.len() {
             dists.select_nth_unstable_by(effective_k - 1, |a, b| {
@@ -524,9 +483,6 @@ pub fn compute_knn_adjacency(coords: &[[f32; 3]], k: usize) -> Vec<Vec<f32>> {
     adj
 }
 
-/// Stage 7: builds a sparse CSR [`GraphBatch`] directly from 3D coordinates
-/// and a k-NN parameter, using linear-time partial selection per node.
-/// Avoids allocating and populating dense `N×N` adjacency matrices.
 pub fn compute_sparse_knn_graph(coords: &[[f32; 3]], k: usize) -> GraphBatch {
     let n = coords.len();
     if n == 0 {

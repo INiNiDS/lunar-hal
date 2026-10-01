@@ -36,10 +36,6 @@ pub struct PinnInputs {
     pub g_mag: f32,
 }
 
-/// Apparent G magnitude of a member at `position` assuming it shares the
-/// sector's absolute magnitude `mg_center` (distance modulus, parsecs).
-/// Falls back to `mg_center + 5*log10(0.1) - 5` near the origin, mirroring
-/// the single-star guard below.
 pub fn apparent_g_for_member(position: [f32; 3], mg_center: f32, g_fallback: f32) -> f32 {
     let d =
         (position[0] * position[0] + position[1] * position[1] + position[2] * position[2]).sqrt();

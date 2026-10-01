@@ -1,6 +1,3 @@
-//! Provenance records (stage 4A): machine-readable lineage for every derived
-//! dataset artifact. Stored as `provenance.json` next to the manifest; secret
-//! values must never appear here — only source identity and auth *mode*.
 
 use crate::sources::SourceProvenance;
 use serde::{Deserialize, Serialize};
@@ -8,13 +5,9 @@ use std::path::Path;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct DatasetProvenanceV1 {
-    /// Version marker of this record structure.
     pub version: String,
-    /// Canonical dataset directory this record belongs to.
     pub dataset_dir: String,
-    /// Every external source that contributed columns/rows (order-stable).
     pub sources: Vec<SourceProvenance>,
-    /// Note about which model views were compared before/after enrichment.
     pub impact_report_reference: Option<String>,
 }
 
@@ -52,14 +45,6 @@ impl DatasetProvenanceV1 {
     }
 }
 
-/// Secrets policy (mirrors the plan's "Политика секретов"):
-///
-/// 1. Secret VALUES live only in the process environment of backend jobs;
-///    never in Git, Notion, logs, artifacts or frontend payloads.
-/// 2. `.env.example` lists NAMES with empty values only.
-/// 3. Anything crossing a serialization boundary goes through
-///    [`crate::auth::redact`] first — provenance records therefore contain
-///    `SourceAuth::EnvKeys { requires: [...] }`, i.e. names, not values.
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -81,8 +66,6 @@ mod tests {
 
     #[test]
     fn provenance_never_contains_secret_values() {
-        // Modeled attack: someone stuffs a credential into an auth variant;
-        // JSON surface must contain no value-like field.
         let mut p = DatasetProvenanceV1::new("d");
         p.register(crate::sources::SourceProvenance {
             adapter_id: "mast_tic_v1".into(),

@@ -1,9 +1,3 @@
-//! Filesystem-backed SIREN Gallery repository and REST handlers.
-//!
-//! Metadata lives in `gallery/<id>/metadata.json`; generated binary assets are
-//! persisted alongside it as `texture.png` and `thumb.png`. Every write goes
-//! through a temporary file plus rename so a partial process crash cannot
-//! produce a valid-looking JSON record with truncated contents.
 
 use std::collections::HashMap;
 use std::path::{Path as StdPath, PathBuf};
@@ -64,8 +58,6 @@ impl GalleryStore {
                 continue;
             };
             let Ok(star) = serde_json::from_slice::<GalleryStar>(&bytes) else {
-                // One corrupt record must not prevent the rest of the gallery
-                // from loading. The file remains available for diagnostics.
                 continue;
             };
             if !is_safe_id(&star.id) {
@@ -139,8 +131,6 @@ impl GalleryStore {
         Self::atomic_write(&root.join("metadata.json"), &metadata)?;
         if let Some(texture) = texture {
             Self::atomic_write(&root.join("texture.png"), texture)?;
-            // The 128px rendering is already suitable as a responsive
-            // thumbnail and avoids embedding pixels inside metadata JSON.
             Self::atomic_write(&root.join("thumb.png"), texture)?;
         }
         Ok(())

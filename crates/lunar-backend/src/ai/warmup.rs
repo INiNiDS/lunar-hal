@@ -38,8 +38,6 @@ pub async fn warmup_models() {
             gnn_arc.variational
         );
         tokio::task::spawn_blocking(move || {
-            // Two-node group: single-node inference is excluded (Stage
-            // 6.6), so warmup runs the smallest valid group instead.
             let star = StarFeatures {
                 coords: [0.0, 0.0, 0.0],
                 log_teff: 3.75,

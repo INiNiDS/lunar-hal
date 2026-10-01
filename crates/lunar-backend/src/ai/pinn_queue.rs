@@ -29,7 +29,6 @@ async fn get_pinn_queue() -> mpsc::Sender<PinnRequest> {
                     let mut batch_inputs = first_req.inputs;
                     let mut responders = vec![(batch_inputs.len(), first_req.responder)];
 
-                    // Dynamic batching window: collect pending requests up to window or max size
                     let deadline = tokio::time::Instant::now() + DYNAMIC_BATCH_WINDOW;
                     while batch_inputs.len() < MAX_DYNAMIC_BATCH_SIZE {
                         let timeout =
@@ -57,7 +56,6 @@ async fn get_pinn_queue() -> mpsc::Sender<PinnRequest> {
                         }
                     }
 
-                    // Execute single batched forward pass on device
                     let pinn_ref = match get_pinn().await {
                         Ok(pinn) => pinn,
                         Err(err) => {
@@ -86,7 +84,6 @@ async fn get_pinn_queue() -> mpsc::Sender<PinnRequest> {
                         }
                     });
 
-                    // Distribute outputs back to each responder
                     let mut offset = 0;
                     for (count, responder) in responders {
                         let slice = outputs

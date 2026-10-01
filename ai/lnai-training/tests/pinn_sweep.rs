@@ -1,8 +1,3 @@
-//! Stage 7, item 3: PINN width/depth sweep and mixed-precision experiment with accuracy gate.
-//!
-//! Sweeps across architectural configurations (widths: 256, 512; depths: shallow vs deep),
-//! measures inference time and parameter counts, and asserts that no configuration regresses
-//! the Stefan–Boltzmann physics residual or target MSE bounds.
 
 use burn::backend::NdArray;
 use burn::prelude::*;
@@ -31,7 +26,6 @@ fn generate_synthetic_pinn_eval_data(n: usize) -> (Tensor<B, 2>, Vec<[f32; 4]>) 
 
         inputs.extend_from_slice(&[x, y, z, bp_rp, mg]);
 
-        // Physical Stefan-Boltzmann consistent truth
         let log_teff = 3.6 + 0.3 * t;
         let log_rad = 0.0 + 0.2 * t;
         let log_mass = 0.0 + 0.1 * t;
@@ -94,10 +88,8 @@ fn pinn_width_depth_sweep_and_accuracy_gate() {
         };
         let model = config.init::<B>(&device);
 
-        // Warmup
         let _ = model.forward(inputs.clone());
 
-        // Timed inference
         let start = Instant::now();
         let runs = 10;
         let mut last_output = None;
@@ -114,7 +106,6 @@ fn pinn_width_depth_sweep_and_accuracy_gate() {
             .map(|c| [c[0], c[1], c[2], c[3]])
             .collect();
 
-        // Accuracy gates: finiteness and Stefan-Boltzmann residual consistency
         let is_finite = pred.iter().all(|row| row.iter().all(|v| v.is_finite()));
         assert!(
             is_finite,

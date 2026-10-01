@@ -7,9 +7,6 @@ use std::{cell::RefCell, rc::Rc};
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::{JsCast, closure::Closure};
 
-/// Retains browser listeners for the room lifetime and removes them when the
-/// room unmounts. Resize events are debounced; global release/focus events make
-/// sure a lost mouseup can never leave the drag overlay blocking the desktop.
 #[cfg(target_arch = "wasm32")]
 struct ViewportListeners {
     window: web_sys::Window,
@@ -51,10 +48,6 @@ impl Drop for ViewportListeners {
     }
 }
 
-/// Raw browser closures run outside the Dioxus runtime, so they must only
-/// touch signals here — calling `spawn` from them panics in
-/// `Runtime::current_scope_id`. The debounced reflow task is spawned by the
-/// effect watching `generation`, which always runs inside the component scope.
 #[cfg(target_arch = "wasm32")]
 fn resize_listener(mut generation: Signal<u64>) -> Closure<dyn FnMut(web_sys::Event)> {
     Closure::wrap(Box::new(move |_event: web_sys::Event| {
@@ -62,8 +55,6 @@ fn resize_listener(mut generation: Signal<u64>) -> Closure<dyn FnMut(web_sys::Ev
     }) as Box<dyn FnMut(web_sys::Event)>)
 }
 
-/// Debounces the raw resize events into a single reflow 75ms after the last one.
-/// Must run inside a component scope so `spawn` has a current scope.
 #[cfg(target_arch = "wasm32")]
 fn use_debounced_reflow(
     mut os: crate::os::OsState,
@@ -148,10 +139,6 @@ fn install_viewport_listeners(
     retained
 }
 
-/// Reflow floating windows when browser or visual-viewport dimensions change.
-/// The initial effect also clamps any restored geometry before the room becomes
-/// interactive. On non-WASM checks there is no browser event target, so only the
-/// initial reflow is meaningful.
 pub fn use_viewport_resize() {
     let os = use_os_state();
     let mut initial_os = os;

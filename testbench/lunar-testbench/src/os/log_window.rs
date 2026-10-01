@@ -32,7 +32,6 @@ impl AppSnapshot for LogWindowSnapshot {
     }
 }
 
-/// Terminal-style log viewer hosted inside a normal OS window.
 #[component]
 pub fn LogWindow(service: String) -> Element {
     let mut os = use_os_state();

@@ -1,10 +1,3 @@
-//! Stage 5 (task 6): shared training lifecycle — cancellation, progress,
-//! checkpoints and deterministic seeding.
-//!
-//! The runner keeps no model weights: the GPU trainer lives in the worker
-//! binary. The library owns the *protocol* — spec validation, deterministic
-//! seed derivation, atomic checkpoint bookkeeping and NDJSON event encoding —
-//! so CLI and Testbench produce byte-compatible run folders.
 
 use std::io::Write as _;
 use std::path::Path;
@@ -13,14 +6,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::spec::{EvaluationSpec, TrainingSpec};
 
-/// Deterministic seed defaults when the spec carries no explicit seed.
 pub const DEFAULT_TRAIN_SEED: u64 = 42;
 
-/// Derives the effective training seed for a run.
-///
-/// Explicit `TrainingSpec::seed` always wins. Otherwise a stable FNV-1a hash
-/// of `dataset_manifest_hash + model slug + epochs` keeps old vs new trainer
-/// parity reproducible without hidden RNG state.
 pub fn effective_train_seed(spec: &TrainingSpec) -> u64 {
     if let Some(seed) = spec.seed {
         return seed;
@@ -38,9 +25,6 @@ pub fn effective_train_seed(spec: &TrainingSpec) -> u64 {
     hash
 }
 
-/// Lifecycle callbacks — one hook per observable training event.
-/// Backends implement this to stream [`crate::events::JobEvent`] NDJSON
-/// plus human-readable logs.
 pub trait ProgressSink {
     fn on_epoch(&mut self, epoch: u32, total_epochs: u32, train_loss: f64, val_loss: f64);
     fn on_checkpoint(&mut self, epoch: u32, path: &str);
@@ -48,7 +32,6 @@ pub trait ProgressSink {
     fn on_cancelled(&mut self, epoch: u32);
 }
 
-/// Cooperative cancellation flag polled once per epoch.
 #[derive(Debug, Default)]
 pub struct CancelFlag {
     cancelled: std::sync::atomic::AtomicBool,
@@ -69,19 +52,15 @@ impl CancelFlag {
     }
 }
 
-/// Outcome of a (possibly interrupted) training run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RunOutcome {
     Completed,
     Cancelled,
     EarlyStopped,
-    /// Epoch-watch AI agent issued VERDICT: STOP (checkpoint saved).
     AgentStopped,
 }
 
-/// Validates a training spec without touching data or GPU:
-/// capability check, epoch/batch sanity, cancel contract.
 pub fn validate_training_run(spec: &TrainingSpec) -> Result<(), String> {
     spec.validate().map_err(|errs| errs.join("; "))?;
     if spec.epochs == 0 {
@@ -93,8 +72,6 @@ pub fn validate_training_run(spec: &TrainingSpec) -> Result<(), String> {
     Ok(())
 }
 
-/// Read-only evaluation never mutates checkpoints: verifies the artifact
-/// directory exists and the spec is capability-valid.
 pub fn validate_evaluation_run(spec: &EvaluationSpec) -> Result<(), String> {
     spec.validate().map_err(|errs| errs.join("; "))?;
     let dir = Path::new(&spec.output_dir);
@@ -104,8 +81,6 @@ pub fn validate_evaluation_run(spec: &EvaluationSpec) -> Result<(), String> {
     Ok(())
 }
 
-/// Atomically persists a small text/JSON checkpoint sidecar
-/// (temp file + rename) so interrupted epochs never corrupt the run folder.
 pub fn write_checkpoint_sidecar(
     output_dir: &Path,
     file_name: &str,
@@ -123,8 +98,6 @@ pub fn write_checkpoint_sidecar(
     Ok(path)
 }
 
-/// Appends one NDJSON-encoded event line to the run's `events.ndjson`.
-/// Stdout stays human-readable; machines read this file.
 pub fn append_event_line(
     output_dir: &Path,
     event: &crate::events::JobEvent,

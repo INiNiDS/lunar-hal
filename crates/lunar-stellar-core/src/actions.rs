@@ -1,10 +1,3 @@
-//! Player action recording with a one-minute rolling window.
-//!
-//! Every user interaction (pan, zoom, selection, parameter changes)
-//! flows through [`ActionBuffer`]. The [`Game::update`](crate::StellarScene::update)
-//! method records a camera snapshot, computes the accumulated camera
-//! delta over the rolling window, drains recent actions, and prunes
-//! the buffer.
 
 use instant::Instant;
 use std::time::Duration;
@@ -13,7 +6,6 @@ use crate::camera::Camera;
 use crate::sector::SectorKey;
 use lunar_structures::ResponseStar;
 
-/// Everything a player can do that we want to track.
 #[derive(Clone, Debug, PartialEq)]
 pub enum PlayerAction {
     Pan { delta: (f32, f32) },
@@ -26,79 +18,37 @@ pub enum PlayerAction {
     LoadWorld { world_id: String },
 }
 
-/// A single recorded action together with the moment it happened.
-///
-/// `when` is `None` when the buffer has not yet accumulated a full
-/// window of history — the timestamp is replaced with a default
-/// sentinel to signal "not enough data".
 #[derive(Clone, Debug)]
 pub struct ActionRecord {
     pub action: PlayerAction,
     pub when: Option<Instant>,
 }
 
-/// Accumulated camera displacement over the rolling window.
-///
-/// `offset_delta` is the **total** pixel displacement between the
-/// oldest camera snapshot still inside the 60 s window and the
-/// current camera — not just the last frame.
-///
-/// When the session is shorter than the window, every field is
-/// [`Default`] (zero offset, zero zoom, not dragging).
 #[derive(Clone, Copy, Debug, Default)]
 pub struct CameraMovement {
-    /// Total offset delta over the rolling window (pixels).
     pub offset_delta: (f32, f32),
-    /// Current zoom level.
     pub zoom: f32,
-    /// Whether the player is currently dragging.
     pub dragging: bool,
 }
 
-/// What [`Game::update`](crate::StellarScene::update) delivers to its caller.
-///
-/// All fields are *owned* so the payload can be sent across threads
-/// or serialized independently of the game lock.
 #[derive(Clone, Debug)]
 pub struct UpdatePayload {
-    /// Total camera displacement over the rolling window (default:
-    /// 60 s). Zero when the session is shorter than the window.
     pub camera_movement: CameraMovement,
-    /// Every action the player performed inside the rolling window.
-    ///
-    /// If the session is shorter than the window (default: 60 s),
-    /// every [`ActionRecord::when`] will be `None` — the timestamps
-    /// are replaced with a default sentinel.
     pub recent_actions: Vec<ActionRecord>,
-    /// The sector under the camera center (viewport midpoint mapped
-    /// to chunk coordinates). `None` when no world is loaded or the
-    /// viewport cannot be resolved.
     pub current_sector: Option<SectorKey>,
-    /// Stars belonging to whichever chunk is the current sector.
-    /// Empty when `current_sector` is `None` or the chunk hasn't
-    /// been fetched yet.
     pub sector_stars: Vec<ResponseStar>,
     pub session_duration: Duration,
 }
 
-/// Accumulates [`PlayerAction`]s and camera snapshots and exposes
-/// them through [`ActionBuffer::build_update`].
-///
-/// The buffer *owns* its backing [`Vec`]s and is stored inside
-/// [`GameState`](crate::stellar::GameState). Pruning happens on every
-/// update so memory stays bounded.
 #[derive(Debug)]
 pub struct ActionBuffer {
     records: Vec<ActionRecord>,
-    /// Camera snapshots keyed by timestamp, used to compute the
-    /// total displacement over the rolling window.
     camera_snapshots: Vec<(Camera, Instant)>,
     started_at: Instant,
     window: Duration,
 }
 
 impl ActionBuffer {
-    /// Fresh buffer with a 60-second rolling window.
     pub fn new() -> Self {
         Self {
             records: Vec::new(),
@@ -108,7 +58,6 @@ impl ActionBuffer {
         }
     }
 
-    /// Append an action to the buffer with a current timestamp.
     pub fn push(&mut self, action: PlayerAction) {
         self.records.push(ActionRecord {
             action,
@@ -116,19 +65,10 @@ impl ActionBuffer {
         });
     }
 
-    /// Record a camera snapshot for later delta computation.
     pub fn push_camera(&mut self, camera: Camera) {
         self.camera_snapshots.push((camera, Instant::now()));
     }
 
-    /// Produce an [`UpdatePayload`] with:
-    ///
-    /// * **camera_movement** — total offset delta from the oldest
-    ///   camera snapshot still inside the rolling window to the
-    ///   newest. When the session is shorter than the window, the
-    ///   entire [`CameraMovement`] is [`Default`].
-    /// * **recent_actions** — actions that fall inside the window
-    ///   (timestamps set to `None` when < window).
     pub fn build_update(&self) -> UpdatePayload {
         let elapsed = self.started_at.elapsed();
         let now = Instant::now();
@@ -142,8 +82,6 @@ impl ActionBuffer {
         }
     }
 
-    /// Remove records and camera snapshots older than the rolling
-    /// window.
     pub fn prune(&mut self) {
         let Some(cutoff) = Instant::now().checked_sub(self.window) else {
             return;

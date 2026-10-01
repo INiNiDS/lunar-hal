@@ -1,30 +1,15 @@
-//! GNN-Kinematics correctness metrics (Stage 3).
-//!
-//! Three reference points are always reported together:
-//! * **oracle** — ground-truth neighbor velocities (upper bound, MSE = 0 by definition)
-//! * **chained** — actual model output under evaluation
-//! * **baseline** — per-batch mean-velocity predictor (lower bound)
-//!
-//! Skill scores are normalized against the baseline: `skill = 1 - mse/baseline_mse`.
 
 use super::rollout::mean_squared_error3;
 
-/// Combined kinematics metrics for one evaluation batch.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct KinematicsMetrics {
     pub oracle_mse: f64,
     pub chained_mse: f64,
     pub baseline_mse: f64,
-    /// `1 - chained_mse / baseline_mse`; positive when the model beats the mean predictor.
     pub chained_skill: f64,
 }
 
 impl KinematicsMetrics {
-    /// Evaluates a chained prediction against oracle (= truth) and baseline.
-    ///
-    /// * `chained` — model predictions `[N, 3]`
-    /// * `truth`   — ground-truth velocities `[N, 3]` (the oracle prediction)
-    /// * `baseline`— baseline predictions `[N, 3]` (e.g. batch-mean velocity)
     pub fn evaluate(chained: &[[f32; 3]], truth: &[[f32; 3]], baseline: &[[f32; 3]]) -> Self {
         let oracle_mse = mean_squared_error3(truth, truth);
         let chained_mse = mean_squared_error3(chained, truth);
@@ -42,8 +27,6 @@ impl KinematicsMetrics {
         }
     }
 
-    /// Sanity ordering required from every evaluation: oracle must not lose
-    /// to the chain and the chain must be reported against a real baseline.
     pub fn ordering_is_sane(&self) -> bool {
         self.oracle_mse <= self.chained_mse && self.chained_mse < f64::INFINITY
     }

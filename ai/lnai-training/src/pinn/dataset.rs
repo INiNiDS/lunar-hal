@@ -142,8 +142,6 @@ impl<B: Backend> StellarDataset<B> {
         })
     }
 
-    /// Deterministic split on `seed`: same seed + same data always yields
-    /// the same train/val partition (old/new trainer parity).
     pub fn split(self, val_frac: f32) -> (Self, Self) {
         self.split_with_seed(val_frac, crate::runner::DEFAULT_TRAIN_SEED)
     }
@@ -195,8 +193,6 @@ impl<B: Backend> StellarDataset<B> {
     }
 }
 
-/// GPU-resident batch iterator: shuffles rows once per epoch via a single
-/// gather on device, then serves batches as zero-copy row slices.
 pub struct GpuBatcher<B: Backend> {
     inputs: Tensor<B, 2>,
     targets: Tensor<B, 2>,
@@ -238,8 +234,6 @@ impl<B: Backend> GpuBatcher<B> {
     }
 }
 
-/// Input schema flavor: legacy `clean` output vs canonical-v1 enriched with
-/// Gaia astrophysical parameters (`lnaicli enrich-stellar`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SchemaKind {
     Legacy,
@@ -297,8 +291,6 @@ fn read_filtered_parquet_mode(
     let path_str = parquet_path
         .to_str()
         .ok_or_else(|| anyhow::anyhow!("non-utf8 data path"))?;
-    // Lazy scan with column projection: the enriched canonical file is ~8GB
-    // across 27 columns, but PINN needs only 9 — never materialize the rest.
     let mut lf = anyhow::Context::context(
         LazyFrame::scan_parquet(PlRefPath::from(path_str), Default::default()),
         "failed to scan parquet",
@@ -348,7 +340,6 @@ fn read_filtered_parquet_mode(
     }
 
     let mut proj: Vec<Expr> = required_cols.iter().map(|c| col(*c)).collect();
-    // Tile filtering needs the tile column, which legacy clean files lack.
     if tiles.as_deref().is_some_and(|t| !t.is_empty()) {
         if !schema.contains("spatial_tile") {
             anyhow::bail!("--tiles needs the spatial_tile column (canonical schema).");
@@ -373,7 +364,6 @@ fn read_filtered_parquet_mode(
     for &col_name in required_cols {
         lf = lf.filter(col(col_name).is_not_null());
     }
-    // Optional spatial-tile subset: shard the sky without loading the rest.
     if let Some(wanted) = tiles.as_deref() {
         let wanted: Vec<&str> = wanted
             .split(',')
@@ -421,9 +411,6 @@ fn read_filtered_parquet_mode(
     Ok((df, n))
 }
 
-/// Deterministic systematic sample: every k-th row in file order, at most
-/// `cap` rows. File order follows RA-shard assembly, so a stride stays
-/// spatially uniform (unlike a head slice).
 fn apply_max_rows(df: DataFrame, max_rows: Option<u64>) -> Result<DataFrame> {
     let cap = match max_rows {
         Some(n) if n > 0 && (n as usize) < df.height() => n as usize,
@@ -679,7 +666,6 @@ mod tests {
         let df = ap_frame();
         let raw = RawColumns::extract(&df).expect("extract");
         assert_eq!(raw.x.len(), 2);
-        // M_G = g - 5*log10(d) + 5; d=100 -> M_G = g - 5.
         assert!((raw.mg[0] - 5.0).abs() < 1e-4);
         assert!((raw.mg[1] - (9.0 - 5.0 * 200f32.log10() + 5.0)).abs() < 1e-4);
         assert!((raw.log_teff[0] - 5778f32.log10()).abs() < 1e-5);
@@ -713,11 +699,9 @@ mod tests {
     #[test]
     fn read_ap_file_filters_tiles_and_nulls() {
         let (_dir, path) = write_parquet(&mut ap_file_frame(), "ap.parquet");
-        // tileA has 3 rows, one with null teff -> 2 survive.
         let (df, n) = read_filtered_parquet(&path, None, Some("tileA".to_string())).expect("read");
         assert_eq!(n, 2);
         assert_eq!(df.height(), 2);
-        // No tile filter: 5 valid rows of 6.
         let (_, n_all) = read_filtered_parquet(&path, None, None).expect("read");
         assert_eq!(n_all, 5);
     }
@@ -725,7 +709,6 @@ mod tests {
     #[test]
     fn read_ap_file_max_rows_strides() {
         let (_dir, path) = write_parquet(&mut ap_file_frame(), "ap.parquet");
-        // 5 valid rows capped at 2 -> stride 3 -> filtered rows 0 and 3.
         let (df, n) = read_filtered_parquet(&path, Some(2), None).expect("read");
         assert_eq!(n, 2);
         let bp: Vec<f32> = df

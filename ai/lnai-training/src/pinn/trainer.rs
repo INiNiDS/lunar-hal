@@ -1,14 +1,3 @@
-//! Stage 5 (task 2): PINN trainer — moved verbatim from `ai/lnai/src/main.rs`.
-//!
-//! The only behavioural deltas vs the pre-Stage-5 binary:
-//! * train/val split and batch order derive from the spec seed
-//!   (`split_with_seed` / `new_with_seed`) so old/new parity is exact;
-//! * every epoch additionally appends a typed [`JobEvent`](crate::events::JobEvent)
-//!   line to `events.ndjson` via [`format_epoch_line`](crate::events::format_epoch_line)
-//!   (same column layout as stdout, machine-readable).
-//!
-//! Everything else — architecture, loss, optimizer, early stopping,
-//! checkpoint policy, holdout block — is untouched.
 
 use anyhow::Result;
 use burn::backend::Autodiff;
@@ -32,8 +21,6 @@ use crate::spec::TrainingSpec;
 type TrainBackend = Autodiff<burn::backend::Cuda<f32, i32>>;
 type InferBackend = burn::backend::Cuda<f32, i32>;
 
-/// Shared stdout + NDJSON epoch sink: human-readable table on stdout,
-/// typed metric on `events.ndjson`.
 struct EventSink {
     output_dir: std::path::PathBuf,
     total_epochs: u32,
@@ -66,7 +53,6 @@ impl EventSink {
     }
 }
 
-/// Trains exactly the legacy `lnai` binary would for this spec.
 pub fn run_train(spec: &TrainingSpec) -> Result<RunOutcome> {
     run_train_with_cancel(spec, &CancelFlag::new())
 }
@@ -245,8 +231,6 @@ pub fn run_train_with_cancel(spec: &TrainingSpec, cancel: &CancelFlag) -> Result
 
         let lr = cosine_annealing(epoch, epochs, initial_lr, 1e-6);
 
-        // Per-epoch batch order mixes the run seed with the epoch index so
-        // every epoch is reproducible yet distinct.
         let mut batcher = GpuBatcher::new_with_seed(
             &train_ds,
             spec.batch_size as usize,
@@ -391,9 +375,6 @@ pub fn run_train_with_cancel(spec: &TrainingSpec, cancel: &CancelFlag) -> Result
         println!();
         println!("=== Holdout Evaluation ===");
         let holdout_path = Path::new(holdout_path);
-        // Stage 6: an explicitly requested holdout must exist and be
-        // non-empty — a silent 0.0 loss on missing/empty data used to
-        // masquerade as perfect generalization.
         if !holdout_path.exists() {
             anyhow::bail!("holdout file not found: {}", holdout_path.display());
         }
@@ -457,7 +438,6 @@ fn write_artifact_manifest(
     let output_dir = Path::new(&spec.output_dir);
     let model_hash =
         sha256_file_hex(&output_dir.join(weight_file_name(&ModelKind::Pinn))).unwrap_or_default();
-    // Hash what you write: the norm file on disk is pretty JSON.
     let norm_hash = hash_norm_rendered(&render_norm_file(norm));
     let mut manifest = ArtifactManifestV1::new(
         ModelKind::Pinn,
@@ -477,14 +457,11 @@ fn write_artifact_manifest(
     manifest.evaluation_metrics = Some(serde_json::json!({ "best_val_loss": best_val_loss }));
     let path = write_artifact_bundle(output_dir, &manifest)
         .map_err(|e| anyhow::anyhow!("failed to write artifact bundle: {e}"))?;
-    // Keep the legacy norm filename next to the manifest for old tooling.
     let _ = norm_file_name(&ModelKind::Pinn);
     println!("Artifact manifest: {}", path.display());
     Ok(())
 }
 
-/// Read-only evaluation: loads the artifact, reports validation (+holdout)
-/// losses, runs no optimizer step and rewrites no checkpoint.
 pub fn run_evaluate(spec: &TrainingSpec) -> Result<RunOutcome> {
     spec.validate()
         .map_err(|errs| anyhow::anyhow!("invalid PINN spec: {}", errs.join("; ")))?;
@@ -545,8 +522,6 @@ pub fn run_evaluate(spec: &TrainingSpec) -> Result<RunOutcome> {
     );
 
     if let Some(holdout_path) = &spec.holdout {
-        // Stage 6: same non-empty gate as training — a requested holdout
-        // must exist and carry samples.
         if !Path::new(holdout_path).exists() {
             anyhow::bail!("holdout file not found: {holdout_path}");
         }
@@ -587,8 +562,6 @@ pub fn run_evaluate(spec: &TrainingSpec) -> Result<RunOutcome> {
     Ok(RunOutcome::Completed)
 }
 
-/// Benchmark harness: loads the artifact, times batched forward passes,
-/// writes `benchmark.json`, trains nothing.
 pub fn run_benchmark(spec: &TrainingSpec, iters: u32, warmup: u32) -> Result<RunOutcome> {
     use std::time::Instant;
     spec.validate()
@@ -647,8 +620,6 @@ pub fn run_benchmark(spec: &TrainingSpec, iters: u32, warmup: u32) -> Result<Run
     Ok(RunOutcome::Completed)
 }
 
-/// Batched inference gathering predictions + truths on CPU for per-target
-/// metrics. Same batching as [`evaluate_infer`]; read-only.
 fn evaluate_per_target_infer(
     model: &StellarMlp<InferBackend>,
     inputs: &Tensor<InferBackend, 2>,
@@ -685,9 +656,6 @@ fn evaluate_per_target_infer(
     Ok((to_rows(pred_flat), to_rows(truth_flat)))
 }
 
-/// Prints per-target MSE/MAE/max-abs in normalized units plus MAE in dex
-/// (mae_norm × target std), which is the physically readable number, plus
-/// the Stage 6 weighted MSE aggregate over `weights`.
 fn print_per_target_table(
     split: &str,
     metrics: &[crate::metrics::pinn::PerTargetMetrics],
@@ -719,7 +687,6 @@ fn print_per_target_table(
     }
 }
 
-/// Target weights carried by the spec (uniform for legacy specs).
 fn pinn_target_weights(spec: &TrainingSpec) -> [f32; 4] {
     match &spec.config {
         crate::spec::ModelConfig::Pinn(cfg) => cfg.target_weights,

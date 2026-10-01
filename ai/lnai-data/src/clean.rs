@@ -1,8 +1,5 @@
 use serde::{Deserialize, Serialize};
 
-/// The exact ICRS->Galactic rotation matrix (convention used by Astropy and
-/// the Gaia documentation). Frozen here so conversions are bit-reproducible
-/// across runs and machines.
 pub const ICRS_TO_GALACTIC: [[f64; 3]; 3] = [
     [
         -0.05487556041621544,
@@ -21,28 +18,21 @@ pub const ICRS_TO_GALACTIC: [[f64; 3]; 3] = [
     ],
 ];
 
-/// Astronomical constant: tangential velocity `km/s` produced by a proper
-/// motion of 1 mas/yr at 1 kpc distance (`vt = 4.74047 * mu * D_kpc`).
 pub const MAS_YR_KPC_TO_KMS: f64 = 4.740470446;
 
-/// One canonical stellar record after cleaning; maps 1:1 onto the golden
-/// schema's collectable columns (view-only neighbor fields live in assemble).
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct StarRecord {
     pub source_id: String,
     pub ra_deg: f64,
     pub dec_deg: f64,
-    /// Coordinate epoch, always J2000.0 for Gaia DR3.
     pub epoch_year: f64,
     pub parallax_mas: Option<f64>,
     pub pm_ra_mas_yr: Option<f64>,
     pub pm_dec_mas_yr: Option<f64>,
     pub radial_velocity_kms: Option<f64>,
-    /// Distance-derived Cartesian position, parsecs (Galactic frame).
     pub x_pc: Option<f32>,
     pub y_pc: Option<f32>,
     pub z_pc: Option<f32>,
-    /// Cartesian velocity km/s (Galactic frame).
     pub vx_kms: Option<f32>,
     pub vy_kms: Option<f32>,
     pub vz_kms: Option<f32>,
@@ -54,7 +44,6 @@ pub struct StarRecord {
     pub is_valid: bool,
 }
 
-/// Parsing tolerances mirrored from the legacy pipeline's cuts.
 #[derive(Debug, Clone, Copy)]
 pub struct CleanPolicy {
     pub max_ruwe: f64,
@@ -65,7 +54,6 @@ impl Default for CleanPolicy {
     fn default() -> Self {
         Self {
             max_ruwe: 1.4,
-            // Mas-level outlier guard used by the legacy `clean` stage.
             max_astrometric_excess_noise: 10.0,
         }
     }
@@ -84,7 +72,6 @@ fn parse_u64(s: &str) -> Option<u64> {
     s.trim().parse().ok()
 }
 
-/// Parses one TAP CSV export body (with header) into raw collectable fields.
 pub fn parse_shard_csv(csv: &str) -> Result<Vec<StarRecord>, String> {
     let mut lines = csv.lines();
     let header = lines.next().ok_or("empty csv")?;
@@ -157,9 +144,6 @@ pub fn parse_shard_csv(csv: &str) -> Result<Vec<StarRecord>, String> {
     Ok(out)
 }
 
-/// Deduplicates by stable source ID deterministically: lowest RUWE wins;
-/// ties (equal or absent RUWE) keep the lexicographically smallest remainder
-/// fingerprint so input order can never change the result.
 pub fn dedup_by_source_id(records: Vec<StarRecord>) -> Vec<StarRecord> {
     use std::collections::BTreeMap;
     let mut best: BTreeMap<u64, StarRecord> = BTreeMap::new();
@@ -187,20 +171,16 @@ fn prefer(a: &StarRecord, b: &StarRecord) -> bool {
     if (ra - rb).abs() > f32::EPSILON {
         return ra < rb;
     }
-    // Deterministic tie-break on full serialization identity.
     serde_json_string(a) < serde_json_string(b)
 }
 
 fn serde_json_string(r: &StarRecord) -> String {
-    // Avoid pulling serde_json into release builds just for this; a compact
-    // field digest is enough for a deterministic tie-break.
     format!(
         "{}|{:?}|{:?}|{:?}|{:?}|{:?}",
         r.source_id, r.ra_deg, r.dec_deg, r.mag_g, r.ruwe, r.astrometric_excess_noise
     )
 }
 
-/// Unit direction vector (ICRS) for given equatorial coordinates, degrees.
 pub fn icrs_unit_vector(ra_deg: f64, dec_deg: f64) -> [f64; 3] {
     let (ra, dec) = (ra_deg.to_radians(), dec_deg.to_radians());
     [dec.cos() * ra.cos(), dec.cos() * ra.sin(), dec.sin()]
@@ -214,7 +194,6 @@ fn mat_vec(m: &[[f64; 3]; 3], v: &[f64; 3]) -> [f64; 3] {
     ]
 }
 
-/// Galactic-frame Cartesian position in parsecs, when parallax allows it.
 pub fn galactic_position_pc(ra_deg: f64, dec_deg: f64, parallax_mas: f64) -> Option<[f32; 3]> {
     if parallax_mas <= 0.0
         || !parallax_mas.is_finite()
@@ -234,11 +213,6 @@ pub fn galactic_position_pc(ra_deg: f64, dec_deg: f64, parallax_mas: f64) -> Opt
     position.iter().all(|v| v.is_finite()).then_some(position)
 }
 
-/// Galactic-frame Cartesian velocity in km/s from proper motion + radial
-/// velocity + parallax. Returns None unless all needed inputs are present.
-///
-/// Math: `vt[km/s] = 4.74047 * mu[mas/yr] * D[kpc]`, with `D_kpc = 1/plx[mAS]`
-/// scaled to `1000/plx`: for parallax in mas, `vt = 4.74047 * mu / plx`.
 pub fn galactic_velocity_kms(
     ra_deg: f64,
     dec_deg: f64,
@@ -250,20 +224,16 @@ pub fn galactic_velocity_kms(
     if parallax_mas <= 0.0 || !pm_ra_mas_yr.is_finite() || !pm_dec_mas_yr.is_finite() {
         return None;
     }
-    // East/North tangent-basis vectors at (ra, dec):
     let (a, d) = (ra_deg.to_radians(), dec_deg.to_radians());
     let r_hat = [d.cos() * a.cos(), d.cos() * a.sin(), d.sin()];
     let e_north = [-d.sin() * a.cos(), -d.sin() * a.sin(), d.cos()];
     let e_east = [-a.sin(), a.cos(), 0.0];
 
-    // With parallax in mas: D_kpc = 1/plx[mas], so
-    // vt[km/s] = 4.74047 * mu[mas/yr] / plx[mas].
     let scale = MAS_YR_KPC_TO_KMS / parallax_mas;
     let veast = scale * pm_ra_mas_yr;
     let vnorth = scale * pm_dec_mas_yr;
     let vr = radial_velocity_kms.unwrap_or(0.0);
 
-    // Compose ICRS 3D velocity then rotate to the Galactic frame.
     let comps = [vr, vnorth, veast];
     let bases = [&r_hat, &e_north, &e_east];
     let mut v_icrs = [0.0f64; 3];
@@ -276,8 +246,6 @@ pub fn galactic_velocity_kms(
     Some([v_gal[0] as f32, v_gal[1] as f32, v_gal[2] as f32])
 }
 
-/// Applies [`CleanPolicy`] flags, dedups, fills derived position/velocity
-/// fields. Deterministic: same input bytes -> same output order/content.
 pub fn clean_records(mut records: Vec<StarRecord>, policy: &CleanPolicy) -> Vec<StarRecord> {
     for r in records.iter_mut() {
         r.is_valid = match (r.ruwe, r.astrometric_excess_noise) {
@@ -321,8 +289,6 @@ pub fn clean_records(mut records: Vec<StarRecord>, policy: &CleanPolicy) -> Vec<
     dedup_by_source_id(records)
 }
 
-/// Pilot QA report: duplicates/null-rates/outliers/spatial coverage summary
-/// ("проверить дубликаты, null-rate, outliers и spatial coverage").
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct QualityReport {
     pub total_rows: u64,
@@ -336,8 +302,6 @@ pub struct QualityReport {
     pub ra_max: f64,
     pub dec_min: f64,
     pub dec_max: f64,
-    /// Share of rows whose Cartesian coordinates landed outside a sane range
-    /// (parallax>0 sanity already enforced, but NaN-ish floats are re-checked).
     pub outlier_rate_position: f64,
 }
 
@@ -421,7 +385,8 @@ mod tests {
         assert!(parse_shard_csv("a,b\n1,2").is_err());
         let csv = format!("{CSV_HEADER}\nbogus,10,20\n");
         assert!(parse_shard_csv(&csv).is_err());
-        let csv = format!("{CSV_HEADER}\n999,10,\n"); // no dec
+        let csv = format!("{CSV_HEADER}\n999,10,\n");
+
         assert!(parse_shard_csv(&csv).is_err());
     }
 
@@ -449,7 +414,6 @@ mod tests {
             astrometric_excess_noise: None,
             is_valid: true,
         };
-        // Order must not matter: 0.9-quality row wins regardless of position.
         let fwd = dedup_by_source_id(vec![mk(1, 1.3), mk(1, 0.9)]);
         let rev = dedup_by_source_id(vec![mk(1, 0.9), mk(1, 1.3)]);
         assert_eq!(fwd.len(), 1);
@@ -459,11 +423,6 @@ mod tests {
 
     #[test]
     fn icrs_to_galactic_matrix_matches_reference_directions() {
-        // Reference directions well outside degeneracies:
-        // * North Galactic Pole: ICRS (192.85948, +27.12825) -> Galactic
-        //   latitude b = +90 deg, so the rotated vector must be ~(0,0,1).
-        // * Galactic Center: ICRS (266.40500, -28.93617) -> Galactic (l,b)
-        //   = (0, 0), i.e. rotated vector ~(1, 0, 0).
         let ngp = mat_vec(&ICRS_TO_GALACTIC, &icrs_unit_vector(192.85948, 27.12825));
         let norm_ngp = (ngp[0] * ngp[0] + ngp[1] * ngp[1] + ngp[2] * ngp[2]).sqrt();
         assert!((norm_ngp - 1.0).abs() < 1e-12);
@@ -477,16 +436,12 @@ mod tests {
 
     #[test]
     fn position_and_velocity_match_reference_numbers() {
-        // Reference star: RA=60°, Dec=0°, plx=10 mas (=100 pc),
-        // pmra*=100 mas/yr, pmdec=-50 mas/yr, rv=+20 km/s.
         let p = galactic_position_pc(60.0, 0.0, 10.0).unwrap();
         let r_mag: f32 = (p[0].powi(2) + p[1].powi(2) + p[2].powi(2)).sqrt();
         assert!((r_mag - 100.0).abs() < 1e-3, "|r|={r_mag}");
 
-        // vt_total = 4.74047 * sqrt(100²+50²)/10 ≈ 52.98 km/s transverse.
         let v = galactic_velocity_kms(60.0, 0.0, 10.0, 100.0, -50.0, Some(20.0)).unwrap();
         let v_mag: f32 = (v[0].powi(2) + v[1].powi(2) + v[2].powi(2)).sqrt();
-        // |vt| = 4.74047 * sqrt(100^2+50^2)/10 = 53.0 km/s; |v| adds rv=20.
         let expect = ((MAS_YR_KPC_TO_KMS * 111.8034f64 / 10.0).powi(2) + 400.0).sqrt();
         assert!(
             (v_mag - expect as f32).abs() < 1e-3,
@@ -518,7 +473,8 @@ mod tests {
         let q = quality_report(&recs);
         assert_eq!(q.total_rows, 2);
         assert_eq!(q.unique_ids, 2);
-        assert_eq!(q.duplicate_rows_removed, 0); // dupes collapse before report
+        assert_eq!(q.duplicate_rows_removed, 0);
+
         assert_eq!(q.null_rate_pm, 0.5);
         assert_eq!(q.null_rate_radial_velocity, 1.0);
         assert_eq!(q.ra_min, 10.0);
@@ -553,6 +509,7 @@ mod tests {
         let b = dedup_by_source_id(vec![mk(2, 1.0), mk(7, 1.0), mk(7, 1.0)]);
         assert_eq!(a.len(), 2);
         assert_eq!(a, b, "same content, different order -> identical output");
-        assert_eq!(a[0].source_id, "2"); // BTreeMap keeps numeric order
+        assert_eq!(a[0].source_id, "2");
+
     }
 }

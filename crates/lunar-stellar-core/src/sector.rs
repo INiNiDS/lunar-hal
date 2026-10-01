@@ -1,55 +1,32 @@
-//! Sector/chunk streaming rules.
-//!
-//! The scene is divided into fixed-size square chunks (in parsecs).
-//! `Game` uses the functions in this module to decide which chunks
-//! must be fetched, which are in-flight, and which can be evicted.
-//! None of this logic lives in the frontend anymore.
 
 use std::collections::{HashMap, HashSet};
 
 use lunar_structures::ResponseStar;
 
-/// Size of one streaming chunk along each axis (in parsecs).
 pub const CHUNK_SIZE_PC: f32 = 400.0;
 
-/// Pixels per parsec at zoom = 1.0. Frontends read this to scale
-/// scene coordinates into the viewport.
 pub const PX_PER_PC: f32 = 15.0;
 
-/// Chunks whose center is closer than this to the scene origin are
-/// skipped — the scene itself occupies that space.
 pub const INNER_EXCLUSION_PC: f32 = 450.0;
 
-/// Hard upper bound on simultaneously cached chunks.
 pub const MAX_CACHED_CHUNKS: usize = 64;
 
-/// Extra chunks of padding around the visible viewport that should
-/// also be prefetched (in chunk units).
 pub const PREFETCH_PAD_CHUNKS: i32 = 1;
 
-/// Maximum number of concurrent in-flight sector requests.
 pub const MAX_CONCURRENT_FETCHES: usize = 3;
 
-/// Minimum delay between dispatched fetches, in milliseconds. Used
-/// by the frontend to throttle reflows.
 pub const FETCH_COOLDOWN_MS: u32 = 120;
 
-/// Same as [`FETCH_COOLDOWN_MS`] but named in PascalCase for
-/// re-export consistency.
 pub const MIN_FETCH_COOLDOWN_MS: u32 = FETCH_COOLDOWN_MS;
 
-/// Minimum number of objects for downstreams.
 pub const MIN_FETCH_OBJECTS: usize = 10;
 
-/// Minimum number of records for downstreams.
 pub const MIN_FETCH_RECORDS: usize = 10;
 
 pub const FIELD_HALF: i32 = 18000;
 
-/// Integer coordinate of a chunk in chunk-space.
 pub type SectorKey = (i32, i32);
 
-/// Center of a chunk in scene coordinates (parsecs).
 pub fn chunk_center(chunk: SectorKey) -> (f32, f32) {
     (
         (chunk.0 as f32 + 0.5) * CHUNK_SIZE_PC,
@@ -57,7 +34,6 @@ pub fn chunk_center(chunk: SectorKey) -> (f32, f32) {
     )
 }
 
-/// Squared distance from a chunk's center to a target point.
 pub fn chunk_distance_sq(chunk: SectorKey, target: (f32, f32)) -> f32 {
     let (cx, cy) = chunk_center(chunk);
     let dx = cx - target.0;
@@ -69,8 +45,6 @@ fn is_excluded(chunk: SectorKey, center: (f32, f32)) -> bool {
     chunk_distance_sq(chunk, center) < INNER_EXCLUSION_PC * INNER_EXCLUSION_PC
 }
 
-/// Compute the scene-space point currently under the viewport center
-/// for a given camera and scene origin.
 pub fn scene_point_under_center(
     camera: (f32, f32),
     zoom: f32,
@@ -84,8 +58,6 @@ pub fn scene_point_under_center(
     (cam_scene_x, cam_scene_y)
 }
 
-/// Compute the set of chunks visible in the viewport, with optional
-/// padding for prefetching.
 pub fn visible_chunks(
     cam_offset: (f32, f32),
     cam_zoom: f32,
@@ -115,10 +87,6 @@ pub fn visible_chunks(
     chunks
 }
 
-/// Evict the farthest cached chunks until the cache is at or below
-/// [`MAX_CACHED_CHUNKS`]. Chunks in `protected` are never removed; callers use
-/// this to prevent a visible chunk from being evicted and immediately fetched
-/// again on the next reactive tick.
 pub fn evict_excess_cache_preserving(
     cache: &mut HashMap<SectorKey, Vec<ResponseStar>>,
     cam_pos: (f32, f32),
@@ -147,28 +115,18 @@ pub fn evict_excess_cache_preserving(
     }
 }
 
-/// Backwards-compatible helper for callers that have no protected viewport.
 pub fn evict_excess_cache(cache: &mut HashMap<SectorKey, Vec<ResponseStar>>, cam_pos: (f32, f32)) {
     evict_excess_cache_preserving(cache, cam_pos, &HashSet::new());
 }
 
-/// Inputs for deciding which sectors to fetch this frame.
 #[derive(Clone, Copy, Debug)]
 pub struct SectorFetchRequest {
     pub viewport: (f32, f32),
     pub cam_offset: (f32, f32),
     pub cam_zoom: f32,
-    /// StarScene-space center of the visible region (typically the active
-    /// scene's center, or the last pregen sector center).
     pub scene_center: (f32, f32, f32),
 }
 
-/// Return the bounded, distance-prioritized working set for this viewport.
-///
-/// A zoomed-out 4K viewport can geometrically cover hundreds of chunks. The
-/// renderer has no aggregate LOD yet, so streaming all of them would exceed the
-/// cache and create an endless fetch/evict/refetch loop. Until an aggregate LOD
-/// exists, keep the nearest `MAX_CACHED_CHUNKS` as the deterministic working set.
 pub fn streaming_chunks(req: SectorFetchRequest) -> Vec<SectorKey> {
     let scene_center = (req.scene_center.0, req.scene_center.1);
     let viewport_center = scene_point_under_center(req.cam_offset, req.cam_zoom, scene_center);
@@ -183,10 +141,6 @@ pub fn streaming_chunks(req: SectorFetchRequest) -> Vec<SectorKey> {
     visible
 }
 
-/// Decide which sectors should be claimed next. The returned count is the
-/// remaining global capacity, not a fresh per-render allowance. This keeps the
-/// number of in-flight backend requests at or below
-/// [`MAX_CONCURRENT_FETCHES`] even when scene-version updates re-run the hook.
 pub fn sectors_to_fetch(
     req: SectorFetchRequest,
     cache: &HashMap<SectorKey, Vec<ResponseStar>>,
@@ -210,7 +164,6 @@ pub fn sectors_to_fetch(
         .collect()
 }
 
-/// Compute the scene-space camera position used for cache eviction.
 pub fn eviction_cam_pos(
     cam_offset: (f32, f32),
     cam_zoom: f32,
@@ -219,9 +172,6 @@ pub fn eviction_cam_pos(
     scene_point_under_center(cam_offset, cam_zoom, scene_center)
 }
 
-/// Map a scene-space point (in parsecs) to the [`SectorKey`] that
-/// contains it. Returns `None` when the key is outside the playable
-/// map or the coordinate is not finite.
 pub fn chunk_at_scene_point(point: (f32, f32)) -> Option<SectorKey> {
     if !point.0.is_finite() || !point.1.is_finite() {
         return None;

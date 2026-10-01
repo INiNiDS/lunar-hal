@@ -1,8 +1,3 @@
-//! Persistent SIREN Gallery backed by `lunar-backend`.
-//!
-//! Unlike the old one-render preview, this page is a searchable catalog of
-//! Gallery records. Creating a record asks the backend to render and atomically
-//! save the texture before it appears here.
 
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -304,7 +299,6 @@ pub fn SirenGallery() -> Element {
             if let Some(message) = status() { p { class: "rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/70", "{message}" } }
 
             div { class: "gallery-layout",
-                // Generation panel: a real POST /gallery/stars flow, not a temporary PNG.
                 section { class: "card gallery-builder space-y-3",
                     h2 { class: "card-title", "Generate & save" }
                     label { class: "block text-xs text-white/55", "Name" input { class: "mt-1 w-full rounded-lg bg-black/35 px-2 py-1.5 text-sm", value: "{name()}", oninput: move |event| name.set(event.value()) } }

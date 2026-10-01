@@ -19,9 +19,6 @@ pub fn AppHost(window_id: u64, app_id: String, minimized: bool, title: String) -
     let lifecycle_app_id = app_id.clone();
     let lifecycle_os = os;
     use_effect(move || {
-        // Subscribe to the authoritative window and service signals, then
-        // publish the derived lifecycle after render. Mutating `lifecycle`
-        // directly during render panics when a minimized window is restored.
         let minimized_now = lifecycle_os
             .windows
             .read()

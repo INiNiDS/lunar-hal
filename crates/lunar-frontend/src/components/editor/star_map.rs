@@ -119,10 +119,6 @@ fn render_loading_chunk(chunk: SectorKey, center_x: f32, center_y: f32) -> Eleme
     }
 }
 
-/// A long-lived `ResizeObserver` reports the size of the actual map container.
-/// It works in browser, desktop WebView and Android WebView renderers through
-/// Dioxus' supported `document::eval` bridge, instead of guessing from the
-/// browser viewport or returning a native `1280x800` fallback.
 const ELEMENT_SIZE_OBSERVER: &str = r#"
 (() => {
   const element = document.querySelector('.starmap-root');
@@ -134,8 +130,6 @@ const ELEMENT_SIZE_OBSERVER: &str = r#"
   const publish = () => {
     frame = 0;
     const rect = element.getBoundingClientRect();
-    // Sub-pixel changes can otherwise feed a ResizeObserver/render loop in
-    // Firefox. The map does not need a backing extent larger than this.
     const width = Math.max(1, Math.min(4096, Math.round(rect.width)));
     const height = Math.max(1, Math.min(4096, Math.round(rect.height)));
     if (width === lastWidth && height === lastHeight) return;
@@ -149,8 +143,6 @@ const ELEMENT_SIZE_OBSERVER: &str = r#"
   const observer = new ResizeObserver(schedule);
   observer.observe(element);
   schedule();
-  // Keep the evaluator alive while the component is mounted. When its task is
-  // cancelled by Dioxus, the bridge closes and this loop disconnects observer.
   (async () => {
     try { await dioxus.recv(); }
     finally {
@@ -207,8 +199,6 @@ fn use_sync_sector_loading(
             return;
         }
 
-        // Claim the full batch synchronously before spawning requests. This is
-        // what makes MAX_CONCURRENT_FETCHES a real global cap across renders.
         let pending = game.read().claim_sectors_to_fetch(vp);
         if pending.is_empty() {
             return;
@@ -249,7 +239,6 @@ fn use_sync_sector_eviction(
     });
 }
 
-// Reduced background star count to lower GPU load
 fn use_starfield_backgrounds() -> (Memo<String>, Memo<String>, Memo<String>) {
     let starfield_small = use_memo(move || starfield(0, 150, FIELD_HALF));
     let starfield_medium = use_memo(move || starfield(10000, 75, FIELD_HALF));

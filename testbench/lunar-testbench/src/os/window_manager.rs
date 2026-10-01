@@ -3,8 +3,6 @@ use dioxus::prelude::*;
 use crate::os::window::Window;
 use crate::os::{use_os_state, viewport_size};
 
-/// Renders all open windows and hosts the full-viewport overlay that turns an
-/// in-flight drag into window rect updates.
 #[component]
 pub fn WindowManager() -> Element {
     let mut os = use_os_state();

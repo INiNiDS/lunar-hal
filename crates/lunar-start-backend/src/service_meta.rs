@@ -1,9 +1,3 @@
-//! Static service manifest consumed by the `lunar-testbench` WebOS shell.
-//!
-//! This is the "source of truth" the frontend uses to know which dock apps a
-//! given service unlocks (`provides`) and which other services it needs
-//! running first (`depends_on`). Kept static/hand-maintained for now; if
-//! services become dynamically discoverable this can move into `LauncherConfig`.
 
 use serde::Serialize;
 

@@ -23,7 +23,6 @@ fn http_url(host: &str, port: u16) -> String {
     url
 }
 
-/// Resolves a CLI `--port`/`-p` value before ordered environment fallbacks.
 pub fn resolve_port(args: &[String], env_values: &[Option<&str>], default: u16) -> u16 {
     let cli_port = args
         .windows(2)
@@ -67,9 +66,6 @@ pub fn get_url() -> String {
     http_url(&get_host(), get_port())
 }
 
-/// Resolves the backend URL supplied to a frontend runtime. Platform-specific
-/// callers provide their own default while an explicit `LUNAR_BACKEND_URL`
-/// always wins (needed for physical Android devices).
 pub fn get_frontend_backend_url(default_url: &str) -> String {
     std::env::var("LUNAR_BACKEND_URL").unwrap_or_else(|_| default_url.to_string())
 }
@@ -78,12 +74,10 @@ pub fn get_testbench_url() -> String {
     http_url(&get_testbench_host(), get_testbench_port())
 }
 
-/// Host for the `lunar-start-backend` service manager (see `crates/lunar-start-backend`).
 pub fn get_start_backend_host() -> String {
     std::env::var("LUNAR_START_HOST").unwrap_or_else(|_| DEFAULT_START_BACKEND_HOST.to_string())
 }
 
-/// Port for the `lunar-start-backend` service manager.
 pub fn get_start_backend_port() -> u16 {
     parse_port(
         std::env::var("LUNAR_START_PORT").ok().as_deref(),
@@ -91,7 +85,6 @@ pub fn get_start_backend_port() -> u16 {
     )
 }
 
-/// Base URL for the `lunar-start-backend` service manager REST + SSE API.
 pub fn get_start_backend_url() -> String {
     http_url(&get_start_backend_host(), get_start_backend_port())
 }
@@ -139,8 +132,6 @@ pub fn get_scenes_dir() -> PathBuf {
         .unwrap_or(standard_storage)
 }
 
-/// Durable frontend-only state such as per-scene camera positions.
-/// This is intentionally separate from backend-owned Gallery and Scene data.
 pub fn get_frontend_state_dir() -> PathBuf {
     let standard_storage = dirs::data_dir()
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))

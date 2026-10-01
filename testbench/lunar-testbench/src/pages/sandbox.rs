@@ -1,8 +1,3 @@
-//! WebOS host for a *real* `lunar-frontend` editor page.
-//!
-//! The iframe remains an independent application. Every administrative action
-//! below calls `lunar-backend` directly; no local `StellarScene`, renderer, or
-//! parent-to-iframe mutation protocol exists in this page.
 
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -249,8 +244,6 @@ pub fn apply_suspend_state(
     Ok(())
 }
 
-/// Keep the exact iframe URL while dependencies are temporarily unavailable.
-/// A replacement URL is applied only when a live web frontend supplies one.
 fn retain_iframe_src(previous: Option<String>, candidate: Option<String>) -> Option<String> {
     candidate.or(previous)
 }
@@ -326,8 +319,6 @@ pub fn Sandbox() -> Element {
     let mut scenes = use_signal(Vec::new);
     let mut gallery = use_signal(Vec::new);
     let mut selected_scene = use_signal(|| initial.selected_scene.clone());
-    // Do not conditionally remove the iframe when a dependency disappears.
-    // Its URL is retained until a live replacement is available.
     let mut retained_iframe_src = use_signal(|| initial.retained_iframe_src.clone());
     let mut snapshot = use_signal(|| initial.snapshot.clone());
     let mut selected_star = use_signal(|| initial.selected_star);
@@ -485,8 +476,6 @@ pub fn Sandbox() -> Element {
         }
         previous_lifecycle.set(current);
         if should_refresh_after_lifecycle_transition(previous, current) {
-            // `peek` is deliberate: subscribing this effect to refresh_tick and
-            // then writing it creates an unbounded render/effect loop.
             let next_tick = (*refresh_tick.peek()).wrapping_add(1);
             refresh_tick.set(next_tick);
         }
@@ -751,8 +740,6 @@ pub fn Sandbox() -> Element {
                 }
             }
 
-            // This is the second independent layer: it never imports or mutates
-            // iframe state. It only talks to `lunar-backend` through api.rs.
             aside { class: "sandbox-admin-overlay",
                 div { class: "flex items-center justify-between gap-2",
                     div { h1 { class: "text-sm font-semibold", "Scene administration" } p { class: "text-[10px] uppercase tracking-widest text-white/40", "Backend-owned overlay" } }

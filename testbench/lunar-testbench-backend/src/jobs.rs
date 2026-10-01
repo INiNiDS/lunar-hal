@@ -443,9 +443,6 @@ pub fn workspace_root() -> PathBuf {
 }
 
 fn build_train_command(workspace_root: &Path, spec: &TrainSpec) -> Command {
-    // Compatibility alias (Stage 5): the old `TrainSpec` shape renders
-    // through the shared `worker_argv` builder — same flags the CLI emits.
-    // No separate implementation lives here anymore.
     let _ = workspace_root;
     use lunar_structures_testbench::typed::{ModelKindDto, TrainingRequest};
     let model = match spec.model {
@@ -486,9 +483,6 @@ fn build_train_command(workspace_root: &Path, spec: &TrainSpec) -> Command {
 }
 
 fn build_validate_command(workspace_root: &Path, spec: &ValidateSpec) -> Command {
-    // Compatibility alias (Stage 5): the old `ValidateSpec` shape renders
-    // through the shared read-only evaluation builder — same binary, plus
-    // `--evaluate-only`, never an optimizer step. No separate implementation.
     let _ = workspace_root;
     use lunar_structures_testbench::typed::{EvaluationRequest, ModelKindDto};
     let model = match spec.model {
@@ -688,9 +682,6 @@ mod tests {
 
     #[test]
     fn train_commands_only_include_flags_supported_by_each_model() {
-        // Compatibility-alias contract (Stage 5): legacy specs render through
-        // the shared worker_argv builder. Model-specific flags must appear
-        // only for their own kind; unrelated options are a conversion error.
         let root = Path::new("/workspace");
 
         let pinn_args = command_args(&build_train_command(root, &train_spec(ModelKind::Pinn)));
@@ -719,8 +710,6 @@ mod tests {
 
     #[test]
     fn validation_alias_uses_read_only_evaluate_mode() {
-        // The old `/jobs/validate` route is now an alias for read-only
-        // evaluation: same binary, `--evaluate-only`, no training flags.
         let root = Path::new("/workspace");
         for model in [ModelKind::Pinn, ModelKind::Gnn, ModelKind::Siren] {
             let args = command_args(&build_validate_command(root, &validate_spec(model)));
@@ -744,8 +733,6 @@ mod tests {
             root,
             &validate_spec(ModelKind::Gnn),
         ));
-        // The GNN worker names its batch budget --max-nodes (legacy flag,
-        // see EvaluationSpec::worker_argv) — not --batch-size.
         assert!(has_flag_value(&gnn_args, "--max-nodes", "64"));
 
         let siren_args = command_args(&build_validate_command(

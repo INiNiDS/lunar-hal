@@ -1,20 +1,3 @@
-//! Dataset storage sinks (new, outside the original 4A scope):
-//! every artifact the pipeline produces (raw shards, canonical parquet, views,
-//! manifest, provenance) can live on any S3-compatible object store.
-//!
-//! * Local runs and CI default to MinIO via `install/data-minio.compose.yml`
-//!   (anonymous read policy + dedicated bucket).
-//! * Cloud deployments point the same variables at DigitalOcean Spaces / AWS /
-//!   R2 — nothing else changes.
-//!
-//! Environment contract (non-secret values may be committed to `.env.example`):
-//!   `S3_ENDPOINT` | legacy alias `SPACES_ENDPOINT` — scheme://host[:port]
-//!   `S3_BUCKET`   | `SPACES_BUCKET`
-//!   `S3_REGION`   | `SPACES_REGION` (default us-east-1)
-//!   `S3_ACCESS_KEY_ID`     | `SPACES_KEY`      — REQUIRED for writes
-//!   `S3_SECRET_ACCESS_KEY` | `SPACES_SECRET`  — REQUIRED for writes
-//!   `S3_PATH_STYLE` (default `true`, MinIO-style addressing)
-//! Secrets stay in `.env`; they are read by backend/CLI code only.
 
 use crate::auth::{SecretBox, redact, resolve_env_secret};
 use crate::s3::{DEFAULT_REGION, S3Client, S3Config};
@@ -46,12 +29,9 @@ impl From<crate::s3::S3Error> for StorageError {
     }
 }
 
-// Serializes tests that mutate process-global environment variables.
 #[cfg(test)]
 static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-/// Builds a sink description from environment; returns detailed errors that
-/// never echo secret values.
 pub fn s3_config_from_env() -> Result<S3Config> {
     let get =
         |names: &[&str]| -> Option<String> { names.iter().find_map(|n| resolve_env_secret(n)) };
@@ -61,7 +41,6 @@ pub fn s3_config_from_env() -> Result<S3Config> {
     let bucket = get(&["S3_BUCKET", "SPACES_BUCKET"])
         .ok_or_else(|| StorageError::NotConfigured("set S3_BUCKET".into()))?;
     let region = get(&["S3_REGION", "SPACES_REGION"]).unwrap_or_else(|| DEFAULT_REGION.to_string());
-    // Empty-but-set vars already filtered out by resolve_env_secret.
     let path_style = std::env::var("S3_PATH_STYLE")
         .ok()
         .map(|v| !matches!(v.trim(), "0" | "false" | "no"))
@@ -93,8 +72,6 @@ impl From<std::io::Error> for StorageError {
 
 type Result<T> = std::result::Result<T, StorageError>;
 
-/// What kind of sink is active right now — used by diagnostics and Testbench
-/// status endpoints. Contains NO credential material.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SinkStatus {
     AnonymousRead {
@@ -104,7 +81,6 @@ pub enum SinkStatus {
     Authenticated {
         endpoint: String,
         bucket: String,
-        /// Redacted head of the access key id (4 chars) for UI diagnostics.
         key_head: String,
     },
     Unconfigured,
@@ -129,10 +105,6 @@ pub fn sink_status() -> SinkStatus {
     }
 }
 
-/// Pushes every file of an assembled dataset directory into the bucket under
-/// `<prefix>`, preserving relative layout:
-/// `{prefix}/raw/ra-000.parquet`, `{prefix}/views/pinn.parquet`,
-/// `{prefix}/manifest.json`, ... Returns uploaded keys with byte sizes.
 pub fn upload_dataset_dir(dir: &std::path::Path, prefix: &str) -> Result<Vec<(String, u64)>> {
     let cfg = s3_config_from_env()?;
     if !cfg.authenticated() {
@@ -156,8 +128,6 @@ pub fn upload_dataset_dir(dir: &std::path::Path, prefix: &str) -> Result<Vec<(St
     Ok(uploaded)
 }
 
-/// Pulls remote dataset artifacts into a local directory (resume-friendly:
-/// files whose local size matches the remote one are skipped).
 pub fn download_dataset_dir(dir: &std::path::Path, prefix: &str) -> Result<Vec<(String, u64)>> {
     let cfg = s3_config_from_env()?;
     let client = S3Client::new(cfg);
@@ -183,7 +153,6 @@ pub fn download_dataset_dir(dir: &std::path::Path, prefix: &str) -> Result<Vec<(
     Ok(pulled)
 }
 
-// -- internals --------------------------------------------------------------
 
 fn walk_files(root: &std::path::Path) -> Result<Vec<std::path::PathBuf>> {
     let mut out = Vec::new();
@@ -197,7 +166,6 @@ fn walk_files(root: &std::path::Path) -> Result<Vec<std::path::PathBuf>> {
             out.push(p);
         }
     }
-    // Final ordering by full path keeps deterministic lexicographic layout.
     out.sort();
     Ok(out)
 }
@@ -218,7 +186,6 @@ mod tests {
     #[test]
     fn unconfigured_env_yields_secret_free_error() {
         let _guard = ENV_LOCK.lock().unwrap();
-        // Clear every storage-related variable for this test.
         for name in [
             "S3_ENDPOINT",
             "S3_BUCKET",

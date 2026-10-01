@@ -5,9 +5,6 @@ use super::gnn_infer::serving_rng_seed;
 use super::rng::SimpleRng;
 use super::types::StarFeatures;
 
-/// Variational decoding over the already-split `[N, 3]` mean / `[N, 3]`
-/// logvar slices (layout comes from [`split_mean_logvar` shared with
-/// train/eval, never re-sliced here).
 pub(crate) fn compute_variational_velocities(
     mean_vals: &[f32],
     logvar_vals: &[f32],
@@ -55,12 +52,6 @@ pub(crate) fn compute_variational_velocities(
     velocities
 }
 
-/// Deterministic decoding over the already-split `[N, 3]` mean slice.
-/// `temperature <= 0` returns the exact mean (no RNG consumed).
-/// `temperature > 0` adds seeded unit-variance noise scaled by
-/// `temperature * 0.15`: the 0.15 keeps UI-level entropy from blowing up
-/// physical dispersions (train samples `eps * temperature` in normalized
-/// space; serving denormalizes, hence the damped serving scale).
 pub(crate) fn compute_deterministic_velocities(
     mean_vals: &[f32],
     stars: &[StarFeatures],

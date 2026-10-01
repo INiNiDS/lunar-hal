@@ -1,10 +1,8 @@
-// Top-level component groups
 pub mod editor;
 pub mod layout;
 pub mod pages;
 pub mod ui;
 
-// Re-exports
 pub use layout::header::Header;
 pub use layout::hero_section::HeroSection;
 pub use pages::about::About;
@@ -14,5 +12,4 @@ pub use ui::glowing_button::GlowingButton;
 pub use ui::glowing_subtitle::GlowingSubtitle;
 pub use ui::glowing_title::GlowingTitle;
 pub use ui::journey_modal::JourneyModal;
-// pub use editor::sidebar::{StarSidebar, EntropySlider};
 pub use editor::editor_page::Editor;

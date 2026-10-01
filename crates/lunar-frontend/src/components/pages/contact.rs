@@ -28,7 +28,6 @@ pub fn Contact() -> Element {
 
                 div { class: "grid grid-cols-1 md:grid-cols-3 gap-5 max-w-4xl w-full",
 
-                    // GitHub
                     div { class: "group bg-white/[0.003] backdrop-blur-sm border border-white/[0.008] \
                                rounded-xl p-7 text-center \
                                hover:bg-white/[0.025] hover:border-white/[0.05] \
@@ -85,7 +84,6 @@ pub fn Contact() -> Element {
                         }
                     }
 
-                    // Email
                     div { class: "group bg-white/[0.003] backdrop-blur-sm border border-white/[0.008] \
                                rounded-xl p-7 text-center \
                                hover:bg-white/[0.025] hover:border-white/[0.05] \

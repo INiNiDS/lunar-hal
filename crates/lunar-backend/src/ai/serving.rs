@@ -13,8 +13,6 @@ use super::pinn::{PINN, load_pinn, loaded_pinn_hashes};
 use super::siren::{SIREN_MODEL, get_siren};
 use super::types::LoadedModelIdentity;
 
-/// Serving gate: a bundle needs a matching manifest, intact files, complete
-/// provenance, and a passing spatial-holdout evaluation.
 pub(crate) fn check_serving_manifest(
     models_dir: &std::path::Path,
     kind: &ModelKind,
@@ -99,28 +97,18 @@ pub async fn loaded_model_identities() -> Vec<LoadedModelIdentity> {
     active
 }
 
-/// Stage 6.7: fresh registry scan of the serving models directory.
-/// Always re-reads from disk so `GET /version` reports ground truth.
 pub async fn registry_snapshot() -> Vec<RegisteredArtifact> {
     let models_dir = get_lunar_models_dir();
-    // Touch each loader's manifest gate indirectly: the scan itself
-    // validates every manifest it finds (see scan_model_registry).
     scan_model_registry(&models_dir)
 }
 
-/// Stage 6.7 controlled reload report.
 #[derive(Debug, Clone)]
 pub struct ReloadReport {
-    /// Model kinds successfully reloaded (or confirmed missing).
     pub reloaded: Vec<String>,
-    /// Invalid registry entries that blocked the reload; non-empty means
-    /// NO state was changed and the old models keep serving.
     pub refused: Vec<String>,
     pub note: String,
 }
 
-/// Validates the replacement PINN before swapping it into the live cache.
-/// Requests already holding an `Arc` finish with their original weights.
 pub async fn reload_models() -> ReloadReport {
     let entries = registry_snapshot().await;
     let serving_dir = get_lunar_models_dir().display().to_string();
@@ -166,8 +154,6 @@ pub async fn reload_models() -> ReloadReport {
     {
         *SIREN_MODEL.write().await = None;
     }
-    // Eagerly re-verify: a reload that silently serves nothing is a
-    // failed deploy, so report per-kind load status now.
     let mut reloaded = vec!["pinn: loaded".to_string()];
     reloaded.push(format!(
         "gnn_kinematics: {}",

@@ -1,16 +1,8 @@
-//! Stage 7 (task 5): Spatial indexing and immutable graph caching for GNN-Kinematics.
-//!
-//! Replaces global $O(N^2 \log N)$ distance sorting with:
-//! 1. `SpatialIndex3D`: 3D spatial hash grid for candidate pruning when $N$ is large.
-//! 2. Partial selection ($O(N)$) for small-to-medium clusters.
-//! 3. `GraphCache`: LRU / hash-keyed cache of immutable [`GraphBatch`] structures
-//!    to avoid rebuilding static sector graphs on every forward evaluation.
 
 use lnai_models::{GraphBatch, compute_sparse_knn_graph};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
-/// 3D Spatial Grid Index for accelerated neighbor searches.
 #[derive(Debug, Clone)]
 pub struct SpatialIndex3D {
     cell_size: f32,
@@ -20,7 +12,6 @@ pub struct SpatialIndex3D {
 }
 
 impl SpatialIndex3D {
-    /// Builds a spatial grid from coordinates with a specified cell size.
     pub fn build(coords: Vec<[f32; 3]>, cell_size: f32) -> Self {
         let cell_size = if cell_size <= 1e-4 { 10.0 } else { cell_size };
         let inv_cell_size = 1.0 / cell_size;
@@ -45,7 +36,6 @@ impl SpatialIndex3D {
         self.cell_size
     }
 
-    /// Queries the k nearest neighbors for a query point.
     pub fn query_knn(&self, point: [f32; 3], k: usize) -> Vec<(usize, f32)> {
         let n = self.coords.len();
         if n == 0 || k == 0 {
@@ -59,7 +49,6 @@ impl SpatialIndex3D {
         let mut candidates = Vec::new();
         let mut radius = 1;
 
-        // Search adjacent grid cells, expanding outward if needed
         while candidates.len() < k && radius <= 5 {
             candidates.clear();
             for dx in -radius..=radius {
@@ -74,7 +63,6 @@ impl SpatialIndex3D {
             radius += 1;
         }
 
-        // If candidates are still insufficient, fall back to all points
         if candidates.len() < k {
             candidates = (0..n).collect();
         }
@@ -90,7 +78,6 @@ impl SpatialIndex3D {
             })
             .collect();
 
-        // Deduplicate candidates (if multiple cell rings overlapped)
         dists.sort_unstable_by_key(|&(idx, _)| idx);
         dists.dedup_by_key(|&mut (idx, _)| idx);
 
@@ -110,7 +97,6 @@ impl SpatialIndex3D {
     }
 }
 
-/// Computes an immutable hash of star coordinates and k for caching.
 pub fn hash_coords(coords: &[[f32; 3]], k: usize) -> u64 {
     let mut h: u64 = 0xCBF29CE484222325 ^ (k as u64);
     for &[x, y, z] in coords {
@@ -124,14 +110,11 @@ pub fn hash_coords(coords: &[[f32; 3]], k: usize) -> u64 {
     h
 }
 
-/// Global thread-safe cache for immutable GNN graphs.
 static GLOBAL_GRAPH_CACHE: OnceLock<Mutex<HashMap<u64, Arc<GraphBatch>>>> = OnceLock::new();
 
-/// Cache for immutable [`GraphBatch`] objects.
 pub struct GraphCache;
 
 impl GraphCache {
-    /// Retrieves a cached graph or builds a new one if not present.
     pub fn get_or_build(coords: &[[f32; 3]], k: usize) -> Arc<GraphBatch> {
         let key = hash_coords(coords, k);
         let cache = GLOBAL_GRAPH_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
@@ -148,14 +131,12 @@ impl GraphCache {
         graph
     }
 
-    /// Clears the global graph cache.
     pub fn clear() {
         if let Some(cache) = GLOBAL_GRAPH_CACHE.get() {
             cache.lock().expect("graph cache lock").clear();
         }
     }
 
-    /// Returns the number of cached graphs.
     pub fn len() -> usize {
         GLOBAL_GRAPH_CACHE
             .get()
@@ -179,8 +160,10 @@ mod tests {
         let index = SpatialIndex3D::build(coords, 2.0);
         let neighbors = index.query_knn([0.1, 0.0, 0.0], 2);
         assert_eq!(neighbors.len(), 2);
-        assert_eq!(neighbors[0].0, 0); // nearest is [0, 0, 0]
-        assert_eq!(neighbors[1].0, 1); // second nearest is [1, 0, 0]
+        assert_eq!(neighbors[0].0, 0);
+
+        assert_eq!(neighbors[1].0, 1);
+
     }
 
     #[test]

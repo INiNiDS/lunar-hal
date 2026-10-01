@@ -1,5 +1,3 @@
-//! GNN graph-construction microbenches: preprocessing k-NN weights and the
-//! 3-layer GCN forward pass (Stage 3, task 7 "preprocessing/k-NN").
 
 use burn::backend::NdArray;
 use burn::prelude::*;

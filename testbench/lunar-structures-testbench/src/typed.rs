@@ -1,32 +1,14 @@
-//! Stage 5 (task 10): Testbench-side typed AI job specs.
-//!
-//! The Testbench no longer hand-assembles worker CLI args. It builds the
-//! same [`TrainingSpec`](lnai_training::spec::TrainingSpec) /
-//! [`EvaluationSpec`](lnai_training::spec::EvaluationSpec) /
-//! [`BenchmarkSpec`](lnai_training::spec::BenchmarkSpec) the CLI builds,
-//! serializes them as the job payload, and the backend renders worker argv
-//! through the shared [`worker_argv`](lnai_training::spec::TrainingSpec::worker_argv)
-//! builders. Stdout stays a log attachment — typed NDJSON `events.ndjson`
-//! plus `JobEvent::Metric` stream is the metric protocol.
-//!
-//! This crate is intentionally dependency-light (serde only); the conversion
-//! to `lnai-training` specs lives in the backend (`ai_jobs.rs`), keeping the
-//! wasm frontend build free of burn/polars.
 
 pub use lnai_dto::{
     BenchmarkRequest, DataCollectRequestShim, EvaluationRequest, JobEventDto, ModelKindDto,
     ReportRecord, TrainingRequest,
 };
 
-/// Re-exported shared enums so frontend code keeps a single import path.
 pub use lnai_dto::{ModelKindDto as ModelKindV1, TrainingSpecDto as TrainingSpecV1};
 
 mod lnai_dto {
     use serde::{Deserialize, Serialize};
 
-    /// Model selector shared with `lnai-training::spec::ModelKind`.
-    /// Slugs are frozen: `pinn`, `gnn` (kinematics), `siren`.
-    /// (`gnn_localization` arrives in Stage 8.)
     #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
     #[serde(rename_all = "snake_case")]
     pub enum ModelKindDto {
@@ -77,8 +59,6 @@ mod lnai_dto {
         }
     }
 
-    /// Typed training request: the Testbench form posts this JSON, the
-    /// backend converts it 1:1 into `lnai-training::spec::TrainingSpec`.
     #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
     pub struct TrainingSpecDto {
         pub model: ModelKindDto,
@@ -107,11 +87,8 @@ mod lnai_dto {
         pub clip_grad_norm: f64,
     }
 
-    /// Alias keeping the request/response naming explicit at call sites.
     pub type TrainingRequest = TrainingSpecDto;
 
-    /// Typed read-only evaluation request (no optimizer step, no checkpoint
-    /// rewrite). The backend spawns the worker with `--evaluate-only`.
     #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
     pub struct EvaluationRequest {
         pub model: ModelKindDto,
@@ -124,7 +101,6 @@ mod lnai_dto {
         pub dataset_manifest_hash: Option<String>,
     }
 
-    /// Typed forward-pass benchmark request (no training).
     #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
     pub struct BenchmarkRequest {
         pub model: ModelKindDto,
@@ -135,14 +111,11 @@ mod lnai_dto {
         pub seed: Option<u64>,
     }
 
-    /// Minimal data-collect shim so data + AI jobs share the typed route
-    /// family (`/jobs/data/*`); full `DataJobSpec` arrives in Stage 10.
     #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
     pub struct DataCollectRequestShim {
         pub out_dir: String,
     }
 
-    /// Persistent report record (Stage 10).
     #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
     pub struct ReportRecord {
         pub id: String,
@@ -154,9 +127,6 @@ mod lnai_dto {
         pub created_at: u64,
     }
 
-    /// Typed job event mirrored from `lnai-training::events::JobEvent` for
-    /// backends/frontends that cannot depend on burn (wasm, lightweight
-    /// crates). JSON shape matches 1:1 (`event` tag, snake_case).
     #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
     #[serde(tag = "event", rename_all = "snake_case")]
     pub enum JobEventDto {

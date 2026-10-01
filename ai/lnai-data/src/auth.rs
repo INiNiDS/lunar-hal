@@ -1,12 +1,4 @@
-//! Secret handling primitives (stage 4A / пункт 11):
-//!
-//! * [`resolve_env_secret`] — read named credentials from the process
-//!   environment with a strict allow-listing flow;
-//! * [`redact`] — one canonical way to render any potentially sensitive value
-//!   in diagnostics. Redaction tests assert shapes, not secrets.
 
-/// Reads a secret from the environment. Returns `(value_present, name)` so
-/// diagnostics can report availability WITHOUT exposing the value itself.
 pub fn resolve_env_secret(name: &str) -> Option<String> {
     let value = std::env::var(name).ok()?;
     let trimmed = value.trim().to_string();
@@ -16,12 +8,6 @@ pub fn resolve_env_secret(name: &str) -> Option<String> {
     Some(trimmed)
 }
 
-/// Renders a diagnostic-safe string for arbitrary input:
-/// * empty -> `<unset>`
-/// * otherwise first 4 chars + fixed length marker (never the tail).
-///
-/// This intentionally keeps enough head characters to distinguish between two
-/// different keys in bug reports while hiding ~all entropy.
 pub fn redact(secret: &str) -> String {
     if secret.trim().is_empty() {
         return "<unset>".to_string();
@@ -30,9 +16,6 @@ pub fn redact(secret: &str) -> String {
     format!("{head}…({})", secret.len())
 }
 
-/// A guard-style container that prevents accidental secret leakage through
-/// Debug/Display: the inner value is only reachable through [`Self::expose`],
-/// used exclusively in code paths that talk to the remote service.
 #[derive(Clone)]
 pub struct SecretBox(String);
 
@@ -53,7 +36,6 @@ impl SecretBox {
         Self(value.into())
     }
 
-    /// Only call sites performing actual authentication may use this.
     pub fn expose(&self) -> &str {
         &self.0
     }
@@ -82,7 +64,6 @@ mod tests {
         let s = SecretBox::new("GAIA-very-secret-token-value");
         let dbg = format!("{s:?}");
         let disp = format!("{s}");
-        // Neither formatter may contain more than the 4-char head.
         assert!(!dbg.contains("very-secret"), "{dbg}");
         assert!(!disp.contains("very-secret"), "{disp}");
         assert!(s.expose() == "GAIA-very-secret-token-value");

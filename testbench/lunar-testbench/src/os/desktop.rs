@@ -42,8 +42,6 @@ pub fn Desktop() -> Element {
                                         } else {
                                             format!("{title}: required services are not running")
                                         },
-                                        // `open_window` restores an existing window before it
-                                        // checks whether a new instance may be launched.
                                         onclick: move |_| os.open_window(app_id, title),
                                         div { class: "desktop-app-icon",
                                             AppIcon { app_id: app_id.to_string() }

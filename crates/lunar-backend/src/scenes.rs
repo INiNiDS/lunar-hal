@@ -66,10 +66,6 @@ pub struct SectorSeed {
     pub seed: u64,
 }
 
-/// Stage 6: sector geometry only — deterministic member positions, no
-/// physics. Every star's physical parameters come from its own batched
-/// PINN inference (see [`infer_sector_stars`]), never from random
-/// replication of the center value.
 pub fn generate_sector_positions(spec: SectorSeed) -> Vec<[f32; 3]> {
     let [cx, cy, cz] = spec.center;
     let search_radius = spec.search_radius;
@@ -94,10 +90,6 @@ pub fn generate_sector_positions(spec: SectorSeed) -> Vec<[f32; 3]> {
     positions
 }
 
-/// Stage 6: per-star batched sector inference. Positions are geometric;
-/// each member gets its own PINN row with shared color but its own
-/// distance-modulus apparent magnitude, so parameter spread is model
-/// physics — not gaussian noise around the center.
 pub async fn infer_sector_stars(
     center: [f32; 3],
     search_radius: f32,

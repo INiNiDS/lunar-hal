@@ -1,4 +1,3 @@
-//! Stage 5: SIREN worker — thin compatibility wrapper around `lnai-training`.
 
 mod args;
 

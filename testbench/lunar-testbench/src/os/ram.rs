@@ -1,4 +1,3 @@
-//! RAM-registry contract v1 for Lunar-OS window lifecycle (Stage 2 & Stage 11).
 #![allow(dead_code)]
 
 use serde::{Deserialize, Serialize};
@@ -7,19 +6,13 @@ use std::fmt;
 
 use super::snapshot::{AppSnapshotEnvelopeV1, WindowSnapshotV1};
 
-/// Lifecycle states for an application instance in Lunar-OS RAM.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RamLifecycleState {
-    /// Window is mounted and actively rendering
     Active,
-    /// Window is freezing state and computing snapshot
     Minimizing,
-    /// Window is unmounted from DOM; snapshot is stored in RAM
     Minimized,
-    /// Window is instantiating and hydrating state
     Restoring,
-    /// Window is closed and entry is discarded
     Closed,
 }
 
@@ -35,7 +28,6 @@ impl fmt::Display for RamLifecycleState {
     }
 }
 
-/// An entry in the Lunar-OS RAM store tracking a single window instance lifecycle.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct LunarOsRamEntry {
     pub instance_id: String,
@@ -58,7 +50,6 @@ impl LunarOsRamEntry {
         }
     }
 
-    /// Transitions to Minimizing state.
     pub fn begin_minimize(&mut self) -> Result<(), String> {
         if self.state != RamLifecycleState::Active {
             return Err(format!(
@@ -70,7 +61,6 @@ impl LunarOsRamEntry {
         Ok(())
     }
 
-    /// Verifies snapshot checksum and commits to Minimized state.
     pub fn commit_minimize(&mut self, snapshot: AppSnapshotEnvelopeV1) -> Result<(), String> {
         if self.state != RamLifecycleState::Minimizing {
             return Err(format!(
@@ -87,14 +77,12 @@ impl LunarOsRamEntry {
         Ok(())
     }
 
-    /// Rolls back minimize transition if snapshot failed.
     pub fn rollback_minimize(&mut self) {
         if self.state == RamLifecycleState::Minimizing {
             self.state = RamLifecycleState::Active;
         }
     }
 
-    /// Transitions to Restoring state, claiming the current generation.
     pub fn begin_restore(&mut self) -> Result<u64, String> {
         if self.state != RamLifecycleState::Minimized {
             return Err(format!(
@@ -106,7 +94,6 @@ impl LunarOsRamEntry {
         Ok(self.restore_generation)
     }
 
-    /// Commits restore, ensuring generation is fresh, and returns snapshot for hydration.
     pub fn commit_restore(
         &mut self,
         expected_generation: u64,
@@ -152,14 +139,12 @@ impl LunarOsRamEntry {
         }
     }
 
-    /// Transitions to Closed and clears any snapshot data.
     pub fn close(&mut self) {
         self.state = RamLifecycleState::Closed;
         self.snapshot = None;
     }
 }
 
-/// The isolated RAM store maintaining all window instance lifecycle transactions.
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
 pub struct LunarOsRamStore {
     entries: HashMap<String, LunarOsRamEntry>,
@@ -297,7 +282,6 @@ impl LunarOsRamStore {
     }
 }
 
-// ---------------- Legacy compatibility adapter ----------------
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -396,7 +380,6 @@ mod tests {
         assert_eq!(store.is_app_minimized("datasets"), false);
         assert_eq!(store.is_app_open("datasets"), true);
 
-        // Minimize transaction
         store.begin_minimize("inst-1").expect("begin minimize");
         let snap = sample_envelope();
         store
@@ -404,7 +387,6 @@ mod tests {
             .expect("commit minimize");
         assert_eq!(store.is_app_minimized("datasets"), true);
 
-        // Restore transaction
         let restore_gen = store.begin_restore("inst-1").expect("begin restore");
         let restored = store
             .commit_restore("inst-1", restore_gen)
@@ -412,7 +394,6 @@ mod tests {
         assert_eq!(restored.app_id, "datasets");
         assert_eq!(store.is_app_minimized("datasets"), false);
 
-        // Close
         store.close_instance("inst-1");
         assert_eq!(store.is_app_open("datasets"), false);
     }
@@ -523,7 +504,6 @@ mod tests {
         store.register_active("win-1", "log:backend", "Backend Log 1");
         store.register_active("win-2", "log:backend", "Backend Log 2");
 
-        // Minimize win-1 only
         store.begin_minimize("win-1").unwrap();
         let mut snap1 = sample_envelope();
         snap1.instance_id = "win-1".into();
@@ -535,13 +515,11 @@ mod tests {
         assert_eq!(store.is_instance_open("win-1"), true);
         assert_eq!(store.is_instance_open("win-2"), true);
 
-        // Closing win-2 does not affect win-1
         store.close_instance("win-2");
         assert_eq!(store.is_instance_open("win-2"), false);
         assert_eq!(store.is_instance_minimized("win-1"), true);
         assert_eq!(store.is_instance_open("win-1"), true);
 
-        // Win-1 can still be restored cleanly
         let restore_gen = store.begin_restore("win-1").unwrap();
         let restored = store.commit_restore("win-1", restore_gen).unwrap();
         assert_eq!(restored.instance_id, "win-1");
@@ -561,20 +539,17 @@ mod tests {
         );
 
         for cycle in 1..=50 {
-            // Verify Active before begin_minimize
             assert_eq!(
                 store.get_entry(instance_id).unwrap().state,
                 RamLifecycleState::Active
             );
 
-            // Phase 1: Begin Minimize
             store.begin_minimize(instance_id).expect("begin minimize");
             assert_eq!(
                 store.get_entry(instance_id).unwrap().state,
                 RamLifecycleState::Minimizing
             );
 
-            // Phase 2: Commit Minimize with CRC32 integrity verification
             let envelope = AppSnapshotEnvelopeV1::new(
                 instance_id,
                 "terminal",
@@ -605,7 +580,6 @@ mod tests {
                 cycle as u64
             );
 
-            // Phase 3: Begin Restore
             let restore_gen = store.begin_restore(instance_id).expect("begin restore");
             assert_eq!(restore_gen, cycle as u64);
             assert_eq!(
@@ -613,7 +587,6 @@ mod tests {
                 RamLifecycleState::Restoring
             );
 
-            // Phase 4: Commit Restore
             let restored = store
                 .commit_restore(instance_id, restore_gen)
                 .expect("commit restore");
@@ -630,7 +603,6 @@ mod tests {
 
         assert_eq!(store.get_entry(instance_id).unwrap().restore_generation, 50);
 
-        // Verification of complete resource reclamation on close
         store.close_instance(instance_id);
         assert!(!store.is_instance_open(instance_id));
         assert!(!store.is_instance_minimized(instance_id));
@@ -659,7 +631,6 @@ mod tests {
         let mut instance_generations = [0u64; 5];
 
         for round in 1..=50 {
-            // Pick two distinct instances to toggle each round
             let min_idx = (round - 1) % 5;
             let (min_inst, min_app, _) = app_defs[min_idx];
 
@@ -691,7 +662,6 @@ mod tests {
                 assert!(store.is_instance_minimized(min_inst));
             }
 
-            // Restore an instance that was previously minimized
             let res_idx = (round + 2) % 5;
             let (res_inst, res_app, _) = app_defs[res_idx];
             if store.is_instance_minimized(res_inst) {
@@ -706,14 +676,12 @@ mod tests {
                 assert!(!store.is_instance_minimized(res_inst));
             }
 
-            // Validate that instances other than min_inst and res_inst retain their exact generations
             for (check_idx, (check_inst, _, _)) in app_defs.iter().enumerate() {
                 let entry = store.get_entry(check_inst).expect("entry must exist");
                 assert_eq!(entry.restore_generation, instance_generations[check_idx]);
             }
         }
 
-        // Clean close for all instances in sequence
         for (idx, (inst_id, _, _)) in app_defs.iter().enumerate() {
             assert!(store.is_instance_open(inst_id));
             store.close_instance(inst_id);

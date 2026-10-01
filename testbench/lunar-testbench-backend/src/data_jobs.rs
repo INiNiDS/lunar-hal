@@ -1,11 +1,3 @@
-//! Stage 4 / item 10: data collection jobs + canonical dataset coverage
-//! exposed to the Testbench frontend.
-//!
-//! Endpoints:
-//! * `GET  /data/status?dir=...` — manifest coverage summary for one dataset dir
-//! * `POST /data/collect`        — spawn `lnaicli collect-data` as a job
-//! * `POST /data/verify`         — spawn checksum re-verification as a job
-//! * `POST /data/build`          — spawn canonical parquet/view assembly
 
 use std::path::{Path, PathBuf};
 use tokio::process::Command;
@@ -24,7 +16,6 @@ pub struct DataDirQuery {
     pub dir: Option<String>,
 }
 
-/// Per-status shard rollup used by the datasets page coverage card.
 #[derive(Serialize, Debug, Clone, PartialEq)]
 pub struct DataCoverage {
     pub dir: String,
@@ -38,9 +29,6 @@ pub struct DataCoverage {
     pub shards_pending: usize,
     pub shards_active: usize,
     pub subdivided_shards: usize,
-    /// 0..=100; share of *planned* top-level strips fully verified is not
-    /// derivable post-subdivision, so this reports verified/total instead and
-    /// `coverage_note` explains gaps per manifest.
     pub verified_percent: f64,
     pub gap_explanations: Vec<String>,
     pub last_updated_ms: Option<u64>,
@@ -82,7 +70,8 @@ pub fn read_coverage(dir: &str) -> DataCoverage {
     else {
         return {
             let mut c = DataCoverage::empty(dir);
-            c.manifest_found = true; // exists but unreadable — surface via note
+            c.manifest_found = true;
+
             c.gap_explanations
                 .push("manifest.json exists but failed to parse".into());
             c
@@ -124,14 +113,12 @@ pub fn read_coverage(dir: &str) -> DataCoverage {
     }
     let total = m.shards.len().max(1) as f64;
     c.shards_total = m.shards.len();
-    // Subdivided parents carry no rows themselves; still count progress by them.
     let done = (c.shards_verified + c.subdivided_shards) as f64;
     c.verified_percent = ((done / total) * 100.0 * 10.0).round() / 10.0;
     c.gap_explanations = gaps;
     c
 }
 
-// ------------------------------- job spawning -------------------------------
 
 const DATA_COLLECT_KIND: &str = "data_collect";
 const DATA_VERIFY_KIND: &str = "data_verify";

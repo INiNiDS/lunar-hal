@@ -1,5 +1,3 @@
-//! Stage 5: frozen GNN CLI surface (parity gate) plus additive
-//! library-owned flags (`--seed`, `--evaluate-only`, `--benchmark-*`).
 
 use clap::Parser;
 use lnai_training::gnn::dataset::{DEFAULT_KNN_K, DEFAULT_MAX_GROUP};
@@ -48,55 +46,37 @@ pub struct Args {
     pub max_group_size: usize,
     #[arg(long, default_value_t = 50.0)]
     pub radius_pc: f32,
-    /// Stage 6: readout head — 3 = deterministic (vx,vy,vz), 6 = variational
-    /// (mean, logvar). Anything else fails spec validation.
     #[arg(long, default_value_t = 3)]
     pub output_dim: u32,
-    /// Stage 6: KL regularizer weight for the variational head (ignored by
-    /// the deterministic head).
     #[arg(long, default_value_t = 0.0)]
     pub kl_weight: f64,
-    /// Explicit global seed (group build + split + shuffle).
     #[arg(long)]
     pub seed: Option<u64>,
-    /// Read-only evaluation: load artifact, report losses, train nothing.
     #[arg(long, default_value_t = false)]
     pub evaluate_only: bool,
-    /// Benchmark mode: time forward passes instead of training (0 = off).
     #[arg(long, default_value_t = 0)]
     pub benchmark_iters: u32,
     #[arg(long, default_value_t = 10)]
     pub benchmark_warmup: u32,
-    /// Deterministic systematic sample cap (every k-th row); unset = all rows.
     #[arg(long)]
     pub max_rows: Option<u64>,
-    /// Spatial-tile subset, comma-separated (e.g. "tile_ra0_dec0,tile_ra0_dec1");
-    /// unset = all tiles. Norm stats cover only the subset.
     #[arg(long)]
     pub tiles: Option<String>,
-    /// Consult the epoch-watch AI agent every N epochs (0/unset = off).
     #[arg(long)]
     pub agent_every: Option<u64>,
-    /// Agent model id (`provider/model`) for epoch watch.
     #[arg(long, default_value = lnai_training::agent::DEFAULT_AGENT_MODEL)]
     pub agent_model: String,
-    /// Fallback model id when the primary agent call fails.
     #[arg(long, default_value = lnai_training::agent::DEFAULT_AGENT_FALLBACK_MODEL)]
     pub agent_fallback_model: String,
-    /// Per-call agent timeout in seconds (fail-open: training continues).
     #[arg(long, default_value_t = lnai_training::agent::DEFAULT_AGENT_TIMEOUT_SECS)]
     pub agent_timeout_secs: u64,
-    /// Event-log tail lines attached to each agent call.
     #[arg(long, default_value_t = lnai_training::agent::DEFAULT_AGENT_LOG_LINES)]
     pub agent_log_lines: usize,
-    /// Print the agent prompt instead of spawning (zero-cost plumbing check).
     #[arg(long, default_value_t = false)]
     pub agent_dry_run: bool,
 }
 
 impl Args {
-    /// Builds the epoch-watch hook config; `None` disables the hook.
-    /// An explicit `--agent-every 0` also disables (lets dry-run coexist).
     pub fn agent_hook(&self) -> Option<lnai_training::agent::AgentHookConfig> {
         match self.agent_every {
             Some(0) | None if !self.agent_dry_run => None,

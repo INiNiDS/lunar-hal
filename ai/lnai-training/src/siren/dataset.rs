@@ -28,15 +28,11 @@ pub struct SirenDataset {
     pub targets_cpu: Vec<f32>,
     pub norm: SirenNorm,
     pub n_samples: usize,
-    /// Stage 6: stars covered by this split (train/val splits are
-    /// star-disjoint, so this also proves no pixel leakage).
     pub n_stars: usize,
     plan: Option<Arc<StarTexturePlan>>,
     shuffle_seed: u64,
 }
 
-/// Photometry conditioning one texture: public so streaming plans and
-/// target-aware losses can be built and tested without parquet I/O.
 #[derive(Debug, Clone, Copy)]
 pub struct StarParams {
     pub bp_rp: f32,
@@ -44,13 +40,7 @@ pub struct StarParams {
     pub ruwe: f32,
 }
 
-/// Stage 6 streaming-ready contract: everything needed to render any
-/// `(star, pixel)` row deterministically without materialized texture buffers.
-/// The trainer and [`StreamingBatcher`] both consume this plan on demand.
 pub struct StarTexturePlan {
-    /// `(global_star_idx, params)` members of this split. Seeds derive
-    /// from the global index, so a star renders byte-identical textures no
-    /// matter which split it lands in.
     pub stars: Vec<(usize, StarParams)>,
     pub norm: SirenNorm,
     pub u_coords: Vec<f32>,
@@ -71,9 +61,6 @@ impl StarTexturePlan {
         self.n_stars() * self.n_pixels()
     }
 
-    /// Render one pixel row: `inp` must hold `SIREN_INPUT_DIM` floats,
-    /// `tgt` must hold `TARGET_DIM` floats. `star_idx` is local to this
-    /// plan; the render seed uses the member's global star index.
     pub fn render_pixel(
         &self,
         star_idx: usize,
@@ -108,7 +95,6 @@ impl StarTexturePlan {
         tgt[2] = b;
     }
 
-    /// Render one full star texture (all pixels, row-major).
     pub fn render_star(&self, star_idx: usize) -> (Vec<f32>, Vec<f32>) {
         let n_pixels = self.n_pixels();
         let mut inputs = vec![0.0f32; n_pixels * SIREN_INPUT_DIM];
@@ -126,7 +112,6 @@ impl StarTexturePlan {
         (inputs, targets)
     }
 
-    /// Materialize the whole plan (row-major, star after star).
     pub fn render_all(&self) -> (Vec<f32>, Vec<f32>) {
         let n_rows = self.n_rows();
         let mut inputs = vec![0.0f32; n_rows * SIREN_INPUT_DIM];
@@ -143,12 +128,6 @@ impl StarTexturePlan {
     }
 }
 
-/// Stage 6: deterministic star-level split. Returns `(train_star_idx,
-/// val_star_idx)` — disjoint, covering `0..n_stars`, with
-/// `floor(n_stars * val_frac)` validation stars. Splitting whole stars
-/// (never pixels) is what keeps validation free of train leakage.
-/// Public frozen contract: same `(n_stars, val_frac, seed)` always yields
-/// the same partition.
 pub fn split_star_indices(n_stars: usize, val_frac: f32, seed: u64) -> (Vec<usize>, Vec<usize>) {
     let n_val = ((n_stars as f32) * val_frac.clamp(0.0, 1.0)) as usize;
     let n_val = n_val.min(n_stars);
@@ -178,12 +157,6 @@ impl SirenDataset {
         )
     }
 
-    /// Stage 6: norm-reusing generation. Resume and read-only evaluation
-    /// must normalize with the saved snapshot instead of recomputing fresh
-    /// stats from whatever parquet happens to be on disk — otherwise the
-    /// inputs no longer match the weights. `None` computes fresh stats
-    /// (fresh training); `Some` reuses the provided snapshot for the whole
-    /// split so train/resume/eval cannot disagree.
     pub fn generate_with_norm(
         parquet_path: &Path,
         texture_size: usize,
@@ -240,7 +213,6 @@ impl SirenDataset {
         let u_coords = generate_uv_grid(texture_size);
         let n_pixels = texture_size * texture_size;
 
-        // Both canonical labels and the legacy seeded split select whole stars.
         let plan_for = |indices: &[usize]| StarTexturePlan {
             stars: indices
                 .iter()
@@ -382,11 +354,6 @@ impl PrefetchBatcher {
     }
 }
 
-/// Stage 6 streaming batcher: yields `(inputs, targets)` batches by
-/// rendering rows on demand from a [`StarTexturePlan`], without ever
-/// materializing the full texture buffers. Row order is either plan order
-/// or compact seeded permutations of stars and pixels; metadata is
-/// O(n_stars + n_pixels), not O(n_stars * n_pixels).
 pub struct StreamingBatcher {
     plan: std::sync::Arc<StarTexturePlan>,
     star_order: Vec<usize>,
@@ -461,10 +428,6 @@ impl StreamingBatcher {
     }
 }
 
-/// Stage 7: stratified streaming batcher.
-///
-/// Ensures balanced representation across stars and spatial texture strata
-/// (core vs. limb pixels) in every batch without pre-materializing textures.
 pub struct StratifiedStreamingBatcher {
     plan: std::sync::Arc<StarTexturePlan>,
     order: Vec<usize>,
@@ -487,7 +450,6 @@ impl StratifiedStreamingBatcher {
             };
         }
 
-        // Precompute pixel stratification per star: core (r < 0.5) and limb (r >= 0.5)
         let mut core_pixels = Vec::new();
         let mut limb_pixels = Vec::new();
         for p in 0..n_pixels {
@@ -507,7 +469,6 @@ impl StratifiedStreamingBatcher {
             limb_pixels.push(0);
         }
 
-        // Generate interleaved stratified sequence across stars and strata
         let mut per_star_orders = Vec::with_capacity(n_stars);
         for _ in 0..n_stars {
             let mut s_core = core_pixels.clone();
@@ -701,16 +662,12 @@ fn read_filtered_parquet(parquet_path: &Path, max_rows: Option<u64>) -> Result<(
     let path_str = parquet_path
         .to_str()
         .ok_or_else(|| anyhow::anyhow!("non-utf8 data path"))?;
-    // Lazy scan with column projection: SIREN needs only 6 columns.
     let mut lf = anyhow::Context::context(
         LazyFrame::scan_parquet(PlRefPath::from(path_str), Default::default()),
         "failed to scan parquet",
     )?;
     let schema = anyhow::Context::context(lf.collect_schema(), "read parquet schema")?;
 
-    // Canonical-v1 (Stage 4) schema: textures are conditioned on measured
-    // photometry/astrometry (bp_rp color, absolute M_G, ruwe) instead of
-    // legacy stellar-pipeline columns (st_teff/st_rad/st_mass/st_lum).
     let required_cols: &[&str] = &["x_pc", "y_pc", "z_pc", "bp_rp", "mag_g", "ruwe"];
 
     for &col_name in required_cols {
@@ -767,9 +724,6 @@ fn read_filtered_parquet(parquet_path: &Path, max_rows: Option<u64>) -> Result<(
     Ok((df, n))
 }
 
-/// Deterministic systematic sample: every k-th row in file order, at most
-/// `cap` rows (file order follows RA-shard assembly, so a stride stays
-/// spatially uniform).
 fn apply_max_rows(df: DataFrame, max_rows: Option<u64>) -> Result<DataFrame> {
     let cap = match max_rows {
         Some(n) if n > 0 && (n as usize) < df.height() => n as usize,
@@ -791,10 +745,6 @@ struct BaseColor {
     b: f32,
 }
 
-/// Base photosphere color from Gaia BP-RP color and absolute G magnitude.
-/// Spectral classes are color classes, so bp_rp bins mirror the old Teff bins
-/// (O/B < 0.0, A 0.0-0.35, F 0.35-0.6, G 0.6-0.9, K 0.9-1.3/1.9, M > 1.9).
-/// Red giants (bright M_G at red colors) get a mild luminous lift.
 fn star_base_color(bp_rp: f32, mg: f32) -> BaseColor {
     let (r, g, b) = if bp_rp < 0.0 {
         (0.62, 0.69, 1.0)
@@ -817,7 +767,6 @@ fn star_base_color(bp_rp: f32, mg: f32) -> BaseColor {
         (1.0, 0.55, 0.35)
     };
 
-    // Red-giant branch: luminous and slightly desaturated vs M dwarfs.
     let giant_lift = if mg < 3.5 && bp_rp > 0.8 { 0.03 } else { 0.0 };
 
     let bp_tint: f32 = (bp_rp - 0.5) / 4.0;
@@ -838,8 +787,6 @@ struct SpotParams {
     corona_intensity: f32,
 }
 
-/// Activity/granulation regimes from color class; red giants (bright M_G at
-/// red colors) get larger, lower-contrast granulation than dwarfs.
 fn compute_spot_params(bp_rp: f32, mg: f32) -> SpotParams {
     let (spot_contrast, spot_freq, spot_size, gran_amp, gran_freq) = if bp_rp < 0.6 {
         (0.02, 0.5, 0.03, 0.01, 30.0)
@@ -866,7 +813,6 @@ fn compute_spot_params(bp_rp: f32, mg: f32) -> SpotParams {
         0.01
     };
 
-    // Giants: big granulation cells, muted spots.
     let is_giant = mg < 3.5 && bp_rp > 0.8;
     let (gran_amp, gran_freq, spot_contrast) = if is_giant {
         (gran_amp * 2.0, gran_freq * 0.5, spot_contrast * 0.7)
@@ -1021,12 +967,10 @@ mod tests {
         all.extend(val.iter().copied());
         all.sort_unstable();
         assert_eq!(all, (0..100).collect::<Vec<_>>());
-        // Same seed, same split.
         assert_eq!(
             split_star_indices(100, 0.2, 42),
             (train.clone(), val.clone())
         );
-        // Edge fractions.
         assert_eq!(split_star_indices(10, 0.0, 1).1.len(), 0);
         assert_eq!(split_star_indices(10, 1.0, 1).0.len(), 0);
     }
@@ -1039,7 +983,6 @@ mod tests {
         assert_eq!(a_inp, b_inp);
         assert_eq!(a_tgt, b_tgt);
         assert_eq!(a_inp.len(), 3 * 16 * SIREN_INPUT_DIM);
-        // Conditioning columns are constant within a star.
         assert_eq!(a_inp[2], a_inp[(16 - 1) * SIREN_INPUT_DIM + 2]);
     }
 

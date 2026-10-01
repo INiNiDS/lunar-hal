@@ -112,6 +112,14 @@ npm run build:css
 cargo test -p lunar-testbench --bin lunar-testbench
 ```
 
+# Disclaimer
+
+AI folder IS NOT AI Generated Code. It is a collection of neural network models and their training scripts, which are written by me. I've just spent 4 months on it. 
+
+## Image 
+
+Image sourced from the Apollo 15 project on Flickr.
+
 <!-- Badge References -->
 [Badge Workflow]: https://img.shields.io/github/actions/workflow/status/INiNiDS/lunar-hal/ci.yml?branch=main&style=for-the-badge&logo=githubactions&logoColor=white
 [Workflow]: https://github.com/INiNiDS/lunar-hal/actions

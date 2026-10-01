@@ -1,10 +1,3 @@
-//! Stage 5 (task 11): parity integration test — one [`TrainingSpec`]
-//! through the CLI path and the Testbench path must produce equivalent
-//! worker argv, artifact manifests and evaluation reports.
-//!
-//! The worker binaries are GPU-only, so this suite proves *spec-level*
-//! parity (argv bytes, manifest validation, report envelope) on CPU CI.
-//! True numeric old/new parity runs on the GPU runner (`PARITY_GPU=1`).
 
 use lnai_training::artifacts::{
     ArtifactManifestV1, architecture_version, validate_artifact_bundle, write_artifact_bundle,
@@ -112,8 +105,6 @@ fn siren_spec(output_dir: &str) -> TrainingSpec {
     }
 }
 
-/// CLI path and Testbench path build specs independently; argv must be
-/// byte-identical (the parity gate's core assertion).
 #[test]
 fn cli_and_testbench_render_identical_worker_argv() {
     for spec in [
@@ -121,10 +112,7 @@ fn cli_and_testbench_render_identical_worker_argv() {
         gnn_spec("models"),
         siren_spec("models"),
     ] {
-        // CLI builds the spec from clap flags...
         let cli_argv = spec.worker_argv();
-        // ...Testbench builds it from the typed JSON request, then renders
-        // through the same builder. Both must validate first.
         assert!(spec.validate().is_ok(), "spec must validate: {spec:?}");
         let testbench_argv = spec.worker_argv();
         assert_eq!(
@@ -135,8 +123,6 @@ fn cli_and_testbench_render_identical_worker_argv() {
     }
 }
 
-/// The frozen golden argv for the canonical PINN invocation guards the
-/// byte-compat promise: any flag rename/reorder breaks this test loudly.
 #[test]
 fn pinn_golden_argv_is_frozen() {
     let argv = pinn_spec("models").worker_argv();
@@ -154,10 +140,6 @@ fn pinn_golden_argv_is_frozen() {
     assert_eq!(get("--batch-size"), "2048");
     assert_eq!(get("--physics-weight"), "0.1");
     assert_eq!(get("--holdout"), "holdout.parquet");
-    // Legacy order: --data, --output-dir, --model-file, --norm-file,
-    // --epochs, --lr, --val-frac, --gpu-index, --patience,
-    // --clip-grad-norm, --grad-accum, [--resume-from], [--holdout],
-    // --batch-size, --physics-weight.
     let order: Vec<&str> = argv
         .iter()
         .filter(|a| a.starts_with("--"))
@@ -185,7 +167,6 @@ fn pinn_golden_argv_is_frozen() {
     );
 }
 
-/// Same spec + same seed always derives the same run seed on both paths.
 #[test]
 fn effective_seed_is_path_independent() {
     let mut spec = pinn_spec("models");
@@ -196,8 +177,6 @@ fn effective_seed_is_path_independent() {
     assert_eq!(effective_train_seed(&pinn_spec("models")), 42);
 }
 
-/// Both paths write the same artifact bundle shape; manifest validation
-/// (hashes, versions) gates resume/serve identically.
 #[test]
 fn artifact_manifest_validates_on_both_paths() {
     for (model, weight_name, norm_name) in [
@@ -243,7 +222,6 @@ fn artifact_manifest_validates_on_both_paths() {
     }
 }
 
-/// Both paths emit the same evaluation report envelope for the same losses.
 #[test]
 fn evaluation_reports_match_across_paths() {
     let cli_spec = lnai_training::spec::EvaluationSpec {
@@ -273,12 +251,9 @@ fn evaluation_reports_match_across_paths() {
     assert!(envelope.passed);
 }
 
-/// Typed NDJSON events round-trip through the worker→backend→UI chain:
-/// the epoch table format and the NDJSON metric carry the same numbers.
 #[test]
 fn epoch_line_and_ndjson_metric_carry_identical_values() {
     let line = format_epoch_line(3, 0.42, 0.51, Some(0.07), 5e-4);
-    // Legacy stdout scraper compatibility: 5 pipe-separated columns.
     assert_eq!(line.split('|').count(), 5);
 
     let event = JobEvent::Metric(EpochMetric {

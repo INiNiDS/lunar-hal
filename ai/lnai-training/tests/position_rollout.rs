@@ -1,4 +1,3 @@
-//! Stage 3, task 6: position rollout as a kinematic-consistency test.
 
 use lnai_training::metrics::rollout::{mean_squared_error3, position_rollout};
 use lnai_training::report::{ReportKind, ReportV1, identity_from_env};
@@ -12,7 +11,6 @@ const STEPS: usize = 12;
 fn rollout_error_grows_linearly_for_constant_bias() {
     let p0 = vec![[0.0_f32; 3]; N];
     let v_truth = vec![[1.0_f32; 3]; N];
-    // Constant per-axis bias of 0.05 => error after k steps is exactly linear.
     let v_pred = vec![[1.05_f32; 3]; N];
 
     let result = position_rollout(&p0, &v_pred, &v_truth, DT, STEPS);
@@ -28,7 +26,6 @@ fn rollout_error_grows_linearly_for_constant_bias() {
         );
     }
 
-    // Linearity check: error(k)/k must stay constant (f32 rounding tolerated).
     let ratios: Vec<f64> = result
         .errors
         .iter()
@@ -68,7 +65,6 @@ fn rollout_report_with_noisy_model_velocities() {
 
     let result = position_rollout(&p0, &v_pred, &v_truth, DT, STEPS);
 
-    // Zero-velocity-error reference must stay flat.
     let exact = position_rollout(&p0, &v_truth, &v_truth, DT, STEPS);
     assert!(exact.final_error() < 1e-5);
 

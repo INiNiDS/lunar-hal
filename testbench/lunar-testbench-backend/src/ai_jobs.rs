@@ -1,15 +1,3 @@
-//! Stage 5 (task 10): typed AI job orchestration.
-//!
-//! The backend no longer hand-assembles worker CLI args. Typed
-//! [`TrainingRequest`] / [`EvaluationRequest`] / [`BenchmarkRequest`]
-//! payloads convert 1:1 into `lnai-training` specs; worker argv renders
-//! through the shared [`worker_argv`](lnai_training::spec::TrainingSpec::worker_argv)
-//! builders, so CLI and Testbench spawn byte-identical commands.
-//!
-//! Stdout stays a log attachment: the epoch table is still scraped for the
-//! live metric stream (legacy UI compatibility), but the typed NDJSON
-//! `events.ndjson` the worker writes is the authoritative metric protocol
-//! (exit gate: "stdout больше не является протоколом метрик").
 
 use std::path::Path;
 
@@ -22,9 +10,6 @@ use tokio::process::Command;
 
 use crate::AppState;
 
-/// Converts a Testbench typed training request into the shared library spec.
-/// Model-specific options that do not belong to the model kind are rejected
-/// here (capability gate) instead of being silently dropped.
 pub fn training_spec_from_request(
     req: &TrainingRequest,
 ) -> Result<lnai_training::spec::TrainingSpec, String> {
@@ -115,7 +100,6 @@ pub fn training_spec_from_request(
             ModelKindDto::GnnLocalization => lnai_training::spec::ModelKind::GnnLocalization,
         })
         .to_string(),
-        // Epoch-watch agent / sampling / tiles are CLI-only for now.
         max_rows: None,
         tiles: None,
         agent: None,
@@ -125,10 +109,6 @@ pub fn training_spec_from_request(
 }
 
 fn reject_unrelated_options(req: &TrainingRequest, kind: &str) -> Result<(), String> {
-    // GNN graph options (knn_k/hidden_dim/max_group_size/radius_pc) and
-    // SIREN texture options (texture_size/max_stars) belong to their own
-    // kinds; every other kind must not carry them. The check is per-kind so
-    // GNN keeps its graph flags and SIREN keeps its texture flags.
     let mut stray = Vec::new();
     if kind != "gnn"
         && kind != "gnn_localization"
@@ -152,7 +132,6 @@ fn reject_unrelated_options(req: &TrainingRequest, kind: &str) -> Result<(), Str
     }
 }
 
-/// Converts a typed evaluation request into the shared library spec.
 pub fn evaluation_spec_from_request(
     req: &EvaluationRequest,
 ) -> Result<lnai_training::spec::EvaluationSpec, String> {
@@ -179,7 +158,6 @@ pub fn evaluation_spec_from_request(
     Ok(spec)
 }
 
-/// Converts a typed benchmark request into the shared library spec.
 pub fn benchmark_spec_from_request(
     req: &BenchmarkRequest,
 ) -> Result<lnai_training::spec::BenchmarkSpec, String> {
@@ -203,8 +181,6 @@ pub fn benchmark_spec_from_request(
     Ok(spec)
 }
 
-/// Resolves the worker binary for a model kind (release preferred, debug
-/// fallback — same order as the pre-Stage-5 hand-rolled spawn code).
 pub fn worker_binary_path(model: &lnai_training::spec::ModelKind) -> std::path::PathBuf {
     let ws = crate::jobs::workspace_root();
     for profile in ["release", "debug"] {
@@ -216,8 +192,6 @@ pub fn worker_binary_path(model: &lnai_training::spec::ModelKind) -> std::path::
     ws.join("target").join("release").join(model.binary_name())
 }
 
-/// Builds the worker [`Command`] from a shared training spec — the single
-/// argv source CLI and Testbench share (parity gate).
 pub fn train_command_from_spec(spec: &lnai_training::spec::TrainingSpec) -> Command {
     let mut cmd = Command::new(worker_binary_path(&spec.model));
     for arg in spec.worker_argv() {
@@ -229,8 +203,6 @@ pub fn train_command_from_spec(spec: &lnai_training::spec::TrainingSpec) -> Comm
     cmd
 }
 
-/// Builds the worker [`Command`] for read-only evaluation
-/// (`--evaluate-only`: no optimizer step, no checkpoint rewrite).
 pub fn evaluate_command_from_spec(
     spec: &lnai_training::spec::EvaluationSpec,
     holdout: Option<&str>,
@@ -249,7 +221,6 @@ pub fn evaluate_command_from_spec(
     cmd
 }
 
-/// Builds the worker [`Command`] for the forward-pass benchmark harness.
 pub fn benchmark_command_from_spec(spec: &lnai_training::spec::BenchmarkSpec) -> Command {
     let mut cmd = Command::new(worker_binary_path(&spec.model));
     for arg in spec.worker_argv() {
@@ -261,9 +232,7 @@ pub fn benchmark_command_from_spec(spec: &lnai_training::spec::BenchmarkSpec) ->
     cmd
 }
 
-// ------------------------------- HTTP routes -------------------------------
 
-/// `POST /jobs/training` — typed training job (new canonical route).
 pub async fn start_training(
     State(state): State<AppState>,
     Json(req): Json<TrainingRequest>,
@@ -281,8 +250,6 @@ pub async fn start_training(
         },
         req.data_path
     );
-    // The legacy Job envelope keeps the old UI working; the typed spec is
-    // the spawn source of truth.
     let legacy = legacy_train_spec(&req);
     let job = Job::new(JobKind::Train(legacy), title, total_epochs);
     let id = state.registry.spawn(job, cmd).map_err(|e| e.to_string())?;
@@ -293,7 +260,6 @@ pub async fn start_training(
         .ok_or_else(|| "job not found after spawn".to_string())
 }
 
-/// `POST /jobs/evaluation` — typed read-only evaluation job.
 pub async fn start_evaluation(
     State(state): State<AppState>,
     Json(req): Json<EvaluationRequest>,
@@ -313,7 +279,6 @@ pub async fn start_evaluation(
         .ok_or_else(|| "job not found after spawn".to_string())
 }
 
-/// `POST /jobs/benchmark` — typed forward-pass benchmark job.
 pub async fn start_benchmark(
     State(state): State<AppState>,
     Json(req): Json<BenchmarkRequest>,
@@ -330,8 +295,6 @@ pub async fn start_benchmark(
         .ok_or_else(|| "job not found after spawn".to_string())
 }
 
-/// `GET /jobs/events/:id` — replays the worker's typed NDJSON `events.ndjson`
-/// as JSON (the authoritative metric stream; stdout remains log-only).
 pub async fn job_typed_events(
     State(state): State<AppState>,
     axum::extract::Path(id): axum::extract::Path<String>,
@@ -340,7 +303,6 @@ pub async fn job_typed_events(
         .registry
         .get(&id)
         .ok_or_else(|| "not found".to_string())?;
-    // Output dir is recovered from the legacy spec stored on the job.
     let output_dir = match &job.spec {
         JobKind::Train(t) => Some(t.output_dir.clone()),
         JobKind::Validate(v) => Some(v.output_dir.clone()),

@@ -1,37 +1,26 @@
 use serde::{Deserialize, Serialize};
 
-/// Typed events emitted by the training/evaluation worker.
-/// Replaces fragile string parsing of stdout.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum JobEvent {
-    /// Job has been picked up by the runner
     Queued,
-    /// Worker has started executing the job
     Started,
-    /// Periodic progress update
     Progress { epoch: u32, total_epochs: u32 },
-    /// Typed metric for a completed epoch
     Metric(EpochMetric),
-    /// Model checkpoint saved
     Checkpoint {
         epoch: u32,
         path: String,
         hash: String,
     },
-    /// Job finished successfully
     Completed { exit_code: i32 },
-    /// Job failed
     Failed {
         error_summary: String,
         exit_code: i32,
     },
-    /// Job was canceled by the user/system
     Cancelled,
 }
 
 impl JobEvent {
-    /// Helper to extract a status enum from an event, useful for state machines
     pub fn to_status(&self) -> JobStatus {
         match self {
             JobEvent::Queued => JobStatus::Queued,
@@ -78,7 +67,6 @@ pub struct EpochMetric {
     pub timestamp_ms: u64,
 }
 
-/// Classification of raw stdout/stderr lines.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum LogLineKind {
@@ -93,7 +81,6 @@ pub enum LogLineKind {
     Raw,
 }
 
-/// A raw line from the process output, retained for UI display and debugging.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct LogEntry {
     pub timestamp_ms: u64,
@@ -101,17 +88,12 @@ pub struct LogEntry {
     pub kind: LogLineKind,
 }
 
-/// Appends one NDJSON event line to `writer` (run folder `events.ndjson`,
-/// SSE payloads). Stdout keeps the human-readable `epoch` table; machines
-/// parse only this stream.
 pub fn write_event_line(writer: &mut dyn std::io::Write, event: &JobEvent) -> std::io::Result<()> {
     let line = serde_json::to_string(event)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
     writeln!(writer, "{line}")
 }
 
-/// Parses one NDJSON event line; returns `None` for blank lines so readers
-/// can skip trailing newlines without failing the whole stream.
 pub fn read_event_line(line: &str) -> Option<Result<JobEvent, String>> {
     let trimmed = line.trim();
     if trimmed.is_empty() {
@@ -120,11 +102,6 @@ pub fn read_event_line(line: &str) -> Option<Result<JobEvent, String>> {
     Some(serde_json::from_str(trimmed).map_err(|e| e.to_string()))
 }
 
-/// Epoch table line format shared by every worker binary, so the legacy
-/// stdout scraper (`jobs.rs::parse_epoch_line`) keeps working while typed
-/// NDJSON becomes the primary protocol:
-/// `"{epoch:5} | {train:12.6} | {val:12.6} | {phys:12.6} | {lr:10.6e}"`
-/// (SIREN omits the phys column).
 pub fn format_epoch_line(
     epoch: u32,
     train_loss: f64,

@@ -1,12 +1,3 @@
-//! Stage 9 / Exit Gate: Missing-neighbor reconstruction, Hungarian matching, and set metrics.
-//!
-//! Verifies:
-//! 1. Set prediction decoder generates K query slots.
-//! 2. Hungarian bipartite matching between slots and ground truth targets.
-//! 3. Composite set loss (position Huber/NLL, existence BCE, count MAE, feature diff, Chamfer distance).
-//! 4. Negative neighborhoods (0 hidden targets): model does not produce excessive false positives.
-//! 5. Evaluation metrics (Precision, Recall, F1, Count MAE, Chamfer distance, Coverage 50/90/95%).
-//! 6. Comparison against Poisson density baseline.
 
 use burn::prelude::*;
 use lnai_models::{GNN_LOC_INPUT_DIM, GNN_LOC_SLOT_DIM, StellarGnnLocalizationConfig};

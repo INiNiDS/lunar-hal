@@ -1,5 +1,3 @@
-//! Integration: deterministic hash split + spatial-tile holdout must never
-//! leak holdout geography into train/validation/test artifacts.
 
 use lnai_data::clean::{CleanPolicy, clean_records, parse_shard_csv};
 use lnai_data::manifest::{DatasetManifestV1, ShardState};
@@ -9,8 +7,6 @@ use std::collections::HashSet;
 
 const CSV_HEADER: &str = "source_id,ra_deg,dec_deg,parallax_mas,pm_ra_mas_yr,pm_dec_mas_yr,radial_velocity_kms,mag_g,mag_bp,mag_rp,ruwe,astrometric_excess_noise";
 
-/// Synthetic sky covering all RA strips and Dec bands so every spatial tile
-/// gets populated.
 fn fixture_csv(rows_per_band: u64) -> String {
     let mut csv = format!("{CSV_HEADER}\n");
     let mut id = 0u64;
@@ -48,14 +44,12 @@ fn assembled_views_respect_hash_split_and_holdout_exclusion() {
     let report = lnai_data::assemble::assemble_dataset(&out_dir, &mut manifest, &records).unwrap();
     assert_eq!(report.rows_written, records.len() as u64);
 
-    // Accounting closes exactly and no double assignment happened.
     assert_eq!(
         report.train_rows + report.validation_rows + report.test_rows + report.holdout_rows,
         report.rows_written
     );
     assert!(report.holdout_rows > 0, "fixture spans whole sky");
 
-    // Read canonical parquet back and validate split columns against pure logic.
     let file = std::fs::File::open(&report.canonical_path).unwrap();
     let df = polars_io_parquet(&file);
     let ids: Vec<String> = col_strings(&df, "source_id");
@@ -79,7 +73,6 @@ fn assembled_views_respect_hash_split_and_holdout_exclusion() {
         }
     }
 
-    // View files contain only contracted columns (no leakage of non-required).
     for (view, path) in &report.view_paths {
         assert!(path.exists(), "{}", path.display());
         if matches!(
@@ -99,7 +92,6 @@ fn assembled_views_respect_hash_split_and_holdout_exclusion() {
         }
     }
 
-    // Localization neighbors reference only real anchors from the dataset.
     let pairs_path = out_dir.join("gnn_localization_neighbors.parquet");
     assert!(pairs_path.exists());
     let pf = std::fs::File::open(pairs_path).unwrap();
@@ -113,7 +105,6 @@ fn assembled_views_respect_hash_split_and_holdout_exclusion() {
     }
 }
 
-// --- small polars helpers kept local so the integration test stays standalone
 
 use polars::prelude::*;
 

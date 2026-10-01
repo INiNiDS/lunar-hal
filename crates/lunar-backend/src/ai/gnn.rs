@@ -109,7 +109,6 @@ pub(crate) async fn load_gnn() -> Option<Arc<GnnModel>> {
     let device: Device<B> = Default::default();
     let path_str = bpk_path.to_string_lossy();
 
-    // Stage 6: explicit readout head detection
     for width in [GNN_OUTPUT_DIM, GNN_VARIATIONAL_DIM] {
         let head = match GnnHeadKind::from_output_dim(width) {
             Some(head) => head,

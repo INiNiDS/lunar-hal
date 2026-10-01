@@ -1,8 +1,3 @@
-//! Defensive-coverage tests: prove the game refuses every category
-//! of garbage input the AI backend (or a hostile caller) could
-//! deliver. If a future refactor accidentally widens the trust
-//! boundary, one of these tests will fail and the build will
-//! refuse to ship.
 
 use lunar_stellar_core::validation::{
     ValidationError, limits, validate_bp_rp, validate_center_x, validate_center_y,
@@ -18,7 +13,6 @@ use lunar_structures::{
     StellarMetadata,
 };
 
-// --- pure validators ---------------------------------------------------------
 
 #[test]
 fn rejects_empty_name() {
@@ -201,7 +195,8 @@ fn pipeline_rejects_mismatched_texture_size() {
         siren: SirenTextureResponse {
             width: 4,
             height: 4,
-            pixels: vec![0; 4 * 4 * 3 + 1], // 49, not 48
+            pixels: vec![0; 4 * 4 * 3 + 1],
+
         },
         metadata: StellarMetadata {
             spectral_class: "G2V".into(),
@@ -237,7 +232,6 @@ fn pipeline_rejects_nan_pinn() {
     assert!(validate_pipeline(&pipeline).is_err());
 }
 
-// --- game-level guarantees ---------------------------------------------------
 
 fn valid_scene() -> StarScene {
     StarScene {
@@ -342,10 +336,6 @@ fn scene_rejects_invalid_sector_center() {
 #[test]
 fn scene_rejects_invalid_scene_id_in_load_delete() {
     let game = StellarScene::new();
-    // The async methods should never even reach the network for an
-    // obviously broken id; we cannot easily observe the network in a
-    // unit test, but we can prove the validator is invoked first by
-    // using a sync call path that also requires a valid id.
     assert!(
         game.set_scene_camera("not a valid id!", Default::default())
             .is_err()
@@ -367,8 +357,6 @@ fn scene_adopt_scene_drops_garbage_silently() {
 #[test]
 fn scene_rejects_malformed_create_request() {
     let game = StellarScene::new();
-    // A request with a name that is all whitespace is also invalid
-    // because the validator trims and rejects empty.
     let req = CreateStarSceneRequest {
         name: "   ".into(),
         center_x: 0.0,
@@ -432,9 +420,6 @@ fn scene_apply_sector_rejects_invalid_star() {
 
 #[test]
 fn pipeline_request_validation_keeps_dimensions_sane() {
-    // Sanity check: a sane pipeline request does not crash the
-    // validator. The request itself is the trusted caller's
-    // responsibility; the response is what we defend against.
     let req = PipelineRequest {
         x_pc: 1.0,
         y_pc: 2.0,
@@ -443,7 +428,8 @@ fn pipeline_request_validation_keeps_dimensions_sane() {
         g_mag: 10.0,
         texture_size: 256,
     };
-    let _ = req; // just compile-time existence
+    let _ = req;
+
 }
 
 #[test]
@@ -486,9 +472,6 @@ fn scene_list_response_rejects_each_bad_summary() {
     let _ = StarSceneListResponse {
         scenes: vec![summary, bad],
     };
-    // The list itself is fine to construct; the validator is what
-    // would reject it inside `refresh_scenes`. We assert that the
-    // validator on the bad entry fails.
     let bad = StarSceneSummary {
         id: "has space".into(),
         name: "Vela".into(),

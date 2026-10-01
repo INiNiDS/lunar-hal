@@ -1,19 +1,9 @@
-//! PINN correctness metrics: per-target errors and the Stefan–Boltzmann
-//! physics residual.
-//!
-//! The PINN head emits four normalized log10 targets:
-//! `(log10_teff, log10_rad, log10_mass, log10_lum)`. In solar units the
-//! Stefan–Boltzmann law is `L = R^2 * T^4`, i.e. in log10 space
-//! `log10_lum = 2*log10_rad + 4*log10_teff`.
 
-/// Contracted target order of the PINN output head.
 pub const PINN_TARGETS: [&str; 4] = ["log10_teff", "log10_rad", "log10_mass", "log10_lum"];
 
-/// Exponents of the Stefan–Boltzmann law in log10 solar units.
 pub const SB_RAD_EXPONENT: f32 = 2.0;
 pub const SB_TEFF_EXPONENT: f32 = 4.0;
 
-/// Error statistics for one output target.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PerTargetMetrics {
     pub target: &'static str,
@@ -22,10 +12,6 @@ pub struct PerTargetMetrics {
     pub max_abs_err: f32,
 }
 
-/// Computes per-target MSE/MAE/max-error over `[N, 4]` prediction/truth rows.
-///
-/// # Panics
-/// Panics when the slices differ in length.
 pub fn per_target_metrics(pred: &[[f32; 4]], truth: &[[f32; 4]]) -> Vec<PerTargetMetrics> {
     assert_eq!(pred.len(), truth.len(), "pred/truth length mismatch");
     let n = pred.len() as f64;
@@ -51,10 +37,6 @@ pub fn per_target_metrics(pred: &[[f32; 4]], truth: &[[f32; 4]]) -> Vec<PerTarge
         .collect()
 }
 
-/// Weighted aggregate of per-target MSE: `sum(w_i * mse_i) / sum(w)`
-/// with weights in [`PINN_TARGETS`] order. Returns `None` when the weight
-/// sum is not positive (Stage 6: single headline number for runs with
-/// non-uniform `target_weights`).
 pub fn weighted_mean_mse(metrics: &[PerTargetMetrics], weights: &[f32; 4]) -> Option<f64> {
     if metrics.len() != PINN_TARGETS.len() {
         return None;
@@ -71,15 +53,11 @@ pub fn weighted_mean_mse(metrics: &[PerTargetMetrics], weights: &[f32; 4]) -> Op
     Some(acc / w_sum)
 }
 
-/// Stefan–Boltzmann residual in log10 solar units:
-/// `log10_lum - (4*log10_teff + 2*log10_rad)`.
-/// Zero for physically consistent predictions.
 pub fn stefan_boltzmann_residual(row: &[f32; 4]) -> f32 {
     let [log10_teff, log10_rad, _log10_mass, log10_lum] = *row;
     log10_lum - (SB_TEFF_EXPONENT * log10_teff + SB_RAD_EXPONENT * log10_rad)
 }
 
-/// Mean absolute Stefan–Boltzmann residual over `[N, 4]` rows.
 pub fn mean_abs_sb_residual(rows: &[[f32; 4]]) -> f64 {
     if rows.is_empty() {
         return 0.0;
@@ -117,8 +95,6 @@ mod tests {
 
     #[test]
     fn sb_residual_is_zero_for_physical_rows_and_detects_violations() {
-        // L = R^2 * T^4 in log10, row layout [teff, rad, mass, lum]:
-        // lum must equal 4*0.0 + 2*1.0 = 2.0.
         let physical = [0.0_f32, 1.0, 0.0, 2.0];
         assert!(stefan_boltzmann_residual(&physical).abs() < 1e-6);
 
@@ -140,7 +116,6 @@ mod tests {
         let truth = [[1.0, 2.0, 3.0, 4.0], [1.0, 2.0, 3.0, 4.0]];
         let pred = [[2.0, 2.0, 3.0, 6.0], [1.0, 4.0, 5.0, 4.0]];
         let metrics = per_target_metrics(&pred, &truth);
-        // Per-target MSEs are [0.5, 2.0, 2.0, 2.0].
         let uniform = weighted_mean_mse(&metrics, &[1.0, 1.0, 1.0, 1.0]).unwrap();
         assert!((uniform - 1.625).abs() < 1e-12, "got {uniform}");
         let teff_only = weighted_mean_mse(&metrics, &[1.0, 0.0, 0.0, 0.0]).unwrap();

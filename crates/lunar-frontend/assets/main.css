@@ -8,9 +8,51 @@ body {
 
 .font-serif-glow {
     font-family: 'Cinzel', 'Playfair Display', serif;
-    text-shadow: 0 0 15px rgba(255, 255, 255, 0.8),
-                 0 0 40px rgba(255, 255, 255, 0.4),
-                 0 0 80px rgba(255, 255, 255, 0.2);
+    text-shadow: 0 0 15px rgba(255, 255, 255, 0.9),
+                 0 0 40px rgba(255, 255, 255, 0.5),
+                 0 0 80px rgba(255, 255, 255, 0.3),
+                 0 2px 10px rgba(0, 0, 0, 0.85);
+}
+
+.hero-title-glow {
+    font-family: 'Cinzel', 'Playfair Display', serif;
+    color: #ffffff;
+    text-shadow:
+        0 2px 6px rgba(0, 0, 0, 0.95),
+        0 4px 18px rgba(0, 0, 0, 0.9),
+        0 0 30px rgba(0, 0, 0, 0.85),
+        0 0 12px rgba(255, 255, 255, 1.0),
+        0 0 25px rgba(255, 255, 255, 0.85),
+        0 0 55px rgba(255, 255, 255, 0.5),
+        0 0 90px rgba(255, 255, 255, 0.3);
+}
+
+.hero-divider-line-left {
+    height: 1.5px;
+    background: linear-gradient(90deg, rgba(255, 255, 255, 0.15) 0%, rgba(255, 255, 255, 1.0) 100%);
+    box-shadow: 0 0 8px rgba(255, 255, 255, 0.9), 0 2px 6px rgba(0, 0, 0, 0.9);
+}
+
+.hero-divider-line-right {
+    height: 1.5px;
+    background: linear-gradient(90deg, rgba(255, 255, 255, 1.0) 0%, rgba(255, 255, 255, 0.15) 100%);
+    box-shadow: 0 0 8px rgba(255, 255, 255, 0.9), 0 2px 6px rgba(0, 0, 0, 0.9);
+}
+
+.hero-divider-icon {
+    filter: drop-shadow(0 0 8px rgba(255, 255, 255, 1.0)) drop-shadow(0 2px 6px rgba(0, 0, 0, 0.9));
+}
+
+.hero-subtitle-glow {
+    color: #ffffff;
+    font-weight: 600;
+    text-shadow:
+        0 1px 4px rgba(0, 0, 0, 0.95),
+        0 2px 10px rgba(0, 0, 0, 0.9),
+        0 0 18px rgba(0, 0, 0, 0.85),
+        0 0 8px rgba(255, 255, 255, 1.0),
+        0 0 20px rgba(255, 255, 255, 0.8),
+        0 0 35px rgba(255, 255, 255, 0.4);
 }
 
 @keyframes star-twinkle {

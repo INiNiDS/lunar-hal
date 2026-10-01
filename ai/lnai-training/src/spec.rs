@@ -1,7 +1,3 @@
-//! Stage 5 (task 1/9): shared training specs with per-model capability
-//! validation. CLI and Testbench build the same [`TrainingSpec`]; the worker
-//! binaries execute it. A universal bag of CLI flags is rejected — each model
-//! kind declares exactly which parameters it accepts.
 
 use serde::{Deserialize, Serialize};
 
@@ -33,8 +29,6 @@ impl ModelKind {
         }
     }
 
-    /// Accepts both canonical slugs and the legacy Testbench slugs
-    /// (`"gnn"` → [`ModelKind::GnnKinematics`]).
     pub fn from_slug_loose(slug: &str) -> Option<Self> {
         match slug {
             "pinn" => Some(ModelKind::Pinn),
@@ -46,9 +40,6 @@ impl ModelKind {
     }
 }
 
-/// Stage 6 (task 1/8): selectable PINN data-loss shape. `Mse` is the
-/// legacy behaviour; `Huber` is the robustness experiment (linear penalty
-/// past `huber_delta`, in normalized target units).
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum PinnLossKind {
@@ -86,21 +77,15 @@ fn default_target_weights() -> [f32; 4] {
 pub struct PinnConfig {
     pub physics_weight: f64,
     pub hidden_dim: u32,
-    /// Data-loss shape (default `Mse` = legacy behaviour).
     #[serde(default)]
     pub loss: PinnLossKind,
-    /// Huber knee in normalized target units (used only when
-    /// `loss == Huber`).
     #[serde(default = "default_huber_delta")]
     pub huber_delta: f32,
-    /// Per-target data-loss weights in [`PINN_TARGETS`](crate::metrics::pinn::PINN_TARGETS)
-    /// order `[teff, rad, mass, lum]` (default uniform).
     #[serde(default = "default_target_weights")]
     pub target_weights: [f32; 4],
 }
 
 impl PinnConfig {
-    /// Legacy configuration: MSE loss with uniform target weights.
     pub fn is_legacy_loss_config(&self) -> bool {
         self.loss == PinnLossKind::Mse
             && (self.huber_delta - 1.0).abs() < f32::EPSILON
@@ -109,7 +94,6 @@ impl PinnConfig {
 }
 
 impl Default for PinnConfig {
-    /// Legacy defaults: MSE loss, unit Huber knee, uniform target weights.
     fn default() -> Self {
         Self {
             physics_weight: 0.1,
@@ -125,14 +109,10 @@ impl Default for PinnConfig {
 pub struct GnnKinematicsConfig {
     pub knn_k: u32,
     pub hidden_dim: u32,
-    /// Readout width: 3 = deterministic `(vx,vy,vz)` head, 6 = variational
-    /// `(mean, logvar)` head (Stage 6: previously frozen to 3).
     pub output_dim: u32,
     pub max_group_size: u32,
     pub radius_pc: f32,
     pub physics_weight: f64,
-    /// KL regularizer weight for the variational head (ignored by the
-    /// deterministic head; default 0 = mean-only training).
     #[serde(default)]
     pub kl_weight: f64,
 }
@@ -200,8 +180,6 @@ pub struct TrainingSpec {
     pub model: ModelKind,
     pub config: ModelConfig,
     pub dataset_manifest_hash: String,
-    /// Explicit dataset path; `None` lets the worker fall back to its
-    /// compiled-in default candidates (legacy behaviour).
     pub data_path: Option<String>,
     pub epochs: u32,
     pub batch_size: u32,
@@ -214,26 +192,16 @@ pub struct TrainingSpec {
     pub patience: u32,
     pub grad_accum: u32,
     pub clip_grad_norm: f64,
-    /// Explicit global seed; `None` derives a stable seed from
-    /// dataset/model/epochs (see `runner::effective_train_seed`).
     pub seed: Option<u64>,
     pub model_file: String,
     pub norm_file: String,
-    /// Deterministic systematic sample cap (every k-th row, file order);
-    /// `None`/`Some(0)` loads everything the filters keep.
     pub max_rows: Option<u64>,
-    /// Spatial-tile subset (`spatial_tile` ids, comma-separated upstream);
-    /// `None` trains on all tiles. Norm stats cover only the subset.
     pub tiles: Option<String>,
-    /// Epoch-watch AI supervisor hook (`opencode run` after every N epochs);
-    /// `None` disables it (legacy behaviour).
     #[serde(default)]
     pub agent: Option<crate::agent::AgentHookConfig>,
 }
 
 impl TrainingSpec {
-    /// Per-model capability gate: rejects parameter combinations the model
-    /// binary does not implement instead of silently ignoring them.
     pub fn validate(&self) -> Result<(), Vec<String>> {
         let mut errors = Vec::new();
         if self.model != self.config.kind() {
@@ -290,7 +258,6 @@ impl TrainingSpec {
                 if cfg.hidden_dim == 0 {
                     errors.push("gnn hidden_dim must be >= 1".to_string());
                 }
-                // Stage 6: two explicit heads — 3 deterministic, 6 variational.
                 if cfg.output_dim != 3 && cfg.output_dim != 6 {
                     errors.push(format!(
                         "gnn output_dim must be 3 (deterministic) or 6 (variational), got {}",
@@ -357,9 +324,6 @@ impl TrainingSpec {
         }
     }
 
-    /// Builds the exact worker-binary argv for this spec, byte-compatible
-    /// with the pre-Stage-5 binaries (parity gate). The binary path itself
-    /// is resolved by the caller; only flags are returned.
     pub fn worker_argv(&self) -> Vec<String> {
         let data = self.data_path.clone().unwrap_or_default();
         let mut argv = vec![
@@ -386,7 +350,6 @@ impl TrainingSpec {
             "--grad-accum".to_string(),
             self.grad_accum.to_string(),
         ];
-        // Optional tail flags keep legacy argv byte-identical when unset.
         if let Some(n) = self.max_rows
             && n > 0
         {
@@ -411,8 +374,6 @@ impl TrainingSpec {
                 argv.push(self.batch_size.to_string());
                 argv.push("--physics-weight".to_string());
                 argv.push(cfg.physics_weight.to_string());
-                // Stage 6 loss options are trailing and opt-in: legacy
-                // specs keep the frozen golden argv byte-identical.
                 if !cfg.is_legacy_loss_config() {
                     argv.push("--loss-kind".to_string());
                     argv.push(cfg.loss.slug().to_string());
@@ -435,7 +396,6 @@ impl TrainingSpec {
                 }
             }
             ModelConfig::GnnKinematics(cfg) => {
-                // Legacy lnai-gnn flag name is --max-nodes carrying the batch budget.
                 argv.push("--max-nodes".to_string());
                 argv.push(self.batch_size.to_string());
                 argv.push("--physics-weight".to_string());
@@ -454,8 +414,6 @@ impl TrainingSpec {
                     argv.push("--tiles".to_string());
                     argv.push(tiles.to_string());
                 }
-                // Stage 6 variational head: opt-in trailing flags, legacy
-                // deterministic specs keep their argv byte-identical.
                 if cfg.output_dim == 6 {
                     argv.push("--output-dim".to_string());
                     argv.push(cfg.output_dim.to_string());
@@ -520,7 +478,6 @@ pub struct EvaluationSpec {
     pub model: ModelKind,
     pub artifact_hash: String,
     pub dataset_manifest_hash: String,
-    /// Explicit dataset path; `None` keeps the worker default candidates.
     pub data_path: Option<String>,
     pub batch_size: u32,
     pub output_dir: String,
@@ -543,8 +500,6 @@ impl EvaluationSpec {
         }
     }
 
-    /// Argv for the worker's read-only evaluation mode: same binary, plus
-    /// `--evaluate-only`, never an optimizer step.
     pub fn worker_argv(&self, holdout: Option<&str>) -> Vec<String> {
         let mut argv = vec![
             "--data".to_string(),
@@ -552,7 +507,6 @@ impl EvaluationSpec {
             "--output-dir".to_string(),
             self.output_dir.clone(),
         ];
-        // The GNN worker names its batch budget --max-nodes (legacy flag).
         match self.model {
             ModelKind::GnnKinematics | ModelKind::GnnLocalization => {
                 argv.push("--max-nodes".to_string());
@@ -608,11 +562,8 @@ impl BenchmarkSpec {
         }
     }
 
-    /// Argv for the worker's benchmark mode: loads the artifact, times
-    /// forward passes, writes `benchmark.json`, trains nothing.
     pub fn worker_argv(&self) -> Vec<String> {
         let mut argv = vec!["--output-dir".to_string(), self.output_dir.clone()];
-        // The GNN worker names its batch budget --max-nodes (legacy flag).
         match self.model {
             ModelKind::GnnKinematics | ModelKind::GnnLocalization => {
                 argv.push("--max-nodes".to_string());
@@ -908,7 +859,6 @@ mod tests {
 
     #[test]
     fn agent_flags_render_only_for_gnn_and_only_when_set() {
-        // GNN without hook: no agent flags (legacy argv stable).
         let mut spec = pinn_training_spec();
         spec.model = ModelKind::GnnKinematics;
         spec.config = ModelConfig::GnnKinematics(GnnKinematicsConfig {
@@ -922,7 +872,6 @@ mod tests {
         });
         assert!(!spec.worker_argv().iter().any(|a| a == "--agent-every"));
 
-        // GNN with hook: flags present in order.
         spec.agent = Some(crate::agent::AgentHookConfig {
             every: 2,
             model: "m1".to_string(),
@@ -946,7 +895,6 @@ mod tests {
         assert_eq!(get("--agent-log-lines"), "10");
         assert!(argv.iter().any(|a| a == "--agent-dry-run"));
 
-        // PINN with hook set: flags must NOT leak to the pinn worker.
         let mut pinn = pinn_training_spec();
         pinn.agent = spec.agent.clone();
         assert!(!pinn.worker_argv().iter().any(|a| a == "--agent-every"));
@@ -994,7 +942,6 @@ mod tests {
         assert!(argv.contains(&"--evaluate-only".to_string()));
         assert!(argv.contains(&"--holdout".to_string()));
         assert!(argv.contains(&"--seed".to_string()));
-        // No training flags leak into evaluation.
         assert!(!argv.iter().any(|a| a == "--epochs"));
         assert!(!argv.iter().any(|a| a == "--lr"));
     }

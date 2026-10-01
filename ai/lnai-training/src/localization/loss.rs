@@ -1,6 +1,3 @@
-/// Hungarian (Kuhn-Munkres) minimum weight bipartite matching algorithm.
-/// Matches K slots to M targets where K >= M.
-/// Returns a list of `(slot_idx, target_idx)` assignments minimizing total cost.
 pub fn hungarian_match(cost_matrix: &[Vec<f32>]) -> Vec<(usize, usize)> {
     let k = cost_matrix.len();
     if k == 0 {
@@ -11,10 +8,7 @@ pub fn hungarian_match(cost_matrix: &[Vec<f32>]) -> Vec<(usize, usize)> {
         return Vec::new();
     }
 
-    // Standard rectangular Hungarian algorithm (M <= K):
-    // We treat targets as rows (size M) and slots as columns (size K).
     let n = k.max(m);
-    // Pad cost matrix to n x n with zeros or large values
     let mut cost = vec![vec![0.0f64; n + 1]; n + 1];
     for i in 0..m {
         for j in 0..k {
@@ -89,7 +83,6 @@ pub fn hungarian_match(cost_matrix: &[Vec<f32>]) -> Vec<(usize, usize)> {
     assignments
 }
 
-/// 1D Huber loss with threshold delta.
 pub fn huber_loss_1d(diff: f32, delta: f32) -> f32 {
     let abs_diff = diff.abs();
     if abs_diff <= delta {
@@ -99,15 +92,12 @@ pub fn huber_loss_1d(diff: f32, delta: f32) -> f32 {
     }
 }
 
-/// 3D Huber loss on relative position difference.
 pub fn huber_loss_3d(pred: [f32; 3], target: [f32; 3], delta: f32) -> f32 {
     huber_loss_1d(pred[0] - target[0], delta)
         + huber_loss_1d(pred[1] - target[1], delta)
         + huber_loss_1d(pred[2] - target[2], delta)
 }
 
-/// Gaussian negative log-likelihood on 3D position given diagonal variances:
-/// NLL = 0.5 * sum_c ( (y_c - mu_c)^2 / var_c + ln(var_c) )
 pub fn gaussian_nll_3d(pred_pos: [f32; 3], target_pos: [f32; 3], variances: [f32; 3]) -> f32 {
     let mut nll = 0.0f32;
     for c in 0..3 {
@@ -118,7 +108,6 @@ pub fn gaussian_nll_3d(pred_pos: [f32; 3], target_pos: [f32; 3], variances: [f32
     nll
 }
 
-/// Bidirectional Chamfer distance between two sets of 3D points.
 pub fn chamfer_distance_3d(set_a: &[[f32; 3]], set_b: &[[f32; 3]]) -> f32 {
     if set_a.is_empty() || set_b.is_empty() {
         return 0.0;
@@ -151,7 +140,6 @@ pub fn chamfer_distance_3d(set_a: &[[f32; 3]], set_b: &[[f32; 3]]) -> f32 {
     (sum_a_to_b / set_a.len() as f32 + sum_b_to_a / set_b.len() as f32) * 0.5
 }
 
-/// Breakdown of loss components for missing-neighbor set reconstruction.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct SetLossBreakdown {
     pub total_loss: f32,
@@ -166,17 +154,17 @@ pub struct SetLossBreakdown {
     pub true_count: usize,
 }
 
-/// Computes the complete set loss with Hungarian bipartite matching (Stage 9).
 pub fn compute_set_loss(
-    slot_raw: &[[f32; 16]],      // [K, 16]
-    hidden_targets: &[[f32; 5]], // [M, 5]: [dx, dy, dz, bp_rp, g_mag] in scaled units
+    slot_raw: &[[f32; 16]],
+
+    hidden_targets: &[[f32; 5]],
+
     radius_pc: f32,
     weights: &crate::spec::LocalizationLossWeights,
 ) -> SetLossBreakdown {
     let k = slot_raw.len();
     let m = hidden_targets.len();
 
-    // 1. Extract slot predictions
     let mut slot_probs = Vec::with_capacity(k);
     let mut slot_positions = Vec::with_capacity(k);
     let mut slot_variances = Vec::with_capacity(k);
@@ -195,7 +183,6 @@ pub fn compute_set_loss(
         slot_features.push([s[10], s[11]]);
     }
 
-    // 2. Build cost matrix for Hungarian matching
     let mut cost_matrix = vec![vec![0.0f32; m]; k];
     for i in 0..k {
         for j in 0..m {
@@ -204,18 +191,17 @@ pub fn compute_set_loss(
                 + (slot_positions[i][2] - hidden_targets[j][2]).abs();
             let feat_cost = (slot_features[i][0] - hidden_targets[j][3]).abs()
                 + (slot_features[i][1] - hidden_targets[j][4]).abs();
-            let exist_cost = -slot_raw[i][0]; // encourage matching active slots
+            let exist_cost = -slot_raw[i][0];
+
 
             cost_matrix[i][j] = pos_cost * 2.0 + feat_cost * 0.5 + exist_cost;
         }
     }
 
-    // 3. Match slots to ground truth targets
     let matches = hungarian_match(&cost_matrix);
     let matched_slot_indices: std::collections::HashSet<usize> =
         matches.iter().map(|(s, _)| *s).collect();
 
-    // 4. Compute matched losses
     let mut existence_loss = 0.0f32;
     let mut position_loss = 0.0f32;
     let mut position_nll = 0.0f32;
@@ -224,7 +210,6 @@ pub fn compute_set_loss(
 
     for &(slot_idx, tgt_idx) in &matches {
         let logit = slot_raw[slot_idx][0];
-        // BCE with label 1.0: -ln(sigmoid(logit)) = ln(1 + exp(-logit))
         existence_loss += (1.0 + (-logit).exp()).ln();
 
         let pred_pos = slot_positions[slot_idx];
@@ -244,7 +229,6 @@ pub fn compute_set_loss(
             + (slot_features[slot_idx][1] - hidden_targets[tgt_idx][4]).abs();
         feature_loss += f_diff;
 
-        // Calibration penalty: variance should roughly track squared residual
         let res2 = (pred_pos[0] - tgt_pos[0]).powi(2)
             + (pred_pos[1] - tgt_pos[1]).powi(2)
             + (pred_pos[2] - tgt_pos[2]).powi(2);
@@ -255,7 +239,6 @@ pub fn compute_set_loss(
         calibration_loss += (mean_var - res2).abs();
     }
 
-    // 5. Unmatched slots get BCE with label 0.0: -ln(1 - sigmoid(logit)) = ln(1 + exp(logit))
     for i in 0..k {
         if !matched_slot_indices.contains(&i) {
             let logit = slot_raw[i][0];
@@ -263,11 +246,9 @@ pub fn compute_set_loss(
         }
     }
 
-    // 6. Cardinality / Count loss (MAE)
     let total_pred_count: f32 = slot_probs.iter().sum();
     let count_loss = (total_pred_count - m as f32).abs();
 
-    // 7. Chamfer distance between active predictions (prob >= 0.5) and targets
     let active_pred_pos: Vec<[f32; 3]> = slot_positions
         .iter()
         .enumerate()
@@ -286,7 +267,6 @@ pub fn compute_set_loss(
         chamfer_distance_3d(&active_pred_pos, &tgt_pos_scaled)
     };
 
-    // Normalize per sample
     let denom = m.max(1) as f32;
     let k_denom = k.max(1) as f32;
 
@@ -342,7 +322,6 @@ mod tests {
         ];
         let matches = hungarian_match(&cost);
         assert_eq!(matches.len(), 2);
-        // Slot 1 -> target 0 (cost 1.0), Slot 0 -> target 1 (cost 2.0)
         assert!(matches.contains(&(1, 0)));
         assert!(matches.contains(&(0, 1)));
     }

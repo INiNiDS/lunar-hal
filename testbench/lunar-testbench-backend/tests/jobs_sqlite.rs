@@ -45,7 +45,6 @@ fn sqlite_schema_initialization_and_crud() {
         timestamp_ms: 1000,
     });
 
-    // Upsert and get
     db.upsert_job(&job, Some("{\"version\":\"1.0\"}"))
         .expect("upsert job");
     let retrieved = db.get_job(&job.id).expect("get job").expect("job exists");
@@ -54,7 +53,6 @@ fn sqlite_schema_initialization_and_crud() {
     assert_eq!(retrieved.last_metrics.len(), 1);
     assert_eq!(retrieved.last_metrics[0].train_loss, 0.05);
 
-    // List
     let list = db.list_jobs().expect("list jobs");
     assert_eq!(list.len(), 1);
     assert_eq!(list[0].id, job.id);
@@ -104,7 +102,6 @@ fn persistence_across_simulated_restart() {
         id
     };
 
-    // Simulate backend restart by creating a new Database connection & registry
     {
         let db = Database::open(&db_path).expect("reopen db");
         let registry = JobRegistry::new(db);
@@ -197,7 +194,6 @@ async fn job_cancellation_terminates_and_updates_sqlite() {
     let job = Job::new(JobKind::Train(spec), "cancellation test".into(), 5);
     let id = registry.spawn(job, command).expect("spawn job");
 
-    // Give it a moment to enter running state
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     registry.cancel(&id).expect("cancel job");
@@ -220,7 +216,6 @@ async fn job_cancellation_terminates_and_updates_sqlite() {
     assert_eq!(completed.status, JobStatus::Cancelled);
     assert!(completed.finished_ms.is_some());
 
-    // Also assert it is recorded as Cancelled directly in the database
     let db_job = registry
         .db()
         .get_job(&id)

@@ -1,37 +1,3 @@
-//! Epoch-watch AI supervisor hook (GNN-kinematics training).
-//!
-//! After each epoch the trainer can consult an OpenCode agent (`opencode run`
-//! subprocess, see <https://opencode.ai/docs/cli/#run-1>) with the epoch
-//! table and log paths. The agent is read-only (see
-//! `.opencode/agents/gnn-watch.md`) and answers with a machine-readable
-//! verdict block:
-//!
-//! ```text
-//! VERDICT: CONTINUE
-//! ```
-//!
-//! ```text
-//! VERDICT: STOP
-//! REASON: <what is wrong and which file/line proves it>
-//! ```
-//!
-//! Tool mapping back to the requested interface:
-//! * `read_file` — the agent's native read/glob/grep tools (allowed).
-//! * `continue` — the agent finishing its turn with `VERDICT: CONTINUE`;
-//!   the trainer blocks on the subprocess, so the next epoch cannot start
-//!   before the agent is done.
-//! * `stop` — `VERDICT: STOP` halts the whole run after a checkpoint save.
-//!   Repairs go through a separate fixer invocation
-//!   (`lnaicli agent-fix`, full tools), then `lnaicli train` restarts
-//!   from scratch via `start` semantics (no `--resume`).
-//! * `opencode_agent` — nested agent calls happen supervisor-side
-//!   (`lnaicli agent-fix`); the watcher itself has `task` denied so it
-//!   can never recurse.
-//!
-//! Failure policy is fail-open: an agent timeout, a missing binary, or a
-//! missing verdict logs loudly and training CONTINUES. Only an explicit
-//! `VERDICT: STOP` halts. A crashed supervisor must never kill a healthy
-//! 10-hour run.
 
 use serde::{Deserialize, Serialize};
 use std::io::Read;
@@ -39,39 +5,21 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-/// Model used first for epoch-watch calls (OpenRouter, user key).
 pub const DEFAULT_AGENT_MODEL: &str = "openrouter/meta/muse-spark-1.3-contributor";
-/// Fallback when the primary model call fails (Zen, free).
 pub const DEFAULT_AGENT_FALLBACK_MODEL: &str = "opencode/muse-spark-1.3-contributor-free";
-/// Agent defined in `.opencode/agents/gnn-watch.md` (repo root).
 pub const DEFAULT_AGENT_NAME: &str = "gnn-watch";
-/// Epoch table rows attached per call: full history burns context for zero
-/// diagnostic gain (early epochs stop mattering), so only the tail travels.
-/// The total count is still reported for scale.
 pub const EPOCH_TABLE_TAIL: usize = 40;
-/// Seconds to wait for one agent call before giving up (fail-open).
 pub const DEFAULT_AGENT_TIMEOUT_SECS: u64 = 300;
-/// Epoch event-log lines attached to each call.
 pub const DEFAULT_AGENT_LOG_LINES: usize = 30;
 
-/// Supervisor hook configuration. `None` in [`crate::spec::TrainingSpec`]
-/// disables the hook entirely (legacy behaviour, zero overhead).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AgentHookConfig {
-    /// Consult the agent every N epochs (1 = after every epoch).
     pub every: u64,
-    /// Primary model id (`provider/model`).
     pub model: String,
-    /// Fallback model id on primary execution failure.
     pub fallback_model: String,
-    /// Per-call timeout in seconds (fail-open on expiry).
     pub timeout_secs: u64,
-    /// Tail lines of `events.ndjson` attached to the prompt.
     pub log_lines: usize,
-    /// Agent name from `.opencode/agents` (or a built-in).
     pub agent: String,
-    /// When true, print the prompt instead of spawning (zero-cost plumbing
-    /// check); always continues.
     pub dry_run: bool,
 }
 
@@ -89,15 +37,12 @@ impl Default for AgentHookConfig {
     }
 }
 
-/// Machine verdict parsed from the agent's output.
 #[derive(Debug, Clone, PartialEq)]
 pub enum AgentVerdict {
     Continue,
     Stop { reason: String },
 }
 
-/// Parses the LAST `VERDICT:` block. Returns `None` when the agent never
-/// issued one (fail-open → caller continues with a warning).
 pub fn parse_verdict(output: &str) -> Option<AgentVerdict> {
     let mut verdict: Option<AgentVerdict> = None;
     let mut lines = output.lines().peekable();
@@ -134,7 +79,6 @@ pub fn parse_verdict(output: &str) -> Option<AgentVerdict> {
     verdict
 }
 
-/// One row of the epoch table attached to the prompt.
 #[derive(Debug, Clone)]
 pub struct EpochRow {
     pub epoch: u32,
@@ -144,8 +88,6 @@ pub struct EpochRow {
     pub lr: f64,
 }
 
-/// Best-effort host resource snapshot (GPU/VRAM/RAM/load). Never fails:
-/// anything unreadable becomes an `unavailable` marker instead of an error.
 #[derive(Debug, Clone)]
 pub struct ResourceSnapshot {
     pub gpu: String,
@@ -222,8 +164,6 @@ fn load_summary() -> String {
     format!("{} {} {} on {} cores", loads[0], loads[1], loads[2], cores)
 }
 
-/// Builds the per-epoch prompt: epoch table + file pointers. The agent reads
-/// the logs itself; the prompt stays small and stateless (no session reuse).
 pub fn epoch_prompt(
     model_slug: &str,
     output_dir: &Path,
@@ -241,9 +181,6 @@ pub fn epoch_prompt(
             r.epoch, r.train_loss, r.val_loss, r.phys_loss
         ));
     }
-    // Layout is cache-ordered: fully stable run identity first, then the
-    // slowly growing epoch table, then the per-call volatile tail last, so a
-    // caching provider can reuse the prefix across epochs.
     format!(
         "Training run under watch.\n\
          Run identity (stable for the whole run): model={model_slug} \
@@ -263,7 +200,6 @@ pub fn epoch_prompt(
     )
 }
 
-/// Last `n` lines of a text file; missing/unreadable file → placeholder note.
 pub fn tail_file(path: &Path, n: usize) -> String {
     let mut text = String::new();
     match std::fs::File::open(path).and_then(|mut f| f.read_to_string(&mut text)) {
@@ -276,8 +212,6 @@ pub fn tail_file(path: &Path, n: usize) -> String {
     }
 }
 
-/// Runs one `opencode run` call with a hard timeout. Returns stdout on
-/// success; stderr is folded into the error for diagnostics.
 fn run_agent_call(
     opencode_bin: &str,
     agent: &str,
@@ -296,8 +230,6 @@ fn run_agent_call(
             model,
             "--dir",
             &workdir.to_string_lossy(),
-            // Explicit title: otherwise opencode spends a (pricey) extra model
-            // call per session just to name the chat.
             "--title",
             title,
         ])
@@ -352,14 +284,6 @@ fn tail_str(s: &str, max: usize) -> String {
     }
 }
 
-/// Consults the agent when `epoch` is due (`epoch % every == 0`).
-/// Returns the parsed verdict, or `AgentVerdict::Continue` fail-open with a
-/// loud warning when anything goes wrong (timeout, spawn failure, fallback
-/// failure, missing verdict). Only an explicit STOP halts training.
-///
-/// Kill switches (checked every call, no restart needed):
-/// * `<output_dir>/AGENT_OFF` file exists → skip silently-ish (one line).
-/// * `LNAI_AGENT_DISABLE=1` in the environment → skip.
 pub fn maybe_consult_agent(
     cfg: &AgentHookConfig,
     epoch: u64,
@@ -375,9 +299,6 @@ pub fn maybe_consult_agent(
         println!("--- agent watch: AGENT_OFF present in output dir, skipping ---");
         return AgentVerdict::Continue;
     }
-    // Hot model swap, no restart needed: `<output_dir>/AGENT_MODEL` containing
-    // a single `provider/model` line overrides the configured model from the
-    // next epoch on. Delete the file to return to the configured model.
     let model_override = std::fs::read_to_string(output_dir.join("AGENT_MODEL"))
         .ok()
         .map(|s| s.lines().next().unwrap_or_default().trim().to_string())
@@ -436,8 +357,6 @@ pub fn maybe_consult_agent(
     }
 }
 
-/// Absolute workspace root for `--dir` (agent file discovery) — the caller's
-/// current directory at hook time.
 pub fn workspace_dir() -> PathBuf {
     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
@@ -537,8 +456,6 @@ mod tests {
             every: 5,
             ..AgentHookConfig::default()
         };
-        // Epoch 3 is not due: returns Continue without spawning anything.
-        // (Due epochs spawn a real `opencode run` — never in unit tests.)
         assert_eq!(
             maybe_consult_agent(
                 &cfg,
@@ -577,8 +494,6 @@ mod tests {
             every: 1,
             ..AgentHookConfig::default()
         };
-        // No flag file: due epoch would spawn — do NOT call it here.
-        // With the flag file present: skips without spawning.
         std::fs::write(dir.path().join("AGENT_OFF"), "").expect("flag");
         assert_eq!(
             maybe_consult_agent(&cfg, 1, Path::new("/nonexistent"), dir.path(), "p"),

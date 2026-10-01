@@ -6,8 +6,6 @@ use super::dataset::NormParams;
 
 const LOG_T_SUN: f64 = 3.5617974672827754;
 
-/// Huber elementwise penalty: quadratic inside `|err| <= delta`, linear
-/// past the knee (in whatever units `err` carries).
 fn huber_penalty<B: Backend>(err: Tensor<B, 2>, delta: f32) -> Tensor<B, 2> {
     let clipped = err.clone().clamp(-delta, delta);
     let quad = clipped.clone().square().mul_scalar(0.5);
@@ -15,8 +13,6 @@ fn huber_penalty<B: Backend>(err: Tensor<B, 2>, delta: f32) -> Tensor<B, 2> {
     quad + linear
 }
 
-/// Weighted mean of a per-element penalty over `[B, 4]` errors with
-/// per-target weights in PINN target order: `sum(w_i * mean_i) / sum(w)`.
 fn weighted_target_mean<B: Backend>(penalty: Tensor<B, 2>, weights: &[f32; 4]) -> Tensor<B, 1> {
     let w_sum: f32 = weights.iter().sum();
     let w = Tensor::<B, 1>::from_floats(*weights, &penalty.device()).unsqueeze::<2>();
@@ -24,10 +20,6 @@ fn weighted_target_mean<B: Backend>(penalty: Tensor<B, 2>, weights: &[f32; 4]) -
     (per_target * w).sum().div_scalar(w_sum.max(f32::EPSILON))
 }
 
-/// Stefan–Boltzmann residual in dex, **normalized** by the luminosity
-/// target scale so the physics term is O(1) like the normalized data
-/// loss (Stage 6: previously raw dex², incomparable with data loss and
-/// implicitly re-scaling `physics_weight` per dataset).
 fn normalized_sb_residual<B: Backend>(
     predictions: Tensor<B, 2>,
     norm: &NormParams,
@@ -62,8 +54,6 @@ pub fn compute_pinn_loss<B: Backend>(
     target_weights: &[f32; 4],
 ) -> Tensor<B, 1> {
     let err = predictions.clone() - targets;
-    // Legacy fast path: plain MSE keeps bit-identical numerics for every
-    // pre-Stage-6 spec (uniform weights + MSE).
     let data_loss = if loss_kind == PinnLossKind::Mse && *target_weights == [1.0, 1.0, 1.0, 1.0] {
         err.square().mean()
     } else {
@@ -152,7 +142,6 @@ mod tests {
     fn huber_matches_half_mse_for_small_errors_and_linear_for_large() {
         let device = Default::default();
         let norm = unit_norm();
-        // All errors 0.1 << delta 10: Huber == 0.5 * MSE.
         let pred: Tensor<TestBackend, 2> = Tensor::from_floats([[0.1, -0.1, 0.1, -0.1]], &device);
         let truth: Tensor<TestBackend, 2> = Tensor::from_floats([[0.0, 0.0, 0.0, 0.0]], &device);
         let huber = scalar(compute_pinn_loss(
@@ -166,7 +155,6 @@ mod tests {
         ));
         let mse = scalar(compute_data_loss(pred, truth));
         assert!((huber - 0.5 * mse).abs() < 1e-6, "{huber} vs {mse}");
-        // Single error 4.0 >> delta 1.0: penalty == 1*(4 - 0.5) == 3.5.
         let pred: Tensor<TestBackend, 2> = Tensor::from_floats([[4.0, 0.0, 0.0, 0.0]], &device);
         let truth: Tensor<TestBackend, 2> = Tensor::from_floats([[0.0, 0.0, 0.0, 0.0]], &device);
         let huber = scalar(compute_pinn_loss(
@@ -187,7 +175,6 @@ mod tests {
         let norm = unit_norm();
         let pred: Tensor<TestBackend, 2> = Tensor::from_floats([[2.0, 0.0, 0.0, 0.0]], &device);
         let truth: Tensor<TestBackend, 2> = Tensor::from_floats([[0.0, 0.0, 0.0, 0.0]], &device);
-        // Only teff weighted: mean over batch of 2^2.
         let weighted = scalar(compute_pinn_loss(
             pred.clone(),
             truth.clone(),
@@ -198,7 +185,6 @@ mod tests {
             &[1.0, 0.0, 0.0, 0.0],
         ));
         assert!((weighted - 4.0).abs() < 1e-6, "got {weighted}");
-        // Uniform explicit weights == plain MSE up to fp summation order.
         let uniform = scalar(compute_pinn_loss(
             pred,
             truth,
@@ -215,17 +201,12 @@ mod tests {
     fn physics_residual_is_zero_for_consistent_rows_and_scaled_by_lum_std() {
         let device = Default::default();
         let norm = unit_norm();
-        // SB-consistent in denormalized space: lum = 2*rad + 4*(teff - T_sun).
         let teff = LOG_T_SUN as f32;
         let pred: Tensor<TestBackend, 2> = Tensor::from_floats([[teff, 0.5, 0.0, 1.0]], &device);
         let phys = scalar(compute_physics_loss(pred, &norm));
         assert!(phys.abs() < 1e-6, "got {phys}");
-        // Scale behaviour: the same physical row under a different norm
-        // yields the same physical residual, divided by that norm's lum
-        // scale — loss scales with 1/std².
         let teff_p = 3.7f32;
         let rad_p = 0.5f32;
-        // SB-consistent luminosity, plus a +1 dex violation.
         let lum_p = 2.0 * rad_p + 4.0 * (teff_p - LOG_T_SUN as f32) + 1.0;
         let unit = unit_norm();
         let row_unit: Tensor<TestBackend, 2> =

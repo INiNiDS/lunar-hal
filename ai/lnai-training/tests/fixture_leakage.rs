@@ -1,4 +1,3 @@
-//! Stage 3, tasks 1-2: frozen fixture integrity and train/eval leakage proof.
 
 use lnai_training::e2e::{FixtureManifestV1, SpatialTile, assert_no_leakage, fixture_dir};
 use polars::prelude::*;
@@ -47,7 +46,6 @@ fn parquet_source_ids_and_tiles_match_manifest() {
     let ra = df.column("ra_deg").unwrap().f64().unwrap();
     let dec = df.column("dec_deg").unwrap().f64().unwrap();
 
-    // Every row must land in exactly one declared tile.
     for i in 0..ids.len() {
         let matches: Vec<&SpatialTile> = manifest
             .spatial_tiles
@@ -66,9 +64,6 @@ fn parquet_source_ids_and_tiles_match_manifest() {
 fn leakage_guard_flags_train_tiles_inside_fixture_coverage() {
     let fixture = load_fixture();
 
-    // stellar-e2e-v1 intentionally spans the full sphere, so any real
-    // training catalog MUST declare disjoint tiles; the guard has to flag a
-    // naive train manifest that reuses fixture sky regions.
     let train = FixtureManifestV1 {
         version: "1.0.0".into(),
         schema_hash: fixture.schema_hash.clone(),

@@ -1,14 +1,3 @@
-//! Stage 7, item 1: Separate profiling breakdown.
-//!
-//! Profiles:
-//! 1. Data wait / input preparation
-//! 2. Host -> Device transfer
-//! 3. Model compute
-//! 4. Graph build (k-NN / spatial index)
-//! 5. Device -> Host transfer
-//! 6. Allocations / memory sizes
-//!
-//! Reports p50, p95, p99 latencies and asserts performance budgets.
 
 use burn::backend::NdArray;
 use burn::prelude::*;
@@ -52,7 +41,6 @@ fn profile_breakdown_stages_separately() {
     let mut d2h_times = Vec::with_capacity(PROFILING_RUNS);
 
     for run_idx in 0..PROFILING_RUNS {
-        // 1. Data wait / row extraction
         let t0 = Instant::now();
         let mut raw_inputs = Vec::with_capacity(N_STARS * 5);
         let mut coords = Vec::with_capacity(N_STARS);
@@ -66,23 +54,19 @@ fn profile_breakdown_stages_separately() {
         }
         data_wait_times.push(t0.elapsed().as_secs_f64() * 1000.0);
 
-        // 2. Host -> Device transfer
         let t1 = Instant::now();
         let pinn_tensor =
             Tensor::<B, 2>::from_data(TensorData::new(raw_inputs, [N_STARS, 5]), &device);
         h2d_times.push(t1.elapsed().as_secs_f64() * 1000.0);
 
-        // 3. Model compute (PINN)
         let t2 = Instant::now();
         let pinn_out = pinn.forward(pinn_tensor);
         pinn_compute_times.push(t2.elapsed().as_secs_f64() * 1000.0);
 
-        // 4. Graph build (CSR sparse k-NN)
         let t3 = Instant::now();
         let graph = compute_sparse_knn_graph(&coords, 8);
         graph_build_times.push(t3.elapsed().as_secs_f64() * 1000.0);
 
-        // 5. Model compute (GNN sparse)
         let gnn_nodes = Tensor::<B, 2>::random(
             [N_STARS, GNN_INPUT_DIM],
             burn::tensor::Distribution::Default,
@@ -92,7 +76,6 @@ fn profile_breakdown_stages_separately() {
         let gnn_out = gnn.forward_sparse(gnn_nodes, &graph);
         gnn_compute_times.push(t4.elapsed().as_secs_f64() * 1000.0);
 
-        // 6. Device -> Host transfer
         let t5 = Instant::now();
         let _pinn_cpu: Vec<f32> = pinn_out.into_data().to_vec().unwrap();
         let _gnn_cpu: Vec<f32> = gnn_out.into_data().to_vec().unwrap();
@@ -125,7 +108,6 @@ fn profile_breakdown_stages_separately() {
     let p95_gnn = analyze_stage("gnn_compute", gnn_compute_times, &mut report);
     let p95_d2h = analyze_stage("device_to_host", d2h_times, &mut report);
 
-    // Total p95 budget gates (calibrated for debug vs release)
     let factor = if cfg!(debug_assertions) { 10.0 } else { 1.0 };
     assert!(p95_dw < 50.0 * factor, "data_wait p95 exceeds budget");
     assert!(p95_h2d < 50.0 * factor, "host_to_device p95 exceeds budget");

@@ -109,9 +109,6 @@ pub fn pinn_infer(
         .unwrap_or([0.0, 0.0, 0.0, 0.0])
 }
 
-/// Stage 6: per-star batched PINN inference — one forward pass for the
-/// whole sector instead of one call per star (or one call for the center
-/// with random replication for the rest).
 pub fn pinn_infer_batch(
     model: &StellarMlp<B>,
     device: &Device<B>,

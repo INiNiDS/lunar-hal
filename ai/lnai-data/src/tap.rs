@@ -1,10 +1,3 @@
-//! Production [`ShardFetcher`] backed by synchronous TAP-over-HTTP
-//! (ESA Gaia archive). Works anonymously; if basic-auth credentials are
-//! supplied by the caller they are sent once per request header and never
-//! logged or persisted here.
-//!
-//! Row accounting streams the body straight to disk (no full-body buffering),
-//! which keeps memory flat for very large shards.
 
 use crate::collector::{FetchError, ShardFetcher};
 use std::io::Write;
@@ -16,7 +9,6 @@ pub const DEFAULT_GAIA_TAP_SYNC_URL: &str = "https://gea.esac.esa.int/tap-server
 #[derive(Debug, Clone)]
 pub struct TapFetcher {
     sync_url: String,
-    /// Caller-supplied basic-auth tuple; kept opaque and never printed.
     credentials: Option<(String, String)>,
     request_timeout_secs: u64,
 }
@@ -31,8 +23,6 @@ impl TapFetcher {
     }
 
     pub fn with_credentials(mut self, user: Option<String>, password: Option<String>) -> Self {
-        // Both halves required for meaningful basic auth; partial config is
-        // treated as anonymous rather than half-configured.
         match (
             user.filter(|u| !u.trim().is_empty()),
             password.filter(|p| !p.is_empty()),
@@ -55,7 +45,6 @@ impl TapFetcher {
             ("QUERY", query),
         ]);
         if let Some((user, pass)) = &self.credentials {
-            // NOTE: intentionally not logging any credential material.
             req = req.basic_auth(user.clone(), Some(pass.clone()));
         }
         Ok(req)
@@ -79,7 +68,6 @@ impl ShardFetcher for TapFetcher {
         if !status.is_success() {
             let code = status.as_u16();
             return Err(match code {
-                // Gateway-ish transient statuses are retriable by callers.
                 502 | 503 | 504 => FetchError::Http(format!("server busy: HTTP {code}")),
                 _ => FetchError::Protocol(format!("TAP returned HTTP {code}")),
             });
@@ -102,8 +90,6 @@ impl ShardFetcher for TapFetcher {
         let mut reader = response;
         {
             use std::io::Read;
-            // Use a line-oriented protocol on top of the streaming body:
-            // first non-empty CSV line is the header, then count data lines.
             loop {
                 let n = match reader.read(&mut buffer) {
                     Ok(n) => n,
@@ -115,10 +101,6 @@ impl ShardFetcher for TapFetcher {
                 writer
                     .write_all(&buffer[..n])
                     .map_err(|e| FetchError::Protocol(format!("disk write: {e}")))?;
-                // Count newlines: every data row contains exactly one '\n'
-                // after its header line; final row may lack trailing newline
-                // which slightly undercounts -- acceptable because row-limit
-                // detection uses a TOP budge of N+1 anyway.
                 for &b in &buffer[..n] {
                     if b == b'\n' {
                         if !saw_header {
@@ -136,8 +118,6 @@ impl ShardFetcher for TapFetcher {
         drop(writer);
         let _ = content_type;
 
-        // An empty payload (no header) means the archive answered something
-        // that is not CSV at all -- treat it as a protocol failure.
         if !saw_header && rows == 0 {
             return Err(FetchError::Protocol("empty TAP response".into()));
         }

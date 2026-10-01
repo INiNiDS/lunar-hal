@@ -1,11 +1,3 @@
-//! Stage 7: implementation-parity baseline, not a trained-model approval.
-//!
-//! Pins `ai/fixtures/stage7-approved-baseline.json`:
-//! 1. Verifies the optimization baseline record parses and covers all Stage 7 suites.
-//! 2. Verifies Fourier frequency caching parity.
-//! 3. Verifies GNN sparse edge representation and `GraphCache` hit properties.
-//! 4. Verifies SIREN chunked inference numerical parity.
-//! 5. Ensures this report is not mistaken for trained-checkpoint accuracy or performance evidence.
 
 use burn::backend::NdArray;
 use burn::prelude::*;
@@ -112,7 +104,6 @@ fn gnn_sparse_parity_and_cache_gate() {
         })
         .collect();
 
-    // Verify GraphCache returns cached instance
     let g1 = GraphCache::get_or_build(&coords, 4);
     let g2 = GraphCache::get_or_build(&coords, 4);
     assert!(

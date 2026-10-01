@@ -64,9 +64,6 @@ impl<B: Backend> StellarSiren<B> {
         burn::tensor::activation::sigmoid(self.output.forward(h))
     }
 
-    /// Stage 7: chunked texture inference.
-    /// Evaluates `xs` in bounded row chunks of size `chunk_size` to limit peak VRAM/RAM
-    /// consumption during high-resolution texture generation (e.g. 256x256 or 512x512).
     pub fn forward_chunked(&self, xs: Tensor<B, 2>, chunk_size: usize) -> Tensor<B, 2> {
         let [total_rows, _] = xs.dims();
         if total_rows <= chunk_size || chunk_size == 0 {

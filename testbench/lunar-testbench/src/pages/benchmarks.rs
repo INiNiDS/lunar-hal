@@ -132,7 +132,6 @@ fn BenchmarksBody(
         spawn(async move {
             match api::start_benchmark(&req).await {
                 Ok(job) => {
-                    // Create an initial report entry or wait for completion
                     let report_payload = serde_json::json!({
                         "iterations": req.iterations,
                         "batch_size": req.batch_size,
@@ -156,7 +155,6 @@ fn BenchmarksBody(
                         },
                     });
 
-                    // Save report via API
                     let _ = api::create_report(&serde_json::json!({
                         "job_id": job.id,
                         "kind": "benchmark",

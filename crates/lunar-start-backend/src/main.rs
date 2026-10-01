@@ -26,9 +26,7 @@ struct ServiceInfo {
     name: String,
     status: ServiceStatus,
     pid: Option<u32>,
-    /// Effective frontend target when this is the managed frontend service.
     platform: Option<String>,
-    /// Reachable only for a running web frontend; native targets have no URL.
     public_url: Option<String>,
 }
 
@@ -327,7 +325,6 @@ async fn post_stop_service(
     service_action_response(&state, &name).await
 }
 
-// Compatibility wrappers for the old GET control API.
 async fn legacy_start_service(
     state: SharedState,
     Path(name): Path<String>,
@@ -684,7 +681,6 @@ HTTPServer(('127.0.0.1', p), H).serve_forever()
         assert_eq!(started["service"]["status"]["kind"], "running");
         assert!(started["config"]["effective"].is_object());
 
-        // Invalid replacement config must not stop the current process.
         let mut invalid = state.manager.config_state("backend").await.unwrap().saved;
         invalid.env.insert("LUNAR_BACKEND_PORT".into(), "0".into());
         let invalid_restart = app
@@ -712,7 +708,6 @@ HTTPServer(('127.0.0.1', p), H).serve_forever()
                     && matches!(service.status, ServiceStatus::Running))
         );
 
-        // A valid replacement is applied before the service is started again.
         let mut replacement = state.manager.config_state("backend").await.unwrap().saved;
         replacement
             .env

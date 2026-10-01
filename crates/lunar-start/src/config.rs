@@ -2,39 +2,28 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::service_settings::ServiceConfigValues;
-// ── ServiceKind ─────────────────────────────────────────────────────────────────
 
 #[derive(Clone, Debug)]
 pub enum ServiceKind {
-    /// Launch a precompiled binary from `target/release/<bin_name>`.
     Binary { bin_name: String },
-    /// Launch via `dx serve` (Dioxus dev-server).
     DxServe {
         crate_name: String,
         crate_subdir: String,
         default_port: String,
     },
-    /// Launch via `cargo run` (or `cargo watch` if watch mode is enabled).
     CargoRun {
         bin_name: String,
         cargo_args: Vec<String>,
     },
 }
 
-// ── ServiceConfig ────────────────────────────────────────────────────────────
 
-/// Configuration for an individual service.
 #[derive(Clone, Debug)]
 pub struct ServiceConfig {
-    /// Display name of the service (e.g., backend, frontend, testbench).
     pub name: String,
-    /// Execution method/kind for the service.
     pub kind: ServiceKind,
-    /// Environment variables scoped specifically to this service process.
     pub env: HashMap<String, String>,
-    /// Additional command-line arguments for the service binary at runtime.
     pub extra_args: Vec<String>,
-    /// Arguments passed to `cargo build` (e.g., `--features cuda`).
     pub build_args: Vec<String>,
 }
 
@@ -69,15 +58,12 @@ impl ServiceConfig {
         self
     }
 
-    /// Replaces this service's runtime/build values with a complete structured snapshot.
     pub fn apply_values(&mut self, values: ServiceConfigValues) {
         self.env = values.env;
         self.extra_args = values.extra_args;
         self.build_args = values.build_args;
     }
 
-    /// Resolves final effective environment variables by merging global launcher environment
-    /// with service-specific environment variables (service overrides global).
     pub fn effective_env(&self, launcher_env: &HashMap<String, String>) -> HashMap<String, String> {
         let mut merged = launcher_env.clone();
         merged.extend(self.env.clone());
@@ -85,26 +71,16 @@ impl ServiceConfig {
     }
 }
 
-// ── LauncherConfig ────────────────────────────────────────────────────────────────
 
-/// Global launcher configuration managing workspace services and build options.
 #[derive(Clone, Debug)]
 pub struct LauncherConfig {
-    /// Workspace root directory.
     pub workspace: PathBuf,
-    /// List of configured services to manage.
     pub services: Vec<ServiceConfig>,
-    /// Enable watch mode for automatic hot-reloading.
     pub watch: bool,
-    /// Build release binaries before starting services.
     pub build_release: bool,
-    /// Global arguments passed to all managed services.
     pub global_args: Vec<String>,
-    /// Environment variables shared globally across all services (e.g., `RUST_LOG`).
     pub env: HashMap<String, String>,
-    /// Run in headless mode (without GUI/interactive UI).
     pub headless: bool,
-    /// Maximum log capacity retained in memory.
     pub max_logs: usize,
 }
 
@@ -174,7 +150,6 @@ impl LauncherConfig {
     }
 }
 
-/// Resolves the absolute path to the workspace root directory.
 pub fn workspace_root() -> PathBuf {
     if let Ok(exe) = std::env::current_exe() {
         let mut cur = exe.parent();
@@ -192,9 +167,7 @@ pub fn workspace_root() -> PathBuf {
     cwd
 }
 
-// ── Presets ─────────────────────────────────────────────────────────────────────────
 
-/// Presets for commonly used configurations (backend, frontend, testbench, etc.).
 pub mod presets {
     use super::*;
     use crate::service_settings::{BackendSettings, FrontendSettings, TestbenchBackendSettings};
@@ -268,9 +241,6 @@ pub mod presets {
                 .with_service(ServiceConfig::testbench())
         }
 
-        /// Full WebOS preset: services the already-running `lunar-testbench`
-        /// WebOS shell can control. The shell itself is intentionally excluded
-        /// so it cannot start, stop, or restart its own hosting process.
         pub fn for_webos() -> Self {
             Self::new(workspace_root())
                 .with_service(ServiceConfig::backend())

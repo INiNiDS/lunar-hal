@@ -31,8 +31,6 @@ fn visible_chunks_returns_empty_for_zero_viewport() {
 
 #[test]
 fn visible_chunks_centers_around_camera() {
-    // Camera at origin looking at scene (0,0); zoom 1.0; viewport 4000x4000.
-    // We should see one chunk (the one at the origin).
     let chunks = visible_chunks((0.0, 0.0), 1.0, (4000.0, 4000.0), (0.0, 0.0));
     assert!(!chunks.is_empty());
     assert!(chunks.contains(&(0, 0)));
@@ -40,10 +38,6 @@ fn visible_chunks_centers_around_camera() {
 
 #[test]
 fn visible_chunks_excludes_chunks_inside_inner_radius() {
-    // StarScene center at (0,0). Chunks within INNER_EXCLUSION_PC of the
-    // center are skipped by `sectors_to_fetch`. The chunk at (0,0)
-    // has its center at CHUNK_SIZE_PC/2 = 200, which is <
-    // INNER_EXCLUSION_PC = 450, so it is excluded.
     let center_x = 0.5 * CHUNK_SIZE_PC;
     let center_y = 0.5 * CHUNK_SIZE_PC;
     assert!(center_x < INNER_EXCLUSION_PC);
@@ -96,9 +90,6 @@ fn sectors_to_fetch_skips_cached_and_loading() {
     };
 
     let to_fetch = sectors_to_fetch(request, &cache, &loading);
-    // We can't assert specific chunk coordinates because of the
-    // inner-exclusion filter, but the cached/loading chunks must be
-    // absent.
     assert!(!to_fetch.iter().any(|(c, _)| *c == (10, 10)));
     assert!(!to_fetch.iter().any(|(c, _)| *c == (20, 20)));
 }
@@ -161,7 +152,6 @@ fn evict_excess_cache_keeps_only_closest_chunks() {
     let cam_pos = chunk_center((0, 0));
     evict_excess_cache(&mut cache, cam_pos);
     assert_eq!(cache.len(), MAX_CACHED_CHUNKS);
-    // The farthest chunks must have been removed.
     assert!(!cache.contains_key(&((MAX_CACHED_CHUNKS as i32) + 5, 0)));
 }
 
@@ -216,8 +206,6 @@ fn scene_camera_zoom_around_center_preserves_scene_point() {
     let new_camera = camera.zoom_around_center((1000.0, 1000.0), 2.0);
     assert!((new_camera.zoom - 2.0).abs() < 1e-6);
 
-    // The scene point that was under the viewport center before the
-    // zoom must still be under the center afterward.
     let viewport_center = (500.0_f32, 500.0_f32);
     let before_x = (viewport_center.0 - camera.offset.0) / (camera.zoom * PX_PER_PC);
     let before_y = (viewport_center.1 - camera.offset.1) / (camera.zoom * PX_PER_PC);

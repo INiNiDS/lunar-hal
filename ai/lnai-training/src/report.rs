@@ -1,15 +1,8 @@
-//! Unified AI report schema v1 (Stage 3).
-//!
-//! Every correctness/performance run emits a single JSON document carrying
-//! dataset/artifact/device/seed/commit identity so reports from different
-//! runners are comparable and can later feed a regression budget.
 
 use serde::{Deserialize, Serialize};
 
-/// Version of the report structure itself.
 pub const REPORT_SCHEMA_VERSION: &str = "1.0.0";
 
-/// What kind of run produced the report.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ReportKind {
@@ -18,24 +11,16 @@ pub enum ReportKind {
     E2E,
 }
 
-/// Identity of the run: everything needed to attribute metrics.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct RunIdentity {
-    /// Hash of the dataset manifest used (empty for pure synthetic suites).
     pub dataset_manifest_hash: String,
-    /// Hash of the model artifact under evaluation, if any.
     pub artifact_hash: Option<String>,
-    /// Device identifier, e.g. "cpu", "cuda:0", "wgpu:0".
     pub device: String,
-    /// Global seed for reproducibility.
     pub seed: u64,
-    /// Short git revision of the codebase producing this report.
     pub git_revision: Option<String>,
-    /// Report creation timestamp (ms since UNIX_EPOCH).
     pub created_ms: u64,
 }
 
-/// A single named metric value.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Metric {
     pub name: String,
@@ -51,20 +36,15 @@ impl Metric {
     }
 }
 
-/// Statistics over repeated baseline runs, used to estimate natural noise
-/// before any regression budget is frozen.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct BaselineStats {
-    /// Wall-clock durations of each run, in milliseconds.
     pub runs_ms: Vec<f64>,
     pub mean_ms: f64,
     pub stddev_ms: f64,
-    /// `stddev / mean * 100`, the natural noise estimate in percent.
     pub rel_spread_pct: f64,
 }
 
 impl BaselineStats {
-    /// Computes stats from raw durations. Returns `None` for an empty input.
     pub fn from_runs(runs_ms: Vec<f64>) -> Option<Self> {
         if runs_ms.is_empty() {
             return None;
@@ -86,23 +66,18 @@ impl BaselineStats {
         })
     }
 
-    /// Heuristic verdict used by report-only baselines before a budget exists:
-    /// spread within 25% is treated as stable enough for future budgets.
     pub fn is_stable_enough(&self) -> bool {
         self.rel_spread_pct < 25.0
     }
 }
 
-/// Top-level report document.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct ReportV1 {
     pub version: String,
     pub kind: ReportKind,
-    /// Suite name, e.g. "pinn_accuracy", "baseline_cpu".
     pub suite: String,
     pub identity: RunIdentity,
     pub metrics: Vec<Metric>,
-    /// Report-only flag: false means "gate not yet decided", true/false set by suites.
     pub passed: bool,
     pub notes: Vec<String>,
 }
@@ -130,7 +105,6 @@ impl ReportV1 {
         self
     }
 
-    /// Looks up a metric by name.
     pub fn metric(&self, name: &str) -> Option<f64> {
         self.metrics
             .iter()
@@ -138,12 +112,10 @@ impl ReportV1 {
             .map(|m| m.value)
     }
 
-    /// Serializes to pretty JSON for on-disk artifacts.
     pub fn to_json_string(&self) -> serde_json::Result<String> {
         serde_json::to_string_pretty(self)
     }
 
-    /// Writes the report into `dir/<suite>.json`, creating the directory.
     pub fn write_to_dir(&self, dir: &std::path::Path) -> std::io::Result<std::path::PathBuf> {
         std::fs::create_dir_all(dir)?;
         let path = dir.join(format!("{}.json", self.suite));
@@ -151,12 +123,10 @@ impl ReportV1 {
         Ok(path)
     }
 
-    /// Default report directory: `target/ai-reports` relative to the workspace.
     pub fn default_dir() -> std::path::PathBuf {
         std::path::PathBuf::from("target/ai-reports")
     }
 
-    /// Report directory override via `LUNAR_AI_REPORT_DIR`.
     pub fn configured_dir() -> std::path::PathBuf {
         match std::env::var("LUNAR_AI_REPORT_DIR") {
             Ok(dir) if !dir.is_empty() => std::path::PathBuf::from(dir),
@@ -165,10 +135,6 @@ impl ReportV1 {
     }
 }
 
-/// Builds [`RunIdentity`] from environment with conservative defaults.
-///
-/// Recognized variables: `LUNAR_AI_GIT_REV`, `LUNAR_AI_DEVICE`,
-/// `LUNAR_AI_DATASET_MANIFEST_HASH`, `LUNAR_AI_ARTIFACT_HASH`, `LUNAR_AI_SEED`.
 pub fn identity_from_env(default_suite_seed: u64) -> RunIdentity {
     let var = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
     RunIdentity {

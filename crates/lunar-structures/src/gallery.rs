@@ -1,8 +1,3 @@
-//! Durable star records used by the SIREN Gallery.
-//!
-//! The Gallery deliberately stores metadata separately from binary texture
-//! assets. `GalleryStore` owns the on-disk layout; these types are the stable
-//! API contract shared by the backend, frontend, and WebOS.
 
 use crate::{PinnResponse, ResponseStar, StellarMetadata};
 use serde::{Deserialize, Serialize};
@@ -50,7 +45,6 @@ pub struct GalleryStar {
     pub created_at: u64,
     pub updated_at: u64,
     pub source: GallerySource,
-    /// Full technical star record. Pixels are intentionally not embedded here.
     pub star: ResponseStar,
     pub inputs: StarModelInputs,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -67,7 +61,6 @@ pub struct GalleryStar {
     pub tags: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notes: Option<String>,
-    /// Persisted only to make repeated POST/drop requests idempotent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_id: Option<String>,
 }
@@ -112,8 +105,6 @@ pub struct GalleryListResponse {
     pub next_cursor: Option<String>,
 }
 
-/// Transport payload shared by Gallery cards and a live scene. It contains an
-/// identifier and a serializable star snapshot, never a mutation command.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct StarDragPayload {
     pub source: StarDragSource,

@@ -5,7 +5,6 @@ use lunar_utils::env::{
 };
 use serde::{Deserialize, Serialize};
 
-/// Supported schema field input types for UI rendering and validation.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum FieldType {
@@ -17,7 +16,6 @@ pub enum FieldType {
     StringList,
 }
 
-/// Metadata and validation rules for an individual configuration field.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct ServiceConfigField {
     pub key: String,
@@ -25,7 +23,6 @@ pub struct ServiceConfigField {
     pub description: Option<String>,
     pub field_type: FieldType,
     pub default_value: String,
-    /// Build parameters are applied while compiling; other editable fields are runtime values.
     pub is_build_param: bool,
     pub required: bool,
     pub min: Option<f64>,
@@ -34,14 +31,12 @@ pub struct ServiceConfigField {
     pub read_only: bool,
 }
 
-/// Complete schema defining configuration options available for a service.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct ServiceConfigSchema {
     pub service: String,
     pub fields: Vec<ServiceConfigField>,
 }
 
-/// Values that can be applied to a service process/build.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
 pub struct ServiceConfigValues {
     pub env: HashMap<String, String>,
@@ -100,14 +95,11 @@ fn optional_env(env: &mut HashMap<String, String>, key: &str, value: &Option<Str
     }
 }
 
-/// Typed settings for `lunar-backend`.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct BackendSettings {
     pub host: String,
     pub port: u16,
-    /// `None` lets lunar-utils resolve the platform data directory.
     pub models_dir: Option<String>,
-    /// `None` lets lunar-utils resolve the platform data directory.
     pub scenes_dir: Option<String>,
     pub env_mode: Option<String>,
     pub compute_backend: ComputeBackend,
@@ -251,7 +243,6 @@ impl BackendSettings {
         env.insert("LUNAR_ALLOW_UNAPPROVED_MODELS".to_string(), "1".to_string());
 
         let mut build_args = Vec::new();
-        // lunar-backend defaults to `wgpu,siren`; emit feature flags only when that changes.
         if self.compute_backend != ComputeBackend::Wgpu || !self.siren {
             let mut features = vec![self.compute_backend.feature_name()];
             if self.siren {
@@ -273,10 +264,8 @@ impl BackendSettings {
     }
 }
 
-/// Typed settings for `lunar-testbench-backend`.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct TestbenchBackendSettings {
-    /// The process currently binds to this fixed address; expose it read-only until the binary supports it.
     pub bind_host: String,
     pub port: u16,
     pub client_host: String,
@@ -395,7 +384,6 @@ impl TestbenchBackendSettings {
     }
 }
 
-/// The single supported launch target for the managed frontend service.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum FrontendPlatform {
@@ -430,7 +418,6 @@ impl FrontendPlatform {
             Self::Web | Self::Desktop => {
                 format!("http://{DEFAULT_BACKEND_HOST}:{DEFAULT_BACKEND_PORT}")
             }
-            // Android emulators resolve host-loopback through this address.
             Self::Android => format!("http://10.0.2.2:{DEFAULT_BACKEND_PORT}"),
         }
     }
@@ -438,8 +425,6 @@ impl FrontendPlatform {
 
 pub const DEFAULT_FRONTEND_PORT: u16 = 8080;
 
-/// Structured frontend launch data. It is the only code path that translates
-/// configured platform, port, and custom arguments into `dx serve` arguments.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FrontendLaunchConfig {
     pub platform: FrontendPlatform,
@@ -573,17 +558,13 @@ impl FrontendLaunchConfig {
     }
 }
 
-/// Typed settings for the single `lunar-frontend` service.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct FrontendSettings {
     pub dx_bin: String,
     pub platform: FrontendPlatform,
     pub port: u16,
-    /// Externally routable address (possibly through a reverse proxy), not the listener address.
     #[serde(default)]
     pub public_url: Option<String>,
-    /// An explicit host URL is required for a physical Android device; the
-    /// Android emulator default is supplied by `FrontendPlatform`.
     pub backend_url: Option<String>,
     pub env_mode: Option<String>,
     pub extra_args: Vec<String>,

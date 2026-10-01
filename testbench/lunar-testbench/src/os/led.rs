@@ -2,11 +2,6 @@ use dioxus::prelude::*;
 
 use crate::api::ServiceStatus;
 
-/// Small glowing status indicator used in the service rack.
-///
-/// The `.led` component class paints a solid core from `currentColor` plus a
-/// blurred halo pseudo-element, so the colour is chosen purely with a Tailwind
-/// text colour here.
 #[component]
 pub fn Led(status: Option<ServiceStatus>) -> Element {
     let (class, label) = match &status {

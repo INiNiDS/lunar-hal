@@ -217,10 +217,6 @@ async fn random_star(
         lore.as_deref(),
     );
 
-    // Stage 6.6: single-node GNN is excluded from production — one star
-    // has no neighbors, so there is no valid group to run the model on.
-    // Zero velocity is the explicit fallback (same as missing-GNN),
-    // never a self-loop forward.
     let vel = [0.0, 0.0, 0.0];
 
     let star = ResponseStar {

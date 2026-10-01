@@ -1,39 +1,18 @@
-//! Minimal S3-compatible object storage client (blocking).
-//!
-//! Works against ANY S3-compatible endpoint: local MinIO (`install/data-minio.compose.yml`),
-//! DigitalOcean Spaces, AWS S3, Cloudflare R2 and so on. Only `sha2` plus the
-//! workspace-standard blocking `reqwest` are used; AWS Signature V4 is
-//! implemented locally to avoid a heavy dependency tree.
-//!
-//! Credentials may be empty (`S3Config::anonymous_config`): reads then hit the
-//! bucket unauthenticated (works for public download policies — exactly what
-//! `mc anonymous set download` grants in the compose file). Writes always
-//! require credentials.
-//!
-//! Secret policy: access/secret keys are held in [`crate::auth::SecretBox`],
-//! never logged, never serialized into manifests/provenance.
 
 use crate::auth::SecretBox;
 use sha2::{Digest, Sha256};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub const DEFAULT_REGION: &str = "us-east-1";
-/// SigV4 digest of an empty payload; S3 requires it for GET/HEAD/LIST
-/// (`UNSIGNED-PAYLOAD` is rejected there by MinIO and AWS alike).
 const EMPTY_PAYLOAD_HASH: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 
-/// Endpoint scheme split helper. MinIO defaults are http://127.0.0.1:9000.
 #[derive(Clone)]
 pub struct S3Config {
-    /// Scheme + host(+port), e.g. `http://127.0.0.1:9000` or
-    /// `https://sfo3.digitaloceanspaces.com`. No trailing slash.
     pub endpoint: String,
     pub region: String,
     pub bucket: String,
     pub access_key_id: Option<SecretBox>,
     pub secret_access_key: Option<SecretBox>,
-    /// true = `http://host:9000/bucket/key` (MinIO default),
-    /// false = `http://bucket.host:9000/key` (AWS-style virtual hosting).
     pub path_style: bool,
 }
 
@@ -71,8 +50,6 @@ impl std::fmt::Display for S3Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Http(e) => write!(f, "s3 http error: {e}"),
-            // Server error bodies may echo URLs; they never contain credential
-            // material we sent (only headers carry it), so echoing is safe.
             Self::Status { code, key, body } => {
                 let body = if body.len() > 400 { &body[..400] } else { body };
                 write!(f, "s3 status {code} on `{key}`: {body}")
@@ -86,9 +63,6 @@ impl std::error::Error for S3Error {}
 
 type Result<T> = std::result::Result<T, S3Error>;
 
-// ---------------------------------------------------------------------------
-// HMAC-SHA256 + helpers
-// ---------------------------------------------------------------------------
 
 fn hmac_sha256(key: &[u8], data: &[u8]) -> Vec<u8> {
     const BLOCK: usize = 64;
@@ -132,10 +106,8 @@ fn uri_encode(s: &str, encode_slash: bool) -> String {
     out
 }
 
-/// Converts a unix timestamp into (YYYYMMDD, YYYYMMDDThhmmssZ).
 pub fn amz_dates(t: SystemTime) -> (String, String) {
     let secs = t.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
-    // Civil-from-days conversion (Howard Hinnant's algorithm).
     let days = (secs / 86_400) as i64;
     let z = days + 719_468;
     let era = z.div_euclid(146_097);
@@ -155,9 +127,6 @@ pub fn amz_dates(t: SystemTime) -> (String, String) {
     )
 }
 
-// ---------------------------------------------------------------------------
-// Client
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
 pub struct S3Client {
@@ -168,9 +137,7 @@ pub struct S3Client {
 struct RequestPlan {
     url: String,
     host_header: String,
-    /// Path portion used inside the canonical request (starts at `/bucket`).
     canonical_path: String,
-    /// Percent-encoded, sorted query string for the canonical request (`""` when none).
     canonical_query: String,
 }
 
@@ -256,10 +223,6 @@ impl S3Client {
             .expect("reqwest client build cannot fail with valid timeouts")
     }
 
-    /// Signs (when configured) and executes one request per SigV4.
-    ///
-    /// GET/HEAD bodies are not hashed (UNSIGNED-PAYLOAD); PUT sends the exact
-    /// sha256 because we always have complete byte buffers upfront.
     fn execute(
         &self,
         method: &str,
@@ -288,8 +251,6 @@ impl S3Client {
         if let Some(ct) = content_type {
             headers.push(("content-type".into(), ct.into()));
         }
-        // SigV4 mandates lexicographic order by lowercase header name for
-        // BOTH the CanonicalHeaders block and SignedHeaders list.
         let mut all = vec![("host".to_string(), plan.host_header.clone())];
         all.extend(headers);
         all.sort_by(|a, b| a.0.cmp(&b.0));
@@ -350,8 +311,6 @@ impl S3Client {
 
         let c = self.client();
         let m = Method::from_bytes(method.as_bytes()).expect("static HTTP methods are valid");
-        // The wire URL must carry exactly what the canonical request signed:
-        // sorted, percent-encoded query parameters appended verbatim.
         let url_with_query = if plan.canonical_query.is_empty() {
             plan.url.clone()
         } else {
@@ -374,8 +333,6 @@ impl S3Client {
             .map_err(|e| S3Error::Http(format!("{method} `{key}` failed: {e}")))
     }
 
-    /// Validates response status without consuming the body; returns an error
-    /// carrying the (truncated) server body when the request failed.
     fn ensure_success(response: &reqwest::blocking::Response, key: &str) -> Result<()> {
         let status = response.status();
         if !status.is_success() {
@@ -403,7 +360,6 @@ impl S3Client {
             .to_vec())
     }
 
-    /// Returns object size when present, `None` on HTTP 404.
     pub fn head_object(&self, key: &str) -> Result<Option<u64>> {
         let resp = self.execute("HEAD", key, None, None, None)?;
         match resp.status().as_u16() {
@@ -420,8 +376,6 @@ impl S3Client {
         }
     }
 
-    /// Lists objects under `prefix`, sorted by key. Non-paginated (fits the
-    /// <1000-key dataset layout); extend when datasets grow past one page.
     pub fn list_objects(&self, prefix: &str) -> Result<Vec<(String, u64)>> {
         let resp = self.execute(
             "GET",
@@ -440,8 +394,6 @@ impl S3Client {
     }
 }
 
-/// Extracts `(key, size)` pairs from a ListObjectsV2 XML document without an
-/// xml-parser dependency.
 fn parse_list_xml(text: &str) -> Vec<(String, u64)> {
     let get_tag = |tag: &str, block: &str| -> Option<String> {
         let open = format!("<{tag}>");
@@ -475,7 +427,6 @@ mod tests {
 
     #[test]
     fn hmac_matches_known_rfc_vector() {
-        // RFC 4231 test case 1
         let mac = hmac_sha256(&[0x0b; 20], b"Hi There");
         assert_eq!(
             hex(&mac),
@@ -485,8 +436,6 @@ mod tests {
 
     #[test]
     fn sigv4_aws_official_signing_key_vector() {
-        // Derivation vector published in the official AWS SigV4 test suite:
-        // secret wJalr..., date 20120215, region us-east-1, service iam.
         let sk = "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY";
         let day_key = hmac_sha256(format!("AWS4{sk}").as_bytes(), b"20120215");
         let region_key = hmac_sha256(&day_key, b"us-east-1");
@@ -503,7 +452,6 @@ mod tests {
         let (short, full) = amz_dates(UNIX_EPOCH);
         assert_eq!(short, "19700101");
         assert_eq!(full, "19700101T000000Z");
-        // 2026-08-27T00:00:00Z == 1787635200
         let (s2, f2) = amz_dates(UNIX_EPOCH + Duration::from_secs(178_763_520));
         assert_ne!(s2, "19700101");
         assert!(f2.ends_with('Z'));
@@ -582,9 +530,6 @@ mod tests {
 
 #[cfg(test)]
 mod signing_golden_tests {
-    // Cross-checked against an independent Python SigV4 implementation working
-    // against live MinIO; pins the canonical-request fingerprint so header
-    // ordering cannot silently drift again.
     use super::*;
 
     #[test]
@@ -633,8 +578,6 @@ mod signing_golden_tests {
         );
         assert_eq!(canonical_request, expected_cr);
 
-        // Frozen inputs -> frozen signature (reference implementation output).
-        // Secret material is intentionally test-local; nothing here prints it.
         const TEST_SECRET: &str = "lnai_test_secret_42";
         let day_key = hmac_sha256(format!("AWS4{TEST_SECRET}").as_bytes(), b"20260827");
         let region_key = hmac_sha256(&day_key, b"us-east-1");

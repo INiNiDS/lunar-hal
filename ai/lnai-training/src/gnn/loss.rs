@@ -1,19 +1,7 @@
-//! Stage 6: unified GNN-Kinematics loss contract.
-//!
-//! One definition of the loss is shared by the train step, checkpoint
-//! selection, evaluation and reporting:
-//! `total = data(mean, targets) + physics_weight * physics(mean, targets)
-//!        + kl_weight * kl(mean, logvar)` (KL only for the variational head).
-//!
-//! The physics term is **target-centered**: it pulls the predicted batch
-//! mean and variance toward the *observed* batch mean and variance instead
-//! of toward zero. The pre-Stage-6 term (`mean² + 0.01·var`, no targets)
-//! provably suppressed velocity dispersion; see `docs` history.
 
 use burn::prelude::*;
 use lnai_models::{GnnHeadKind, split_mean_logvar, variational_kl};
 
-/// Pure data loss on `[N, 3]` mean velocities (legacy metric, unchanged).
 pub fn compute_gnn_loss<B: Backend>(
     predictions: Tensor<B, 2>,
     targets: Tensor<B, 2>,
@@ -21,13 +9,6 @@ pub fn compute_gnn_loss<B: Backend>(
     (predictions - targets).square().mean()
 }
 
-/// Target-centered physics constraint on `[N, 3]` mean velocities, in
-/// normalized units: squared error of batch mean plus (softer) squared
-/// error of batch variance, both measured against the batch *targets*.
-///
-/// Unlike the legacy zero-seeking term this cannot suppress a real
-/// velocity dispersion — a high-dispersion group has high target variance
-/// and the predictions are pulled toward matching it.
 pub fn target_centered_physics<B: Backend>(
     mean_pred: Tensor<B, 2>,
     targets: Tensor<B, 2>,
@@ -46,10 +27,6 @@ pub fn target_centered_physics<B: Backend>(
     mean_loss + var_loss.mul_scalar(0.1)
 }
 
-/// Full readout `[N, 3]` (deterministic) or `[N, 6]` (variational) plus
-/// `[N, 3]` targets → optimized total. Panics on unsupported widths and on
-/// single-node batches so a misconfigured head or a singleton group can
-/// never train silently (Stage 6.6).
 pub fn compute_gnn_total_loss<B: Backend>(
     predictions: Tensor<B, 2>,
     targets: Tensor<B, 2>,
@@ -73,9 +50,6 @@ pub fn compute_gnn_total_loss<B: Backend>(
     data + physics.mul_scalar(physics_weight as f32) + kl.mul_scalar(kl_weight as f32)
 }
 
-/// Legacy-named entry point, now defined as the unified total (Stage 6).
-/// Kept under this name so train, checkpoint selection and evaluation
-/// cannot drift apart again.
 pub fn compute_gnn_physics_loss<B: Backend>(
     predictions: Tensor<B, 2>,
     targets: Tensor<B, 2>,
@@ -84,9 +58,6 @@ pub fn compute_gnn_physics_loss<B: Backend>(
     compute_gnn_total_loss(predictions, targets, physics_weight, 0.0)
 }
 
-/// Scalar breakdown of one forward pass for logging/reporting:
-/// `(total, physics_part)`. The physics part excludes data and KL terms;
-/// both values derive from the same `predictions`/`targets` pair.
 pub fn gnn_loss_scalars<B: Backend>(
     predictions: Tensor<B, 2>,
     targets: Tensor<B, 2>,
@@ -131,17 +102,12 @@ mod tests {
     #[test]
     fn target_centered_physics_matches_group_stats_instead_of_zero() {
         let device = Default::default();
-        // High-dispersion group: vx in {-100, +100} (normalized units).
         let mean: Tensor<TestBackend, 2> =
             Tensor::from_floats([[-100.0, 0.0, 0.0], [100.0, 0.0, 0.0]], &device);
         let targets: Tensor<TestBackend, 2> =
             Tensor::from_floats([[-100.0, 0.0, 0.0], [100.0, 0.0, 0.0]], &device);
-        // Perfect match → zero constraint despite huge dispersion: the old
-        // zero-seeking term would have returned a large penalty here.
         let phys = scalar(target_centered_physics(mean.clone(), targets.clone()));
         assert!(phys.abs() < 1e-3, "got {phys}");
-        // Collapsed predictions (zero dispersion) against dispersed targets
-        // must be penalized through the variance term.
         let collapsed: Tensor<TestBackend, 2> =
             Tensor::from_floats([[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]], &device);
         let phys = scalar(target_centered_physics(collapsed, targets));
@@ -156,13 +122,10 @@ mod tests {
         let device = Default::default();
         let targets: Tensor<TestBackend, 2> =
             Tensor::from_floats([[1.0, 2.0, 3.0], [1.0, 2.0, 3.0]], &device);
-        // Deterministic: data-only when weights are zero.
         let det: Tensor<TestBackend, 2> =
             Tensor::from_floats([[1.0, 2.0, 4.0], [1.0, 2.0, 3.0]], &device);
         let total = scalar(compute_gnn_total_loss(det, targets.clone(), 0.0, 0.0));
-        // Squared errors: (0+0+1 + 0+0+0)/6 = 1/6.
         assert!((total - 1.0 / 6.0).abs() < 1e-6, "got {total}");
-        // Variational with zero logvar/mean offset: KL > 0 raises total.
         let var: Tensor<TestBackend, 2> = Tensor::from_floats(
             [
                 [1.0, 2.0, 4.0, 0.0, 0.0, 0.0],

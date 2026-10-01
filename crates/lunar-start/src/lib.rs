@@ -1,4 +1,3 @@
-//! Lunar Start — launcher library with log-translating backend.
 
 pub mod ansi;
 pub mod backend;

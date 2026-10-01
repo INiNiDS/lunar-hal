@@ -1,12 +1,3 @@
-//! Stage 8 / Exit Gate: Masked-coordinate localization and leakage audit.
-//!
-//! Verifies:
-//! 1. Data leakage audit: hidden coordinates and target-derived edges are strictly absent.
-//! 2. Spatial holdout tiles are completely excluded from training set.
-//! 3. Graph encoder outperforms no-graph MLP baseline and k-NN interpolation baseline.
-//! 4. Angular and radial distance error decompositions are finite and bounded.
-//! 5. Positional uncertainty calibration coverage satisfies confidence intervals.
-//! 6. Determinism: runs with identical seed produce identical outputs.
 
 use burn::prelude::*;
 use lnai_data::split::is_spatial_holdout;
@@ -28,18 +19,15 @@ fn data_leakage_audit_strictly_rejects_hidden_nodes_and_edges() {
     assert!(!visible.is_empty());
     assert!(!hidden.is_empty());
 
-    // Valid graph over visible stars only
     let valid_graph = build_visible_graph_batch(&visible, 4);
     assert!(audit_leakage(&visible, &hidden, &valid_graph, false).is_ok());
 
-    // 1. Graph with too many nodes (including hidden) must be rejected
     let leaked_graph = build_visible_graph_batch(&visible, 4);
     let mut bad_graph = leaked_graph.clone();
     bad_graph.num_nodes += hidden.len();
     let err = audit_leakage(&visible, &hidden, &bad_graph, false).unwrap_err();
     assert!(err.to_string().contains("num_nodes"));
 
-    // 2. Hidden star present in visible list must be rejected
     let mut leaked_visible = visible.clone();
     leaked_visible.push(hidden[0].clone());
     let err = audit_leakage(&leaked_visible, &hidden, &valid_graph, false).unwrap_err();
@@ -48,21 +36,16 @@ fn data_leakage_audit_strictly_rejects_hidden_nodes_and_edges() {
 
 #[test]
 fn spatial_holdout_tiles_are_strictly_enforced_during_training() {
-    // Generate stars, some of which may fall into spatial holdout tiles
     let stars = generate_synthetic_stars(100, 101, 50.0);
     let (mut visible, hidden) = mask_neighborhood(stars, 0.2, 101);
 
-    // Filter visible stars to remove any holdout stars for a clean training set
     visible.retain(|s| !is_spatial_holdout(s.ra_deg, s.dec_deg));
     let graph = build_visible_graph_batch(&visible, 4);
     assert!(audit_leakage(&visible, &hidden, &graph, true).is_ok());
 
-    // Artificially inject a star that lands in a holdout tile
     let mut holdout_star = visible[0].clone();
-    // Tile 3 is the holdout bucket
     holdout_star.ra_deg = 50.0;
     holdout_star.dec_deg = -40.0;
-    // Keep adjusting until it hits a holdout tile
     let mut found_holdout = false;
     for ra in (0..360).step_by(15) {
         for dec in (-80..80).step_by(15) {

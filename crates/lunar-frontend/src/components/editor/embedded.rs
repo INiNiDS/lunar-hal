@@ -1,8 +1,3 @@
-//! Embedded, backend-driven editor used inside the WebOS Sandbox iframe.
-//!
-//! This module owns only local camera/selection UI state. Scene mutations are
-//! received from the backend snapshot and SSE stream. The parent sends only a
-//! UI lifecycle hint; there is deliberately no parent-to-iframe mutation protocol.
 
 use dioxus::prelude::*;
 use lunar_stellar_core::StellarScene;
@@ -102,8 +97,6 @@ fn parse_parent_activity(raw: &str) -> Option<bool> {
     }
 }
 
-/// Returns a scene id only for `/editor?embedded=sandbox&scene_id=<id>`.
-/// Native targets never enter iframe composition mode.
 pub fn embedded_scene_id() -> Option<String> {
     #[cfg(feature = "web")]
     {
@@ -131,8 +124,6 @@ pub fn embedded_scene_id() -> Option<String> {
 #[cfg(feature = "web")]
 #[derive(Clone)]
 struct SceneEventSubscription {
-    // `use_hook` stores a cloneable value. Keeping the non-cloneable callback
-    // in an Rc also makes its lifetime match the EventSource subscription.
     _inner: std::rc::Rc<SceneEventSubscriptionInner>,
 }
 
@@ -183,7 +174,6 @@ fn use_sandbox_ipc(scene_id: String, game: Signal<StellarScene>, mut map_active:
             .and_then(|document| origin_from_url(&document.referrer()));
         let current_scene_id = scene_id.clone();
 
-        // Announce readiness to parent on mount
         post_sandbox_ipc_message(&SandboxIpcMessage::SandboxReady {
             scene_id: current_scene_id.clone(),
         });

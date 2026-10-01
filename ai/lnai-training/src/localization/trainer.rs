@@ -22,7 +22,6 @@ use crate::localization::evaluation::{
 use crate::localization::loss::hungarian_match;
 use crate::spec::{LocalizationConfig, ModelConfig, TrainingSpec};
 
-/// Normalization data for GNN-Localization model.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct LocalizationNorm {
     pub radius_pc: f32,
@@ -61,8 +60,6 @@ struct NeighborsExample {
     seed: u64,
 }
 
-// The seed domains and catalog IDs are disjoint across train, validation and
-// spatial holdout. No held-out catalog is used for checkpoint selection.
 fn split_seed(seed: u64, split: u64, index: u64) -> u64 {
     seed.wrapping_add(split.wrapping_mul(1_000_003))
         .wrapping_add(index)
@@ -122,8 +119,6 @@ fn masked_from_stars(mut stars: Vec<LocalStar>, seed: u64, holdout: bool) -> Res
     proxy.bp_rp = target.bp_rp;
     proxy.g_mag = target.g_mag;
     proxy.ruwe = target.ruwe;
-    // The proxy has only the known anchor position. Its edges cannot depend on
-    // the masked star's position; neither can any other visible-visible edge.
     stars.insert(0, proxy);
     let graph = build_visible_graph_batch(&stars, 4);
     let mut hidden = target.clone();
@@ -211,7 +206,6 @@ fn masked_loss<B: Backend>(
     let position = (out.clone().slice([0..1, 0..3]) - wanted)
         .powf_scalar(2.0)
         .mean();
-    // Fit a nonzero uncertainty head rather than shipping random covariance.
     let log_variance = out.slice([0..1, 3..6]);
     position + (log_variance + 1.0).powf_scalar(2.0).mean() * 0.001
 }
@@ -278,16 +272,11 @@ fn masked_gate(report: &MaskedEvaluationReport) -> Result<()> {
 }
 
 fn checkpoint_refusal() -> Result<()> {
-    // A single gnn-loc-v1 weight name represents *both* heads in the serving
-    // registry. This run trains one head only; publishing would advertise the
-    // other random head as trained. Do not write an unservable checkpoint.
     bail!(
         "localization artifact contract has one shared model for masked and neighbor heads; cannot publish a single-head checkpoint without changes to artifacts/spec and serving"
     )
 }
 
-/// Optimizes the masked-coordinate head on leakage-safe synthetic catalogs.
-/// Returns an error rather than claiming an unpublishable single-head artifact.
 pub fn run_train_masked<B: AutodiffBackend>(
     spec: &TrainingSpec,
     config: &LocalizationConfig,
@@ -538,8 +527,6 @@ fn neighbors_gate(
     Ok(())
 }
 
-/// Optimizes the neighbor head with differentiable matched-slot losses.
-/// Returns an error rather than claiming an unpublishable single-head artifact.
 pub fn run_train_neighbors<B: AutodiffBackend>(
     spec: &TrainingSpec,
     config: &LocalizationConfig,

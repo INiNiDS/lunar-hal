@@ -1,66 +1,39 @@
-//! Defensive input validation for the game layer.
-//!
-//! Every value that crosses the trust boundary (network responses,
-//! user-driven UI state, internal helpers) flows through one of the
-//! `validate_*` functions below. The rules are deliberately
-//! conservative: an obviously broken input is rejected with a
-//! [`ValidationError`], never silently clamped. Callers can decide
-//! how to react (log, ignore, surface to the user).
-//!
-//! The game layer also defends against the AI backend returning
-//! garbage — see [`validate_response_star`].
 
 use thiserror::Error;
 
 use lunar_structures::{PipelineResponse, ResponseStar, StarScene, StarSceneSummary};
 
-/// Bounds used across the validation module. Centralized so the UI
-/// and the game layer can't drift apart.
 pub mod limits {
-    /// Inclusive max length for a scene name (characters, not bytes).
     pub const SCENE_NAME_MAX: usize = 100;
-    /// Inclusive max length for a scene id (characters, not bytes).
     pub const SCENE_ID_MAX: usize = 64;
 
-    /// Allowed stellar parameter range.
     pub const TEMPERATURE_MIN: f32 = 0.0;
     pub const TEMPERATURE_MAX: f32 = 2.0;
 
-    /// Allowed `bp_rp` range.
     pub const BP_RP_MIN: f32 = 0.0;
     pub const BP_RP_MAX: f32 = 5.0;
 
-    /// Allowed `g_mag` range.
     pub const G_MAG_MIN: f32 = -10.0;
     pub const G_MAG_MAX: f32 = 30.0;
 
-    /// Allowed entropy slider range.
     pub const ENTROPY_MIN: f32 = 0.0;
     pub const ENTROPY_MAX: f32 = 2.0;
 
-    /// Allowed per-sector search radius (parsecs).
     pub const SEARCH_RADIUS_MIN: f32 = 1.0;
     pub const SEARCH_RADIUS_MAX: f32 = 100_000.0;
 
-    /// Inclusive bounds for a scene-center coordinate in parsecs.
     pub const COORD_MIN: f32 = -1_000_000.0;
     pub const COORD_MAX: f32 = 1_000_000.0;
 
-    /// Sector key bounds. Anything outside this is off the playable
-    /// map.
     pub const SECTOR_KEY_MIN: i32 = -100_000;
     pub const SECTOR_KEY_MAX: i32 = 100_000;
 
-    /// Allowed camera zoom range.
     pub const ZOOM_MIN: f32 = 0.01;
     pub const ZOOM_MAX: f32 = 100.0;
 }
 
-/// A type returned by every `validate_*` function.
 pub type ValidationResult<T> = Result<T, ValidationError>;
 
-/// All the ways a value can be invalid. Includes the field name so
-/// the caller (typically a UI) can show a useful error.
 #[derive(Debug, Error, Clone, PartialEq)]
 pub enum ValidationError {
     #[error("{field} must not be empty")]
@@ -110,7 +83,6 @@ pub enum ValidationError {
 }
 
 impl ValidationError {
-    /// Convenience: get the field name that produced this error.
     pub fn field(&self) -> &'static str {
         match self {
             Self::Empty { field }
@@ -137,8 +109,6 @@ macro_rules! validate_length {
         }
     };
 }
-/// Returns true for finite, non-NaN numbers. Almost every numeric
-/// validator below delegates to this.
 #[inline]
 pub fn is_finite(v: f32) -> bool {
     v.is_finite()
@@ -187,8 +157,6 @@ fn check_non_empty<'a>(s: &'a str, field: &'static str) -> ValidationResult<&'a 
     }
 }
 
-/// Validate a user-supplied scene name. Strips leading/trailing
-/// whitespace, rejects control characters, and enforces length.
 pub fn validate_scene_name(name: &str) -> ValidationResult<&str> {
     let field = "scene.name";
     let trimmed = name.trim();
@@ -205,8 +173,6 @@ pub fn validate_scene_name(name: &str) -> ValidationResult<&str> {
     Ok(trimmed)
 }
 
-/// Validate a scene id used in URL paths. Restricts to a safe ASCII
-/// subset to avoid path traversal and surprises on the wire.
 pub fn validate_scene_id(id: &str) -> ValidationResult<&str> {
     let field = "scene.id";
     check_non_empty(id, field)?;
@@ -286,9 +252,6 @@ pub fn validate_sector_key(key: (i32, i32)) -> ValidationResult<(i32, i32)> {
     Ok(key)
 }
 
-/// Validate a [`ResponseStar`] coming back from the
-/// AI backend. Catches NaN/Inf coordinates and obviously broken
-/// physical parameters.
 pub fn validate_response_star(star: &ResponseStar) -> ValidationResult<&ResponseStar> {
     if !is_finite(star.x) || !is_finite(star.y) || !is_finite(star.z) {
         return Err(ValidationError::NotFinite {
@@ -326,7 +289,6 @@ pub fn validate_response_star(star: &ResponseStar) -> ValidationResult<&Response
     Ok(star)
 }
 
-/// Validate a vector of stars. Returns the first invalid entry.
 pub fn validate_response_stars(stars: &[ResponseStar]) -> ValidationResult<()> {
     for star in stars {
         validate_response_star(star)?;
@@ -334,7 +296,6 @@ pub fn validate_response_stars(stars: &[ResponseStar]) -> ValidationResult<()> {
     Ok(())
 }
 
-/// Validate a [`StarScene`] coming from the AI backend.
 pub fn validate_scene(scene: &StarScene) -> ValidationResult<&StarScene> {
     let _ = validate_scene_id(&scene.id)?;
     let _ = validate_scene_name(&scene.name)?;
@@ -348,7 +309,6 @@ pub fn validate_scene(scene: &StarScene) -> ValidationResult<&StarScene> {
     Ok(scene)
 }
 
-/// Validate a [`StarSceneSummary`].
 pub fn validate_scene_summary(scene: &StarSceneSummary) -> ValidationResult<&StarSceneSummary> {
     let _ = validate_scene_id(&scene.id)?;
     let _ = validate_scene_name(&scene.name)?;
@@ -358,7 +318,6 @@ pub fn validate_scene_summary(scene: &StarSceneSummary) -> ValidationResult<&Sta
     Ok(scene)
 }
 
-/// Validate the texture inside a [`PipelineResponse`].
 pub fn validate_pipeline(pipeline: &PipelineResponse) -> ValidationResult<&PipelineResponse> {
     if pipeline.siren.width == 0 || pipeline.siren.height == 0 {
         return Err(ValidationError::OutOfRangeInt {

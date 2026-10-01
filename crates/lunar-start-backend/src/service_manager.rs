@@ -12,8 +12,6 @@ use lunar_start::{
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, broadcast, mpsc};
 
-/// Max number of buffered log lines retained per service for the `/services/{name}/logs`
-/// and `/services/{name}/stats` endpoints.
 const MAX_LOGS_PER_SERVICE: usize = 2000;
 
 pub type LogRingBuffers = Arc<Mutex<HashMap<String, VecDeque<LogEvent>>>>;
@@ -254,10 +252,6 @@ impl ServiceManager {
         name: &str,
         values: ServiceConfigValues,
     ) -> Result<ServiceConfigState, ConfigError> {
-        // A frontend platform switch is a runtime change, not merely a saved
-        // preference. Restart it through the same validated lifecycle used by
-        // the explicit restart endpoint so desktop/android never retain a web
-        // process (and vice versa).
         let restart_for_platform_change = if name == "frontend" {
             let old_platform = self
                 .configs
@@ -365,7 +359,6 @@ impl ServiceManager {
         Ok(())
     }
 
-    /// Validates a replacement before stopping the old process. Invalid values leave it untouched.
     pub async fn restart(
         &self,
         name: &str,

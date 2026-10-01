@@ -1,4 +1,3 @@
-//! SIREN texture microbench: forward pass over a 64x64 texture grid.
 
 use burn::backend::NdArray;
 use burn::prelude::*;
@@ -10,7 +9,6 @@ use lnai_models::{SIREN_INPUT_DIM, StellarSirenConfig};
 type B = NdArray;
 
 fn texture_grid(side: usize, device: &burn::backend::ndarray::NdArrayDevice) -> Tensor<B, 2> {
-    // (u, v, bp_rp, g_mag, m_abs) per pixel — matches SIREN input contract.
     let mut data = Vec::with_capacity(side * side * SIREN_INPUT_DIM);
     for y in 0..side {
         for x in 0..side {

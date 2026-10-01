@@ -1,21 +1,3 @@
-//! Stage 4B: Gaia `astrophysical_parameters` enrichment (PINN targets).
-//!
-//! The canonical-v1 backbone from `collect-data` only carries `gaia_source`
-//! columns, so PINN targets (Teff/R/M/L) are missing. This module fetches them
-//! from `gaiadr3.astrophysical_parameters` keyed by `source_id`:
-//!
-//! * IDs are scanned from the assembled canonical parquet (`source_id`).
-//! * IDs are fetched in `--ids-per-query` chunks via TAP sync CSV, reusing the
-//!   same [`ShardFetcher`] abstraction as the backbone collector.
-//! * Progress is a chunk manifest (`ap_manifest.json`); reruns skip finished
-//!   chunks, so a ~35k-query full-sky pass survives restarts.
-//! * The join is a streaming LEFT JOIN of fetched parts onto the canonical
-//!   parquet, so peak RAM stays bounded; `ap_coverage.json` reports honest
-//!   per-column coverage (AP rows exist only for a subset of sources).
-//!
-//! NOTE: a server-side `TAP_UPLOAD` + join would need ~360 queries instead of
-//! tens of thousands, but the fetcher is GET-only today; chunked IN-lists
-//! reuse proven infra (retry/backoff/atomic writes).
 
 use polars::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -34,12 +16,9 @@ pub const AP_PARTS_DIR: &str = "ap_parts";
 pub const AP_COVERAGE_FILE: &str = "ap_coverage.json";
 pub const AP_ENRICHED_FILE: &str = "enriched.parquet";
 
-/// Astrophysical-parameter output columns (canonical names, all nullable).
 pub const AP_OUTPUT_COLUMNS: [&str; 4] =
     ["teff_gspphot", "radius_gspphot", "mass_flame", "lum_flame"];
 
-/// ADQL for one ID chunk. `source_id` is returned as varchar so the join key
-/// matches the canonical parquet byte-for-byte (no int/string juggling).
 pub fn ap_query_for_ids(ids: &[&str]) -> String {
     let list = ids.join(",");
     format!(
@@ -53,7 +32,6 @@ pub fn ap_query_for_ids(ids: &[&str]) -> String {
     )
 }
 
-/// Resume state for the chunked AP fetch. `completed_chunks` is kept sorted.
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct ApChunkManifest {
     pub version: u32,
@@ -122,8 +100,6 @@ impl ApChunkManifest {
     }
 }
 
-/// One parsed AP row; every value column is optional (coverage is measured,
-/// not assumed).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ApRow {
     pub source_id: String,
@@ -143,8 +119,6 @@ fn parse_opt_f64(s: &str) -> Result<Option<f64>, String> {
         .map_err(|e| format!("bad float {s:?}: {e}"))
 }
 
-/// Parses one TAP sync CSV payload. The header is validated so an HTML error
-/// page or VOTable can never silently become rows.
 pub fn parse_ap_csv(text: &str) -> Result<Vec<ApRow>, String> {
     let mut lines = text.lines();
     let header = lines
@@ -215,7 +189,6 @@ fn write_ap_part(path: &Path, rows: &[ApRow]) -> Result<(), String> {
     std::fs::rename(&tmp, path).map_err(|e| format!("rename {}: {e}", path.display()))
 }
 
-/// Reads just the `source_id` column (streaming scan, no full decode).
 fn read_source_ids(data: &Path, max_ids: u64) -> Result<Vec<String>, String> {
     let lf = scan_one_parquet(data)?;
     let df = lf
@@ -256,7 +229,6 @@ fn scan_one_parquet(path: &Path) -> Result<LazyFrame, String> {
     Ok(LazyFrame::from(builder.0))
 }
 
-/// Streaming sink helper (same bounded-RAM contract as `assemble`).
 fn sink_parquet_streaming(lf: LazyFrame, target: &Path) -> Result<(), String> {
     let target_ref = PlRefPath::from(
         target
@@ -325,11 +297,6 @@ fn fetch_chunk_with_retry(
     Err(last_err)
 }
 
-/// TAP sync fetch via HTTP POST (form-encoded). POST is required here because
-/// a GET request-target carrying thousands of IDs exceeds URL-length limits
-/// on the way to the archive; the shared GET-only fetcher cannot carry them.
-/// Credentials (if any) come from the caller (env-only upstream) and are
-/// never logged; error text is truncated so multi-KB queries never land in logs.
 fn fetch_ap_post(
     client: &reqwest::blocking::Client,
     sync_url: &str,
@@ -365,8 +332,6 @@ fn fetch_ap_post(
     Ok(())
 }
 
-/// Truncates transport errors: the embedded request URL carries the whole
-/// ID list and must never flood logs.
 fn short_err(e: &dyn std::fmt::Display) -> String {
     let s = e.to_string();
     if s.len() > 300 {
@@ -384,19 +349,13 @@ fn part_path_by_dir(parts_dir: &Path, idx: u64) -> PathBuf {
 pub struct ApEnrichConfig {
     pub data_path: PathBuf,
     pub out_dir: PathBuf,
-    /// Source IDs per TAP query (POST body; 2000 ≈ 40KB form).
     pub ids_per_query: usize,
     pub concurrency: usize,
-    /// Cap on scanned IDs (0 = all). Pilot runs use this.
     pub max_ids: u64,
-    /// Skip fetching entirely; join whatever parts exist on disk.
     pub join_only: bool,
-    /// Where the enriched parquet lands (default: <out_dir>/enriched.parquet).
     pub join_output: Option<PathBuf>,
     pub retry_attempts: u32,
-    /// TAP endpoint override (default: [`DEFAULT_GAIA_TAP_SYNC_URL`]).
     pub sync_url: Option<String>,
-    /// Optional basic-auth pair (env-only upstream, never logged).
     pub gaia_user: Option<String>,
     pub gaia_pass: Option<String>,
 }
@@ -443,7 +402,6 @@ pub fn run_enrich_ap(cfg: &ApEnrichConfig) -> Result<ApCoverageReport, String> {
         cfg.data_path.display()
     );
 
-    // Load or init resume manifest; reconcile completed entries with files.
     let mut manifest = if manifest_path.exists() {
         let m = ApChunkManifest::load(&manifest_path)?;
         if m.data_file != cfg.data_path.to_string_lossy()
@@ -486,7 +444,6 @@ pub fn run_enrich_ap(cfg: &ApEnrichConfig) -> Result<ApCoverageReport, String> {
                 .sync_url
                 .clone()
                 .unwrap_or_else(|| DEFAULT_GAIA_TAP_SYNC_URL.to_string());
-            // One shared HTTP client (connection reuse, cheap to reference).
             let client = reqwest::blocking::Client::builder()
                 .timeout(Some(Duration::from_secs(3600)))
                 .connect_timeout(Some(Duration::from_secs(60)))
@@ -563,7 +520,6 @@ pub fn run_enrich_ap(cfg: &ApEnrichConfig) -> Result<ApCoverageReport, String> {
         );
     }
 
-    // ---- Join phase: streaming LEFT JOIN of parts onto canonical. ----
     let mut part_files: Vec<PathBuf> = std::fs::read_dir(&parts_dir)
         .map_err(|e| format!("read {}: {e}", parts_dir.display()))?
         .filter_map(|e| e.ok().map(|e| e.path()))
@@ -613,7 +569,6 @@ pub fn run_enrich_ap(cfg: &ApEnrichConfig) -> Result<ApCoverageReport, String> {
     );
     sink_parquet_streaming(joined, &join_output)?;
 
-    // ---- Coverage pass (streaming aggregation, O(1) memory). ----
     let cov = scan_one_parquet(&join_output)?
         .select([
             len().cast(DataType::UInt64).alias("n"),
@@ -722,7 +677,6 @@ mod tests {
         let back = ApChunkManifest::load(&path).expect("load");
         assert_eq!(back.completed_chunks, vec![0, 1]);
         assert_eq!(back.failed_chunks, vec![1]);
-        // Re-marking a failed chunk as complete clears the failure.
         let mut back = back;
         back.mark_complete(1);
         assert!(back.failed_chunks.is_empty());

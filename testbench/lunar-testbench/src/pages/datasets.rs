@@ -199,7 +199,6 @@ fn kind_to_tag(kind: &str) -> String {
     }
 }
 
-// ------------------- Stage 4: canonical collection coverage -------------------
 
 #[component]
 fn CanonicalCollection(mut dir: Signal<String>) -> Element {
@@ -318,7 +317,6 @@ fn CoverageCard(
                     spawn(async move {
                         busy.set(true);
                         message.set(Some("Starting pilot collect…".into()));
-                        // Pilot by default: first three RA degrees.
                         match start_data_collect(&dir_now, 0.0, 3.0, 16.0, 4, false).await {
                             Ok(job) => message.set(Some(format!("Collect job started: {}", job.id))),
                             Err(e) => message.set(Some(format!("Failed to start: {e}"))),

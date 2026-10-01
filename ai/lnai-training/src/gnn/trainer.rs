@@ -1,8 +1,3 @@
-//! Stage 5 (task 4): GNN-Kinematics trainer — moved verbatim from `ai/lnai-gnn/src/main.rs`.
-//!
-//! Deltas vs the pre-Stage-5 binary: seeded split/shuffle/group build,
-//! typed NDJSON epoch events, `artifact.json` bundle, cooperative
-//! cancellation, plus read-only `run_evaluate` and `run_benchmark` modes.
 
 use super::dataset::{GnnDataset, GnnNormParams, PrefetchBatchedBatcher};
 use super::loss::{compute_gnn_total_loss, gnn_loss_scalars};
@@ -27,7 +22,6 @@ use crate::spec::TrainingSpec;
 type TrainBackend = Autodiff<burn::backend::Cuda<f32, i32>>;
 type InferBackend = burn::backend::Cuda<f32, i32>;
 
-/// Shared stdout + NDJSON epoch sink.
 struct EventSink {
     output_dir: std::path::PathBuf,
     total_epochs: u32,
@@ -69,9 +63,6 @@ pub fn run_train_with_cancel(spec: &TrainingSpec, cancel: &CancelFlag) -> Result
         other => anyhow::bail!("GNN trainer requires gnn_kinematics config, got {other:?}"),
     };
     let seed = effective_train_seed(spec);
-    // Stage 6: the readout head is explicit — 3 deterministic, 6
-    // variational. Validation already restricts the values; resolve once
-    // so train, resume, eval and benchmark share one width.
     let head = GnnHeadKind::from_output_dim(gnn_cfg.output_dim as usize).expect(
         "gnn output_dim must be 3 (deterministic) or 6 (variational), check spec validation",
     );
@@ -258,8 +249,6 @@ pub fn run_train_with_cancel(spec: &TrainingSpec, cancel: &CancelFlag) -> Result
             for (nodes, graph, targets) in groups {
                 let n_nodes = targets.dims()[0];
                 let predictions = model.forward_sparse(nodes, &graph);
-                // Stage 6 unified contract: the optimized total is also what
-                // selects checkpoints and what evaluation reports.
                 let loss = compute_gnn_total_loss(
                     predictions,
                     targets,
@@ -301,9 +290,6 @@ pub fn run_train_with_cancel(spec: &TrainingSpec, cancel: &CancelFlag) -> Result
 
         let epoch_train_loss = epoch_train_loss.mean();
         let infer_model = model.valid();
-        // Stage 6: checkpoint selection optimizes the same unified total
-        // as the train step (previously pure data loss while training
-        // optimized data + physics).
         let (val_loss, phys_loss) = evaluate_totals(
             &infer_model,
             &val_ds,
@@ -341,8 +327,6 @@ pub fn run_train_with_cancel(spec: &TrainingSpec, cancel: &CancelFlag) -> Result
             lr,
         });
 
-        // Epoch-watch AI supervisor: blocks here until the agent answers.
-        // Only an explicit VERDICT: STOP halts; anything else continues.
         if let Some(hook) = spec.agent.as_ref() {
             let log_tail =
                 crate::agent::tail_file(&output_dir.join("events.ndjson"), hook.log_lines);
@@ -405,9 +389,6 @@ pub fn run_train_with_cancel(spec: &TrainingSpec, cancel: &CancelFlag) -> Result
     let _ = append_event_line(output_dir, &JobEvent::Completed { exit_code: 0 });
     write_artifact_manifest(spec, seed, &norm, best_val_loss)?;
 
-    // Stage 6.8: holdout gate for GNN (previously the spec flag was
-    // silently ignored by this trainer). Whole holdout file becomes the
-    // eval set; missing/empty is a hard error, drift warns.
     if let Some(holdout_path) = &spec.holdout {
         println!();
         println!("=== Holdout Evaluation ===");
@@ -472,7 +453,6 @@ fn write_artifact_manifest(
 
     let output_dir = Path::new(&spec.output_dir);
     let model_hash = sha256_file_hex(&output_dir.join(&spec.model_file)).unwrap_or_default();
-    // Hash what you write: the norm file on disk is pretty JSON.
     let norm_hash = hash_norm_rendered(&render_norm_file(norm));
     let mut manifest = ArtifactManifestV1::new(
         ModelKind::GnnKinematics,
@@ -496,7 +476,6 @@ fn write_artifact_manifest(
     Ok(())
 }
 
-/// Read-only evaluation: loads the artifact, reports losses, trains nothing.
 pub fn run_evaluate(spec: &TrainingSpec) -> Result<RunOutcome> {
     spec.validate()
         .map_err(|errs| anyhow::anyhow!("invalid GNN spec: {}", errs.join("; ")))?;
@@ -557,7 +536,6 @@ pub fn run_evaluate(spec: &TrainingSpec) -> Result<RunOutcome> {
     println!("Validation total loss:   {val_loss:.6}");
     println!("Validation physics loss: {phys_loss:.6}");
 
-    // Stage 6.8: read-only holdout gate mirrors training.
     if let Some(holdout_path) = &spec.holdout {
         if !Path::new(holdout_path).exists() {
             anyhow::bail!("holdout file not found: {holdout_path}");
@@ -592,7 +570,6 @@ pub fn run_evaluate(spec: &TrainingSpec) -> Result<RunOutcome> {
     Ok(RunOutcome::Completed)
 }
 
-/// Benchmark harness: loads the artifact, times forward passes, trains nothing.
 pub fn run_benchmark(spec: &TrainingSpec, iters: u32, warmup: u32) -> Result<RunOutcome> {
     use std::time::Instant;
     let gnn_cfg = match &spec.config {
@@ -657,8 +634,6 @@ fn save_checkpoint(
     model_path: &Path,
     norm_path: &Path,
 ) -> Result<()> {
-    // Atomic writes (tmp + rename): a kill mid-save must never leave a
-    // half-written checkpoint behind.
     crate::artifacts::atomic_write_through(model_path, "bpk.tmp", |tmp| {
         let mut store = BurnpackStore::from_file(
             tmp.to_str()
@@ -680,9 +655,6 @@ fn save_checkpoint(
     Ok(())
 }
 
-/// Stage 6 unified evaluation: one forward per batch yields the optimized
-/// total and the physics part, so selection, train logging and reporting
-/// can never disagree. Returns `(mean_total, mean_physics)`.
 fn evaluate_totals(
     model: &StellarGnn<InferBackend>,
     dataset: &GnnDataset,

@@ -1,8 +1,3 @@
-//! Stage 5 (task 5): SIREN trainer — moved verbatim from `ai/lnai-siren/src/main.rs`.
-//!
-//! Deltas vs the pre-Stage-5 binary: seeded star selection/split/shuffle,
-//! typed NDJSON epoch events, `artifact.json` bundle, cooperative
-//! cancellation, plus read-only `run_evaluate` and `run_benchmark` modes.
 
 use super::dataset::{PrefetchBatcher, SirenDataset, SirenNorm, TARGET_DIM};
 use super::loss::{compute_data_loss, compute_siren_loss_conditioned};
@@ -26,7 +21,6 @@ use crate::spec::TrainingSpec;
 type TrainBackend = Autodiff<burn::backend::Cuda<f32, i32>>;
 type InferBackend = burn::backend::Cuda<f32, i32>;
 
-/// Shared stdout + NDJSON epoch sink (SIREN has no phys column).
 struct EventSink {
     output_dir: std::path::PathBuf,
     total_epochs: u32,
@@ -120,8 +114,6 @@ pub fn run_train_with_cancel(spec: &TrainingSpec, cancel: &CancelFlag) -> Result
         let loaded_norm: SirenNorm = serde_json::from_str(&norm_json)?;
         println!("Resuming from model: {}", model_path.display());
 
-        // Stage 6: resume reuses the saved normalization for the dataset
-        // so inputs match the loaded weights (never fresh stats).
         let (train_ds, val_ds) = SirenDataset::generate_with_norm(
             data_path.as_path(),
             siren_cfg.texture_size as usize,
@@ -253,8 +245,6 @@ pub fn run_train_with_cancel(spec: &TrainingSpec, cancel: &CancelFlag) -> Result
         while let Some((batch_inputs, batch_targets)) =
             prefetcher.next_batch::<TrainBackend>(&device)
         {
-            // Stage 6 target-aware loss: conditioning columns (normed
-            // bp_rp/mg/ruwe) ride along in inputs columns 2..5.
             let [batch_rows, _] = batch_inputs.dims();
             let target_rows = batch_targets.dims()[0];
             let conditioning = batch_inputs.clone().slice([0..batch_rows, 2..5]);
@@ -350,9 +340,6 @@ pub fn run_train_with_cancel(spec: &TrainingSpec, cancel: &CancelFlag) -> Result
         println!();
         println!("=== Holdout Evaluation ===");
         let holdout_path = Path::new(holdout_path);
-        // Stage 6: a requested holdout must exist and be non-empty. Note
-        // the full split goes to validation (`val_frac = 1.0`) — with
-        // star-disjoint splits there is no train side to keep.
         if !holdout_path.exists() {
             anyhow::bail!("holdout file not found: {}", holdout_path.display());
         }
@@ -406,7 +393,6 @@ fn write_artifact_manifest(
 
     let output_dir = Path::new(&spec.output_dir);
     let model_hash = sha256_file_hex(&output_dir.join(&spec.model_file)).unwrap_or_default();
-    // Hash what you write: the norm file on disk is pretty JSON.
     let norm_hash = hash_norm_rendered(&render_norm_file(norm));
     let mut manifest = ArtifactManifestV1::new(
         ModelKind::Siren,
@@ -430,8 +416,6 @@ fn write_artifact_manifest(
     Ok(())
 }
 
-/// Read-only evaluation: loads the artifact, reports the validation loss,
-/// trains nothing and rewrites no checkpoint.
 pub fn run_evaluate(spec: &TrainingSpec) -> Result<RunOutcome> {
     spec.validate()
         .map_err(|errs| anyhow::anyhow!("invalid SIREN spec: {}", errs.join("; ")))?;
@@ -459,8 +443,6 @@ pub fn run_evaluate(spec: &TrainingSpec) -> Result<RunOutcome> {
         .load_from(&mut store)
         .map_err(|e| anyhow::anyhow!("failed to load model: {e}"))?;
     let infer = loaded.valid();
-    // Stage 6: read-only evaluation normalizes with the saved snapshot
-    // (the weights were trained against it), never with fresh stats.
     let saved_norm_json = std::fs::read_to_string(&norm_path)?;
     let saved_norm: SirenNorm = serde_json::from_str(&saved_norm_json)?;
     let (train_ds, val_ds) = SirenDataset::generate_with_norm(
@@ -481,7 +463,6 @@ pub fn run_evaluate(spec: &TrainingSpec) -> Result<RunOutcome> {
     Ok(RunOutcome::Completed)
 }
 
-/// Benchmark harness: loads the artifact, times forward passes, trains nothing.
 pub fn run_benchmark(spec: &TrainingSpec, iters: u32, warmup: u32) -> Result<RunOutcome> {
     use std::time::Instant;
     let device = CudaDevice::new(spec.gpu_index as usize);

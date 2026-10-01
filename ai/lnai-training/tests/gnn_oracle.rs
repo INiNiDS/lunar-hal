@@ -1,4 +1,3 @@
-//! Stage 3, task 5: GNN-Kinematics oracle/chained/baseline metrics.
 
 use lnai_training::metrics::gnn::KinematicsMetrics;
 use lnai_training::report::{ReportKind, ReportV1, identity_from_env};
@@ -7,8 +6,6 @@ const SEED: u64 = 7;
 const N: usize = 1024;
 
 fn synthetic_velocities() -> (Vec<[f32; 3]>, Vec<[f32; 3]>, Vec<[f32; 3]>) {
-    // truth = smooth field, chained = truth + noise (a "model"),
-    // baseline = batch-mean velocity (the trivial predictor).
     let mut lcg = SEED;
     let mut next = || {
         lcg = lcg
@@ -51,7 +48,6 @@ fn gnn_oracle_chained_baseline_ordering_and_report() {
 
     let metrics = KinematicsMetrics::evaluate(&chained, &truth, &baseline);
 
-    // Oracle (= truth itself) must be the zero upper bound.
     assert_eq!(metrics.oracle_mse, 0.0);
     assert!(
         metrics.ordering_is_sane(),

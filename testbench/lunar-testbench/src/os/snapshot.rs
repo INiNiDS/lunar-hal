@@ -1,14 +1,11 @@
-//! Window snapshot envelope contract v1 (Stage 2 & Stage 11).
 #![allow(dead_code)]
 
 use lunar_utils::time::current_time_ms;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-/// Version of the snapshot envelope structure.
 pub const SNAPSHOT_SCHEMA_VERSION: &str = "1.0.0";
 
-/// Window position and size.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Copy)]
 pub struct WindowGeometry {
     pub x: i32,
@@ -17,7 +14,6 @@ pub struct WindowGeometry {
     pub height: u32,
 }
 
-/// Computes the IEEE 802.3 CRC32 checksum for arbitrary byte slices.
 pub fn calculate_crc32(bytes: &[u8]) -> u32 {
     let mut crc = 0xFFFF_FFFFu32;
     for &b in bytes {
@@ -33,7 +29,6 @@ pub fn calculate_crc32(bytes: &[u8]) -> u32 {
     !crc
 }
 
-/// Versioned snapshot envelope for Lunar-OS window state (Stage 11).
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct AppSnapshotEnvelopeV1 {
     pub version: u32,
@@ -65,7 +60,6 @@ impl AppSnapshotEnvelopeV1 {
         }
     }
 
-    /// Verifies snapshot integrity by validating schema version and CRC32 over the payload.
     pub fn verify_integrity(&self) -> Result<(), SnapshotError> {
         if self.version != 1 {
             return Err(SnapshotError::VersionMismatch);
@@ -73,7 +67,6 @@ impl AppSnapshotEnvelopeV1 {
         self.verify_checksum()
     }
 
-    /// Verifies snapshot integrity by recomputing CRC32 over the payload.
     pub fn verify_checksum(&self) -> Result<(), SnapshotError> {
         let serialized = self.payload.to_string();
         let expected = calculate_crc32(serialized.as_bytes());
@@ -85,7 +78,6 @@ impl AppSnapshotEnvelopeV1 {
     }
 }
 
-/// Serializable state of an application window, used for minimize/restore lifecycle (Legacy compatibility).
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct WindowSnapshotV1 {
     pub version: String,
@@ -151,12 +143,9 @@ impl From<WindowSnapshotV1> for AppSnapshotEnvelopeV1 {
     }
 }
 
-/// Trait that every Lunar-OS application component must implement to support state hydration.
 pub trait AppSnapshot: Send + Sync {
-    /// Capture the current component state into a serializable JSON value.
     fn capture_snapshot(&self) -> serde_json::Value;
 
-    /// Hydrate the component state from a snapshot payload.
     fn hydrate_snapshot(&mut self, payload: &serde_json::Value) -> Result<(), String>;
 }
 

@@ -1,8 +1,3 @@
-//! Per-scene camera persistence for web and native frontend builds.
-//!
-//! The backend owns scene data. This module owns only the frontend camera view,
-//! encoded through one versioned serde DTO so every platform has the same
-//! compatibility and corruption policy.
 
 use lunar_stellar_core::SceneCamera;
 use serde::{Deserialize, Serialize};
@@ -107,8 +102,6 @@ pub fn load_scene_camera(scene_id: &str) -> Option<SceneCamera> {
 
 #[cfg(not(feature = "web"))]
 fn camera_file_name(scene_id: &str) -> String {
-    // Hex makes every scene identifier a single safe filename component and
-    // avoids traversal/collision surprises without an extra dependency.
     let encoded: String = scene_id
         .as_bytes()
         .iter()

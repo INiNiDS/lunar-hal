@@ -1,13 +1,3 @@
-//! Anonymous TAP adapter for the NASA Exoplanet Archive `PSCompPars`
-//! (Planetary Systems Composite Parameters) table.
-//!
-//! Contract notes (stage 4A):
-//! * Endpoint is public and works without any API key (`SourceAuth::Anonymous`).
-//! * This source contributes *enrichment features* (host-star astrophysical
-//!   parameters) only — it must never replace or define the stellar backbone
-//!   rows themselves, hence `enters_stellar_backbone = false`.
-//! * Deterministic parsing: identical CSV bytes always yield identical rows,
-//!   which lets CI replay the recorded fixture instead of hitting NASA.
 
 use crate::sources::{SourceAdapter, SourceAuth, SourceProvenance};
 
@@ -15,7 +5,6 @@ pub const PS_COMPPARS_TAP_SYNC_URL: &str = "https://exoplanetarchive.ipac.caltec
 
 pub const ADAPTER_ID: &str = "nasa_exoplanet_tap_pscomppars_v1";
 
-/// Frozen default query used by the collector; part of provenance hashing.
 pub fn adql_query(top_rows: usize) -> String {
     format!(
         "select top {top_rows} pl_name,hostname,ra,dec,sy_plx,sy_dist,st_teff,st_rad,st_mass,st_lum,disc_year from pscomppars"
@@ -28,9 +17,7 @@ pub struct NasaExoplanetRecord {
     pub hostname: String,
     pub ra_deg: f64,
     pub dec_deg: f64,
-    /// Stellar parallax, mas (may be absent).
     pub parallax_mas: Option<f64>,
-    /// Distance in pc when archive already computed it.
     pub distance_pc: Option<f64>,
     pub teff_k: Option<f64>,
     pub radius_rsun: Option<f64>,
@@ -48,7 +35,6 @@ fn parse_opt_f64(s: &str) -> Option<f64> {
     v.is_finite().then_some(v)
 }
 
-/// Splits one CSV line honoring double-quoted fields ("a,b" stays one field).
 fn split_csv_line(line: &str) -> Vec<String> {
     let mut fields = Vec::new();
     let mut cur = String::new();
@@ -79,8 +65,6 @@ fn split_csv_line(line: &str) -> Vec<String> {
     fields
 }
 
-/// Public alias so sibling adapters (IRSA/MAST-CSV paths) reuse the exact same
-/// quoted-CSV splitting semantics instead of duplicating them.
 pub fn split_csv_line_public(line: &str) -> Vec<String> {
     split_csv_line(line)
 }
@@ -91,8 +75,6 @@ fn header_index(cols: &[String], name: &str) -> usize {
         .unwrap_or(usize::MAX)
 }
 
-/// Parses the PSCompPars TAP/CSV payload. Returns an error when required
-/// identifier/coordinate columns are missing or a row is unparseable.
 pub fn parse_pscomppars_csv(csv: &str) -> Result<Vec<NasaExoplanetRecord>, String> {
     let mut lines = csv.lines();
     let header_line = lines.next().ok_or("empty pscomppars payload")?;
@@ -129,8 +111,6 @@ pub fn parse_pscomppars_csv(csv: &str) -> Result<Vec<NasaExoplanetRecord>, Strin
         let get = |i: usize| f.get(i).map(String::as_str).unwrap_or("");
         let name = get(i_pl).trim().to_string();
         let host = get(i_host).trim().to_string();
-        // RA/Dec are mandatory per contract; ID-bearing rows without them are
-        // reported instead of silently dropped (ambiguity diagnostics later).
         let (Some(ra), Some(dec)) = (parse_opt_f64(get(i_ra)), parse_opt_f64(get(i_dec))) else {
             return Err(format!(
                 "pscomppars row {} ({name}/{host}) has unparseable coordinates",
@@ -180,8 +160,6 @@ impl SourceAdapter for NasaExoplanetAdapter {
     }
 }
 
-/// Live anonymous download helper (used by CLI/collector paths; CI replays the
-/// recorded fixture instead).
 pub fn fetch_sync_csv(query: &str) -> Result<String, String> {
     use std::io::Read;
     let url = format!(

@@ -1,13 +1,3 @@
-//! Stage 7: GNN sparse edge representation and parity test.
-//!
-//! Asserts that:
-//! 1. `GraphBatch::to_dense_adjacency` produces the exact same adjacency matrix
-//!    as `compute_knn_adjacency`.
-//! 2. `StellarGnn::forward_sparse` produces numerically equivalent outputs to
-//!    the dense `forward` pass within floating-point tolerance (< 1e-4).
-//! 3. Output shapes, determinism, and finiteness gates hold on the sparse path.
-//! 4. Deterministic head under `sample_stellar_dynamics` returns mean velocities
-//!    without applying stochastic noise.
 
 use burn::backend::NdArray;
 use burn::prelude::*;
@@ -151,7 +141,6 @@ fn deterministic_head_sampling_returns_mean_without_noise() {
         &device,
     );
 
-    // With temperature > 0.0, deterministic head must still return exact mean (no random noise).
     let sampled = sample_stellar_dynamics(deterministic_output.clone(), 1.0, &device);
     let orig_vals: Vec<f32> = deterministic_output.into_data().to_vec().unwrap();
     let sampled_vals: Vec<f32> = sampled.into_data().to_vec().unwrap();

@@ -1,8 +1,3 @@
-//! Runtime configuration for the standalone stellar frontend.
-//!
-//! The launcher supplies `LUNAR_BACKEND_URL`. Web and desktop default to the
-//! host loopback address, while Android defaults to the emulator bridge. A
-//! physical device must receive an explicit reachable host URL.
 
 use lunar_utils::env::{
     DEFAULT_ANDROID_BACKEND_URL, DEFAULT_BACKEND_URL, get_frontend_backend_url,
@@ -26,10 +21,6 @@ impl RuntimeConfig {
             DEFAULT_BACKEND_URL
         };
 
-        // A web bundle and Android APK need the launcher-provided build-time
-        // value. Native desktop runs can additionally receive it at process
-        // startup. Runtime process configuration takes precedence when both
-        // sources exist.
         let backend_url = std::env::var("LUNAR_BACKEND_URL")
             .ok()
             .or_else(|| option_env!("LUNAR_BACKEND_URL").map(str::to_owned))
@@ -65,8 +56,6 @@ impl RuntimeConfig {
         Self::resolve_from_location(&protocol, &hostname)
     }
 
-    /// Resolves a browser-addressable backend URL for a given protocol and hostname,
-    /// validating that the scheme is HTTP or HTTPS and the host is non-empty.
     pub fn resolve_from_location(protocol: &str, hostname: &str) -> Option<String> {
         if protocol != "http:" && protocol != "https:" && protocol != "http" && protocol != "https"
         {

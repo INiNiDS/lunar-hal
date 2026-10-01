@@ -1,7 +1,3 @@
-//! Backend-owned live scene DTOs.
-//!
-//! Mutations are expressed as backend events so an embedded frontend can
-//! update from its own snapshot/event stream without accepting parent commands.
 
 use crate::{GallerySource, ResponseStar, StarModelInputs, StarScene};
 use serde::{Deserialize, Serialize};
@@ -66,7 +62,6 @@ fn one() -> u32 {
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct CreateSceneStarRequest {
     pub request_id: String,
-    /// A direct custom star, used only when `gallery_id` is absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub star: Option<ResponseStar>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -100,8 +95,6 @@ pub struct ClearSceneRequest {
     pub request_id: String,
 }
 
-/// Optional, strictly UI-only event an embedded frontend may report to WebOS.
-/// No mutation variant is intentionally present here.
 #[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum FrontendUiEvent {

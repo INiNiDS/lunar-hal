@@ -1,10 +1,3 @@
-//! Regenerates the frozen `stellar-e2e-v1` fixture byte-identically:
-//! `cargo run -p lnai-training --example gen-fixture`.
-//!
-//! Writes `ai/fixtures/stellar-e2e-v1/{fixture.parquet,manifest.json}`.
-//! The manifest records the SHA-256 of the parquet bytes, the spatial tiles
-//! and every source ID so CI can prove fixture integrity and train/eval
-//! disjointness (Stage 3, tasks 1-2).
 
 use polars::prelude::*;
 use std::fs::File;
@@ -17,7 +10,6 @@ use lnai_training::e2e::{
 const ROWS_PER_TILE: usize = 64;
 pub const FIXTURE_SEED: u64 = 0x05E2E101;
 
-/// Deterministic LCG; no external rand dependency needed for reproducibility.
 struct Lcg(u64);
 
 impl Lcg {
@@ -31,8 +23,6 @@ impl Lcg {
 }
 
 fn schema_hash() -> String {
-    // Deterministic digest of the canonical schema definition (names, types,
-    // nullability, units). Any structural change alters the fixture manifest.
     let mut buf: Vec<u8> = Vec::new();
     for column in lnai_data::schema::canonical_columns() {
         buf.extend_from_slice(column.name.as_bytes());

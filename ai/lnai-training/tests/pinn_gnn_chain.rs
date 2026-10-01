@@ -1,11 +1,3 @@
-//! Stage 3: cross-crate chain proof — PINN positions feed the GNN graph,
-//! whose readout must decode into the frozen vx/vy/vz kinematics contract.
-//!
-//! Stage 6.8: no synthetic noise anywhere in the chain. GNN node rows are
-//! assembled from real PINN outputs plus the PINN inputs they derive from
-//! (`[log_teff, log_rad, log_mass, log_lum, mg, x, y, z]` — the production
-//! layout), and every random draw is seeded, so the chain is exactly
-//! reproducible.
 
 use burn::backend::NdArray;
 use burn::prelude::*;
@@ -21,14 +13,10 @@ type B = NdArray;
 const SEED: u64 = 2024;
 const BATCH: usize = 8;
 
-/// One full PINN → graph → GNN pass. All randomness (input sample, both
-/// model inits) derives from `SEED` via [`Backend::seed`], so two calls
-/// must return bit-identical velocities.
 fn run_chain() -> Vec<[f32; 3]> {
     let device = burn::backend::ndarray::NdArrayDevice::default();
     B::seed(&device, SEED);
 
-    // 1) PINN head consumes [x, y, z, bp_rp, M_G] and yields 4 log10 targets.
     let pinn = StellarMlpConfig {
         hidden: 512,
         hidden2: 256,
@@ -44,10 +32,9 @@ fn run_chain() -> Vec<[f32; 3]> {
         (BATCH, 4),
         "PINN output contract is [N, 4]"
     );
-    let _ = fourier_encode(xs.clone().slice([0..1, 0..3]), 8); // preprocessing in the loop compiles
+    let _ = fourier_encode(xs.clone().slice([0..1, 0..3]), 8);
 
-    // 2) GNN node rows from the model path only: PINN log-targets plus the
-    // source mg and xyz columns — no Tensor::random nodes.
+
     let nodes = Tensor::cat(
         vec![
             targets,
@@ -58,7 +45,6 @@ fn run_chain() -> Vec<[f32; 3]> {
     );
     assert_eq!(nodes.dims(), [batch, GNN_INPUT_DIM]);
 
-    // 3) k-NN adjacency over the PINN-derived positions (pure CPU).
     let coord_rows: Vec<[f32; 3]> = {
         let floats = nodes
             .clone()
@@ -78,7 +64,6 @@ fn run_chain() -> Vec<[f32; 3]> {
         &device,
     );
 
-    // 4) GNN readout emits exactly 3 velocity components per node.
     let gnn = StellarGnnConfig {
         input_dim: GNN_INPUT_DIM,
         hidden_dim: 16,
@@ -90,7 +75,6 @@ fn run_chain() -> Vec<[f32; 3]> {
     let [_n, vdim] = velocities.dims();
     assert_eq!(vdim, 3, "GNN readout contract is vx/vy/vz");
 
-    // 5) Every raw row decodes into the typed KinematicsOutput.
     let vel_data = velocities.into_data();
     let floats = vel_data.as_slice::<f32>().expect("f32 data").to_vec();
     floats.chunks(3).map(|c| [c[0], c[1], c[2]]).collect()
@@ -102,7 +86,6 @@ fn pinn_to_gnn_chain_produces_contracted_velocities() {
     let second = run_chain();
     assert_eq!(first.len(), BATCH);
 
-    // Finite gate: every component decodes into the frozen contract.
     let decoded: Vec<KinematicsOutput> = first
         .iter()
         .map(|row| KinematicsOutput::from_row(row))
@@ -113,7 +96,6 @@ fn pinn_to_gnn_chain_produces_contracted_velocities() {
         assert!(out.vx.is_finite() && out.vy.is_finite() && out.vz.is_finite());
     }
 
-    // Deterministic gate: same seed → identical chain outputs.
     assert_eq!(first, second, "seeded chain must reproduce exactly");
 
     let mut report = ReportV1::new(ReportKind::E2E, "pinn_gnn_chain", identity_from_env(SEED));

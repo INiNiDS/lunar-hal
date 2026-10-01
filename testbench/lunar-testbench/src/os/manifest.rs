@@ -34,9 +34,7 @@ impl AppCategory {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WindowContentMode {
-    /// Document-like page with internal vertical scroll.
     Scroll,
-    /// iframe/canvas occupies all available area, scroll forbidden.
     Fill,
 }
 
@@ -49,9 +47,6 @@ pub struct WindowSizeSpec {
 }
 
 impl WindowSizeSpec {
-    /// Fit an initial window rect into the usable client area. When the client
-    /// area is smaller than the app minimum, the viewport wins so the window
-    /// stays reachable instead of overflowing beyond the screen.
     pub fn fit_to_available_space(self, available_width: f64, available_height: f64) -> (f64, f64) {
         let available_width = available_width.max(0.0);
         let available_height = available_height.max(0.0);

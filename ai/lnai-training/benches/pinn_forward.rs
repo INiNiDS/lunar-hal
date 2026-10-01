@@ -1,6 +1,3 @@
-//! PINN forward-pass microbench: Fourier features + 6-block MLP on CPU.
-//!
-//! Run: `cargo bench -p lnai-training --bench pinn_forward`
 
 use burn::backend::NdArray;
 use burn::prelude::*;
@@ -43,7 +40,6 @@ fn bench_pinn_forward(c: &mut Criterion) {
         b.iter(|| black_box(fourier_encode(xs.clone(), 8)))
     });
 
-    // Stage 7: same microbench through the device-resident cache.
     c.bench_function("pinn_fourier_encode_cached_1024", |b| {
         let xs = random_input(1024, 3, 7);
         b.iter(|| black_box(fourier_encode_cached(xs.clone(), 8)))

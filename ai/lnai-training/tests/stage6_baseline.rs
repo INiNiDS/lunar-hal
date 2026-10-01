@@ -1,11 +1,3 @@
-//! Stage 6.8: living contract baseline; not a trained-model quality approval.
-//!
-//! `ai/fixtures/stage6-approved-baseline.json` records the frozen
-//! contract-suite state at the approved commit. This test pins it:
-//! the record must parse and cover all six frozen suites, and the key
-//! Stage 6 behaviours (finite metrics, determinism, star-disjoint
-//! splits, spec gates) are re-asserted through the real library paths so
-//! a regression fails here, not in production.
 
 use burn::backend::NdArray;
 use burn::prelude::*;
@@ -90,13 +82,11 @@ fn baseline_pins_finite_deterministic_pinn_metrics() {
 #[test]
 fn baseline_pins_gnn_total_and_siren_conditioned_loss_finite() {
     let device = burn::backend::ndarray::NdArrayDevice::default();
-    // GNN: two-node group through the unified total (deterministic head).
     let pred: Tensor<B, 2> = Tensor::from_floats([[1.0, 2.0, 3.0], [0.5, -1.0, 2.0]], &device);
     let targets: Tensor<B, 2> = Tensor::from_floats([[1.1, 1.9, 3.2], [0.4, -1.2, 2.1]], &device);
     let total: f32 =
         lnai_training::gnn::loss::compute_gnn_total_loss(pred, targets, 0.05, 0.0).into_scalar();
     assert!(total.is_finite() && total >= 0.0, "finite gate: {total}");
-    // SIREN: conditioned image loss is finite and target-aware.
     let pred: Tensor<B, 2> = Tensor::from_floats([[0.8, 0.2, 0.4]], &device);
     let truth: Tensor<B, 2> = Tensor::from_floats([[0.7, 0.3, 0.5]], &device);
     let cond: Tensor<B, 2> = Tensor::from_floats([[1.5, 0.0, 0.0]], &device);

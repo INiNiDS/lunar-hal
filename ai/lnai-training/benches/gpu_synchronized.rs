@@ -1,13 +1,3 @@
-//! Synchronized GPU harness (report-only, Stage 3 task 7).
-//!
-//! Unlike the CPU benches, every iteration here ends with an explicit
-//! device-to-host readback so timings include the full GPU pipeline and are
-//! not hidden by async execution. Compiled **only** with
-//! `--features gpu-harness` and intended for the nightly/manual GPU runner:
-//!
-//! ```bash
-//! cargo bench -p lnai-training --features gpu-harness --bench gpu_synchronized
-//! ```
 
 #![cfg(feature = "gpu-harness")]
 
@@ -18,14 +8,8 @@ use std::hint::black_box;
 
 use lnai_models::{StellarMlpConfig, StellarSirenConfig};
 
-// Stage 7: plain inference backend, not Autodiff. A forward measured
-// under Autodiff retains a backward graph per iteration, leaking VRAM
-// until allocation fails; production serving never runs Autodiff.
 type B = Cuda;
 
-/// Runs `iterations` forwards and forces a synchronization each iteration by
-/// reading one element back to the host. Returns the total [`Duration`]
-/// for all iterations (criterion `iter_custom` contract).
 fn synchronized_forward(
     xs: Tensor<B, 2>,
     run: impl Fn(Tensor<B, 2>) -> Tensor<B, 2>,
@@ -34,7 +18,6 @@ fn synchronized_forward(
     let start = std::time::Instant::now();
     for _ in 0..iterations {
         let out = run(xs.clone());
-        // Explicit readback = device synchronization.
         black_box(out.slice([0..1, 0..1]).into_scalar());
     }
     start.elapsed()

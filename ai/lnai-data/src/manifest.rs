@@ -2,35 +2,18 @@ use lunar_utils::time::current_time_ms;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
-/// Version of the manifest structure itself.
-/// Tracks changes to how metadata is stored, independent of the data schema.
-///
-/// Changelog:
-/// * 1.1.0 — additive: `ShardState::{subdivided_into, row_limit_hit}` so
-///   adaptive subdivision is explicitly reflected in the manifest
-///   (`#[serde(default)]` keeps 1.0.0 files loadable).
 pub const MANIFEST_SCHEMA_VERSION: &str = "1.1.0";
 
-/// Top-level manifest tracking the state of the entire dataset collection process.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct DatasetManifestV1 {
-    /// Version of this manifest structure
     pub version: String,
-    /// Hash of the canonical schema (from schema.rs)
     pub schema_hash: String,
-    /// Hash of the query parameters used for collection (e.g., ADQL query string)
     pub query_hash: String,
-    /// Data source release identifier (e.g., "Gaia DR3")
     pub source_release: String,
-    /// Total rows across all verified shards
     pub total_rows: u64,
-    /// Global SHA-256 checksum of the final assembled dataset
     pub checksum: String,
-    /// State of individual RA/Dec shards
     pub shards: Vec<ShardState>,
-    /// Manifest creation timestamp (ms since UNIX_EPOCH)
     pub created_ms: u64,
-    /// Last modification timestamp (ms since UNIX_EPOCH)
     pub updated_ms: u64,
 }
 
@@ -43,15 +26,14 @@ impl DatasetManifestV1 {
             query_hash: query_hash.to_string(),
             source_release: source_release.to_string(),
             total_rows: 0,
-            checksum: String::new(), // Empty until fully assembled
+            checksum: String::new(),
+
             shards: Vec::new(),
             created_ms: now_ms,
             updated_ms: now_ms,
         }
     }
 
-    /// Updates the total row count and global checksum, typically called after
-    /// all shards have successfully reached the `Verified` state.
     pub fn finalize(&mut self, global_checksum: &str) {
         self.total_rows = self.shards.iter().map(|s| s.row_count).sum();
         self.checksum = global_checksum.to_string();
@@ -59,32 +41,19 @@ impl DatasetManifestV1 {
     }
 }
 
-/// State and metadata for an individual spatial shard (e.g., a specific RA/Dec tile).
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct ShardState {
-    /// Unique identifier for the shard (e.g., "ra_000_010_dec_-90_-80")
     pub shard_id: String,
-    /// Right Ascension range [start, end) in degrees
     pub ra_range: (f32, f32),
-    /// Declination range [start, end) in degrees
     pub dec_range: (f32, f32),
-    /// Number of rows downloaded/verified in this shard
     pub row_count: u64,
-    /// SHA-256 checksum of the shard's raw data file
     pub checksum: String,
-    /// Current state in the download/processing state machine
     pub status: ShardStatus,
-    /// Number of failed attempts for resume/recovery logic
     pub retries: u32,
-    /// Timestamp of the last state change (ms since UNIX_EPOCH)
     pub last_attempt_ms: Option<u64>,
-    /// Bytes downloaded so far (for resume after interrupted writes)
     pub bytes_downloaded: u64,
-    /// Child shard ids this shard was adaptively subdivided into.
     #[serde(default)]
     pub subdivided_into: Vec<String>,
-    /// Set when the source returned more rows than the shard row budget,
-    /// forcing subdivision.
     #[serde(default)]
     pub row_limit_hit: bool,
 }
@@ -106,8 +75,6 @@ impl ShardState {
         }
     }
 
-    /// Attempts to transition the shard to a new state.
-    /// Enforces the state machine rules. Returns an error on invalid transitions.
     pub fn transition_to(&mut self, new_status: ShardStatus) -> Result<(), String> {
         if !self.status.can_transition_to(&new_status) {
             return Err(format!(
@@ -116,12 +83,10 @@ impl ShardState {
             ));
         }
 
-        // Increment retries if entering a Failed state
         if matches!(new_status, ShardStatus::Failed) {
             self.retries += 1;
         }
 
-        // Update timestamp if entering an active state
         if matches!(
             new_status,
             ShardStatus::Downloading | ShardStatus::Verifying
@@ -134,34 +99,18 @@ impl ShardState {
     }
 }
 
-/// State machine for shard collection and processing.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ShardStatus {
-    /// Initial state, waiting to be picked up by a worker
     Pending,
-    /// Actively downloading data
     Downloading,
-    /// Download finished, waiting for checksum verification
     Downloaded,
-    /// Actively verifying checksum and row count
     Verifying,
-    /// Successfully verified and ready for assembly
     Verified,
-    /// Failed (network error, checksum mismatch, etc.), eligible for retry
     Failed,
 }
 
 impl ShardStatus {
-    /// Defines the valid state transitions for the state machine.
-    ///
-    /// Allowed transitions:
-    /// Pending -> Downloading
-    /// Downloading -> Downloaded | Failed
-    /// Downloaded -> Verifying | Failed
-    /// Verifying -> Verified | Failed
-    /// Failed -> Pending (retry logic)
-    /// Verified -> Verifying (re-verification if needed, though rare)
     fn can_transition_to(&self, new_status: &ShardStatus) -> bool {
         use ShardStatus::*;
         match (self, new_status) {
@@ -192,8 +141,6 @@ impl fmt::Display for ShardStatus {
     }
 }
 
-/// Checksum policy for shards and the final dataset.
-/// Currently enforced as SHA-256.
 pub const CHECKSUM_ALGORITHM: &str = "sha256";
 
 #[cfg(test)]
@@ -223,8 +170,6 @@ mod tests {
         assert_eq!(back, manifest);
     }
 
-    /// Manifest 1.1.0 must still load manifests written under 1.0.0
-    /// (additive fields are `#[serde(default)]`).
     #[test]
     fn manifest_v1_0_0_json_still_loads_in_v1_1_0() {
         const V100: &str = r#"{

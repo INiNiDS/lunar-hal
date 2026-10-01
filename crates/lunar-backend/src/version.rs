@@ -1,5 +1,3 @@
-//! Stage 6.7: model registry serving surface — exact artifact versions
-//! (`GET /version`) and controlled reload (`POST /models/reload`).
 
 use axum::{Json, http::StatusCode, response::IntoResponse};
 use lnai_training::artifacts::{RegisteredArtifact, RegistryStatus};
@@ -77,9 +75,6 @@ fn entry_info(entry: RegisteredArtifact) -> ModelVersionInfo {
     }
 }
 
-/// `GET /version`: service identity plus the exact artifact version of
-/// every registry entry (exit gate: "API показывает точную artifact
-/// version").
 pub async fn version() -> Json<VersionResponse> {
     let models = registry_snapshot()
         .await
@@ -116,9 +111,6 @@ fn reload_body(report: ReloadReport) -> ReloadResponse {
     }
 }
 
-/// `POST /models/reload`: controlled reload. Invalid bundles refuse the
-/// whole reload (409) with zero state change; otherwise dir-loaded models
-/// are dropped and lazily reloaded on next use.
 pub async fn reload() -> impl IntoResponse {
     let report = reload_models().await;
     let status = if report.refused.is_empty() {

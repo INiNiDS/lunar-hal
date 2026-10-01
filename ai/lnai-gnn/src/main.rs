@@ -1,4 +1,3 @@
-//! Stage 5: GNN worker — thin compatibility wrapper around `lnai-training`.
 
 mod args;
 

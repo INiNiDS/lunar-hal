@@ -55,19 +55,15 @@ async fn main() -> Result<()> {
             "/jobs/cancel/{id}",
             post(cancel_job_by_path).get(cancel_job_by_path),
         )
-        // Stage 5 canonical typed routes (task 10).
         .route("/jobs/training", post(ai_jobs::start_training))
         .route("/jobs/evaluation", post(ai_jobs::start_evaluation))
         .route("/jobs/benchmark", post(ai_jobs::start_benchmark))
         .route("/jobs/events/{id}", get(ai_jobs::job_typed_events))
-        // Stage 10 reports routes.
         .route(
             "/reports",
             get(reports::list_reports).post(reports::create_report),
         )
         .route("/reports/{id}", get(reports::get_report))
-        // Compatibility aliases: old routes stay, but spawn through the
-        // same typed spec path (no separate implementation).
         .route("/jobs/train", post(jobs::start_train))
         .route("/jobs/validate", post(jobs::start_validate))
         .route("/data/status", get(data_jobs::get_status))

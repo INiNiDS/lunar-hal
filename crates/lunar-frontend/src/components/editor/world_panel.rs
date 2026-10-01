@@ -150,7 +150,6 @@ pub fn WorldCreator(on_cancel: EventHandler<()>, on_created: EventHandler<World>
     let game = use_game();
     let name = use_signal(String::new);
 
-    // Initialize coordinate signals directly inside their closures
     let mut cx = use_signal(|| {
         let mut rng = 0x9E3779B97F4A7C15;
         let next_f32 = |state: &mut u64| {

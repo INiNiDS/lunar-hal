@@ -9,19 +9,12 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-/// Default per-shard row budget requested with ADQL `TOP`. When the source
-/// returns more rows than this, the scheduler subdivides the shard.
 pub const DEFAULT_TARGET_ROWS_PER_SHARD: usize = 200_000;
 
-/// RA band width of a top-level shard in degrees. The canonical 360-degree
-/// collection is planned as adjacent `[degree, degree + 1)` strips.
 pub const TOP_LEVEL_RA_WIDTH_DEG: f64 = 1.0;
 
-/// Depth cap for adaptive subdivision (safety against pathological skies).
 pub const MAX_SUBDIVIDE_DEPTH: u32 = 6;
 
-/// Upper bound of recorded lifetime attempts per shard; --retry-failed stops
-/// accepting shards past this even across many separate runs.
 pub const MAX_LIFETIME_RETRIES_PER_SHARD: u32 = 8;
 
 const MIN_TARGET_ROWS_PER_SHARD: usize = 10;
@@ -40,22 +33,14 @@ fn hex_digest(bytes: &[u8]) -> String {
 
 #[derive(Debug, Clone)]
 pub struct CollectConfig {
-    /// Directory holding `manifest.json` and downloaded shard files.
     pub out_dir: PathBuf,
-    /// Inclusive-exclusive RA range collected, in degrees.
     pub ra_start_deg: f64,
     pub ra_end_deg: f64,
-    /// Brightness cut applied server-side; part of the manifest query hash.
     pub mag_limit_g: f64,
-    /// RUWE quality cut mirrored from the legacy pipeline.
     pub max_ruwe: f64,
-    /// Row budget that triggers adaptive subdivision when exceeded.
     pub target_rows_per_shard: usize,
-    /// Bounded number of concurrent downloads (worker threads).
     pub concurrency: usize,
-    /// Base delay for exponential backoff between retries, in ms.
     pub retry_backoff_ms_base: u64,
-    /// Retry attempts per shard before it is left in `Failed`.
     pub retry_max_attempts: u32,
 }
 
@@ -76,8 +61,6 @@ impl Default for CollectConfig {
 }
 
 impl CollectConfig {
-    /// Stable string hashed into the manifest as `query_hash`: any change to
-    /// cuts or planning constants invalidates previous collections.
     pub fn query_hash(&self) -> String {
         let params = format!(
             "base_v1|ra={:.3}..{:.3}|mag_g<={:.2}|ruwe<={:.3}|top={}",
@@ -93,14 +76,10 @@ impl CollectConfig {
     }
 }
 
-/// Errors surfaced by [`ShardFetcher`] implementations.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FetchError {
-    /// Transport/HTTP failure; retriable.
     Http(String),
-    /// Server answered more rows than the shard budget; schedulers must split.
     TooManyRows { limit: usize },
-    /// Unexpected payload shape; not retried automatically.
     Protocol(String),
 }
 
@@ -116,16 +95,10 @@ impl std::fmt::Display for FetchError {
     }
 }
 
-/// Abstraction over the actual network download so the whole collector state
-/// machine is testable offline with replayed fixtures.
 pub trait ShardFetcher: Send + Sync {
-    /// Streams the rows produced by `query` into `dest` (a temporary path).
-    /// Returns the number of data rows written on success.
     fn fetch(&self, query: &str, dest: &Path) -> Result<u64, FetchError>;
 }
 
-/// Generates the ADQL query for one shard. Public so tests can assert the
-/// exact contract sent to the archive (part of `query_hash` stability).
 pub fn adql_query_for_shard(shard: &PlannedShard, cfg: &CollectConfig) -> String {
     format!(
         "SELECT TOP {} \
@@ -157,9 +130,6 @@ pub fn adql_query_for_shard(shard: &PlannedShard, cfg: &CollectConfig) -> String
     )
 }
 
-/// A concrete spatial chunk to download: RA range `[start, end)` crossed with a
-/// declination band. Top-level shards span the full Dec column; dense regions
-/// get subdivided adaptively.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlannedShard {
     pub id: String,
@@ -177,8 +147,6 @@ fn fmt_id(ra: (f64, f64), dec: (f64, f64)) -> String {
     format!("ra_{:.0}_{:.0}_dec{:+.1}_{:+.1}", ra.0, ra.1, dec.0, dec.1)
 }
 
-/// Plans all top-level shards covering `[ra_start, ra_end)` degrees: one
-/// shard per RA degree, spanning Dec `[-90, 90)`.
 pub fn plan_top_level_shards(cfg: &CollectConfig) -> Vec<PlannedShard> {
     let mut shards = Vec::new();
     let mut ra = cfg.ra_start_deg;
@@ -194,9 +162,6 @@ pub fn plan_top_level_shards(cfg: &CollectConfig) -> Vec<PlannedShard> {
     shards
 }
 
-/// Subdivides a shard into smaller children, deterministically: first by
-/// declination bands (no wider than 10 degrees), then, once Dec is narrow, by
-/// halving the RA extent ("adaptive split по Dec / меньшему RA").
 pub fn subdivide_shard(parent: &PlannedShard, depth: u32) -> Vec<PlannedShard> {
     const SUBDIVIDE_DEC_BAND: f64 = 10.0;
     let dec_span = parent.dec_range.1 - parent.dec_range.0;
@@ -242,7 +207,6 @@ pub fn subdivide_shard(parent: &PlannedShard, depth: u32) -> Vec<PlannedShard> {
         .collect()
 }
 
-/// Outcome of one collection run, used by callers/tests and CLI reports.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct CollectReport {
     pub fetched: u32,
@@ -251,27 +215,14 @@ pub struct CollectReport {
     pub failed: u32,
 }
 
-/// High level behavior switches for [`run_collection`].
 #[derive(Debug, Clone, Default)]
 pub struct CollectOptions {
-    /// Re-attempt shards currently in `Failed` (default they are skipped).
     pub retry_failed: bool,
-    /// Recompute checksums/row counts of `Verified` shards instead of skipping.
     pub verify: bool,
-    /// Restrict work to shards whose id contains this substring.
     pub only: Option<String>,
-    /// Test hook: simulate a process interruption after N successful shards.
     pub test_interrupt_after_n_shards: u32,
 }
 
-/// Runs/resumes the whole collection against `fetcher`.
-///
-/// Guarantees (tested):
-/// * already-`Verified` shards are never re-downloaded unless `verify`;
-/// * `Failed` shards are skipped without `retry_failed`;
-/// * `TooManyRows` shards are replaced by deterministic children recorded in
-///   the manifest (`subdivided_into`, `row_limit_hit` — пункт 12);
-/// * shard files are written to unique temp paths and atomically renamed.
 pub fn run_collection(
     cfg: CollectConfig,
     fetcher: Arc<dyn ShardFetcher>,
@@ -294,8 +245,6 @@ pub fn run_collection(
     persist_manifest(&manifest, &manifest_path)?;
 
     let manifest = Arc::new(Mutex::new(manifest));
-    // After the simulated-crash budget is spent, every further download of
-    // this run fails with a transport error (test hook; 0 disables it).
     let interrupt_active = opts.test_interrupt_after_n_shards > 0;
     let interrupt_left = Arc::new(AtomicU32::new(opts.test_interrupt_after_n_shards));
     let success_counter = Arc::new(AtomicU64::new(0));
@@ -316,11 +265,11 @@ pub fn run_collection(
             &manifest_path,
         )?;
         if !progress {
-            break; // no forward movement (all remaining failing) — avoid spin
+            break;
+
         }
     }
 
-    // Final snapshot + honest statistics derived from the manifest itself.
     let manifest = Arc::try_unwrap(manifest)
         .map_err(|_| "manifest lock leaked".to_string())?
         .into_inner()
@@ -382,8 +331,6 @@ fn ensure_planned_shards_registered(
     Ok(())
 }
 
-/// Returns shards ready to work on this pass; also applies `verify` re-checks
-/// and `retry_failed` resets. Empty vec = done.
 fn select_batch(
     manifest: &Arc<Mutex<DatasetManifestV1>>,
     cfg: &CollectConfig,
@@ -435,8 +382,6 @@ fn select_batch(
                 | ShardStatus::Downloading
                 | ShardStatus::Downloaded
                 | ShardStatus::Verifying => {
-                    // Downloaded/Downloading/Verifying can only appear after an
-                    // external crash; all recover by starting the work again.
                     if shard.status != ShardStatus::Pending {
                         shard.status = ShardStatus::Pending;
                     }
@@ -451,8 +396,6 @@ fn select_batch(
         persist_locked(manifest, manifest_path)?;
     }
 
-    // Verify-mode re-checks above are pure file operations: no network runs
-    // during --verify.
     Ok(work)
 }
 
@@ -471,8 +414,6 @@ fn sha256_stream(file: fs::File) -> String {
     hex_digest(h.finalize().as_slice())
 }
 
-/// Processes `batch` with bounded concurrency. Returns whether any forward
-/// progress happened (download completed or subdivision registered).
 #[allow(clippy::too_many_arguments)]
 fn process_batch(
     manifest: &Arc<Mutex<DatasetManifestV1>>,
@@ -520,8 +461,6 @@ fn process_batch(
                 }
                 let _ = worker_id;
                 if persist_locked(&manifest, &manifest_path).is_err() {
-                    // Keep working; the orchestrator persists again at the end
-                    // of the pass and errors surface through poisoning checks.
                 }
             }
         }));
@@ -530,7 +469,6 @@ fn process_batch(
         h.join().map_err(|_| "worker panicked")?;
     }
     let moved = progress.load(Ordering::SeqCst) > 0;
-    // Snapshot persistence already handled by workers; make one final pass.
     {
         let m = manifest.lock().map_err(|_| "manifest poisoned")?;
         persist_manifest(&m, manifest_path)?;
@@ -542,7 +480,6 @@ enum ShardOutcome {
     Ok,
     Subdivided,
     Exhausted,
-    /// Simulated interruption fired: leave everything untouched.
     Abort,
 }
 
@@ -558,8 +495,6 @@ fn download_with_retries(
 ) -> ShardOutcome {
     let mut attempt: u32 = 0;
     loop {
-        // Mark active. A previous attempt inside this very call may have left
-        // the shard in `Failed`; recover through `Pending` first.
         {
             let mut m = manifest.lock().unwrap();
             if let Some(s) = m.shards.iter_mut().find(|s| s.shard_id == shard_id) {
@@ -588,11 +523,6 @@ fn download_with_retries(
             (planned, file_path, tmp_path)
         };
 
-        // Simulated interruption (test hook): while the injected budget lasts
-        // downloads proceed normally; afterwards every download fails with a
-        // transport error for the remainder of this run_collection call.
-        // Simulated interruption behaves like an abrupt process kill: no
-        // status changes, no retry accounting, abort the whole pass.
         if interrupt_active && interrupt_left.load(Ordering::SeqCst) == 0 {
             return ShardOutcome::Abort;
         }
@@ -631,7 +561,6 @@ fn download_with_retries(
                     s.checksum = digest;
                     s.bytes_downloaded = fs::metadata(&file_path).map(|m| m.len()).unwrap_or(0);
                     s.last_attempt_ms = Some(current_ms());
-                    // Contracted chain: Downloading -> Downloaded -> Verifying -> Verified.
                     s.transition_to(ShardStatus::Downloaded).ok();
                     s.transition_to(ShardStatus::Verifying).ok();
                     s.transition_to(ShardStatus::Verified).ok();
@@ -646,7 +575,6 @@ fn download_with_retries(
                 return if subdivided {
                     ShardOutcome::Subdivided
                 } else {
-                    // Depth cap reached: leave explicit Failed state.
                     record_failure(
                         manifest,
                         shard_id,
@@ -657,7 +585,6 @@ fn download_with_retries(
             }
             Err(FetchError::Http(msg)) if msg.contains("simulated interruption") => {
                 let _ = fs::remove_file(&tmp_path);
-                // Roll the shard back to Pending exactly like a crash would.
                 let mut m = manifest.lock().unwrap();
                 if let Some(s) = m.shards.iter_mut().find(|s| s.shard_id == shard_id) {
                     if s.status == ShardStatus::Downloading {
@@ -695,8 +622,6 @@ fn record_failure(manifest: &Arc<Mutex<DatasetManifestV1>>, shard_id: &str, _msg
     }
 }
 
-/// Registers deterministic children for `shard_id`, marks the parent with
-/// `row_limit_hit` + `subdivided_into`, and returns success.
 fn subdivide_under_lock(
     manifest: &Arc<Mutex<DatasetManifestV1>>,
     shard_id: &str,
@@ -764,8 +689,6 @@ fn fetch_shard(
         return Err(FetchError::TooManyRows { limit: row_budget });
     }
     validate_tap_csv_schema(dest).map_err(FetchError::Protocol)?;
-    // Sanity: the file must parse as a CSV whose row count matches what the
-    // fetcher reported (guards against truncated transports).
     let on_disk = count_tap_csv_rows(dest).map_err(FetchError::Protocol)?;
     if on_disk != rows {
         return Err(FetchError::Protocol(format!(
@@ -817,7 +740,6 @@ fn persist_locked(manifest: &Arc<Mutex<DatasetManifestV1>>, path: &Path) -> Resu
     persist_manifest(&m, path)
 }
 
-/// Atomic JSON write (tmp + rename) so crashes never corrupt the manifest.
 fn persist_manifest(manifest: &DatasetManifestV1, path: &Path) -> Result<(), String> {
     let json = serde_json::to_string_pretty(manifest).map_err(|e| e.to_string())?;
     let tmp = path.with_extension("json.tmp");
@@ -854,10 +776,7 @@ mod tests {
         }
     }
 
-    /// Derives a stable per-shard id prefix from the RA bounds embedded in the
-    /// query so different shards produce distinct source_ids.
     fn fake_source_prefix(query: &str) -> String {
-        // "WHERE gs.ra >= X AND gs.ra < Y" — take the leading digits of each.
         let ra = query.split("gs.ra >= ").nth(1).unwrap_or("0");
         format!(
             "{}_",
@@ -917,7 +836,8 @@ mod tests {
             dec_range: (-90.0, 90.0),
         };
         let by_dec = subdivide_shard(&wide, 1);
-        assert_eq!(by_dec.len(), 18); // 180 span / 10-degree bands
+        assert_eq!(by_dec.len(), 18);
+
         assert!(by_dec.iter().all(|s| s.ra_range == (0.0, 1.0)));
 
         let narrow_dec = PlannedShard {

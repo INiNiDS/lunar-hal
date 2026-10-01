@@ -11,18 +11,10 @@ use crate::api::{
 use crate::components::ui::tokio_time_sleep;
 use crate::os::manifest::{WindowSizeSpec, app_by_id};
 
-/// Reserve space at the bottom for the Dock / safe-area.
 const DOCK_HEIGHT: f64 = 96.0;
-/// Distance from a screen edge (in px) that triggers Windows-style snapping.
 const SNAP_EDGE_PX: f64 = 16.0;
-/// Max log lines retained client-side per service (older lines are dropped;
-/// the server keeps its own ring buffer, re-fetchable via `/services/{name}/logs`).
 const MAX_CLIENT_LOGS_PER_SERVICE: usize = 500;
 
-/// Coarse boot sequence for the "black room" intro: everything starts dark,
-/// then the overhead lamp ignites once `lunar-start-backend` answers
-/// `/health`, then the desktop reveals, then the desk/dock become
-/// interactive.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BootPhase {
     Dark,
@@ -38,8 +30,6 @@ pub enum WindowLifecycle {
     Blocked,
 }
 
-/// Derive lifecycle without changing window ownership. The `WindowState` is
-/// removed only by `close_window`; a temporary dependency loss is `Blocked`.
 pub fn window_lifecycle_for(minimized: bool, missing_dependencies: &[String]) -> WindowLifecycle {
     if minimized {
         WindowLifecycle::Minimized
@@ -50,8 +40,6 @@ pub fn window_lifecycle_for(minimized: bool, missing_dependencies: &[String]) ->
     }
 }
 
-/// Resolve the browser-addressable managed frontend once, so desktop gating and
-/// the Sandbox iframe cannot disagree about which service is usable.
 pub fn managed_web_frontend_url(services: &[ServiceInfo]) -> Option<String> {
     services
         .iter()
@@ -74,8 +62,6 @@ fn restore_existing_window(windows: &mut [WindowState], app_id: &str) -> Option<
     Some(window.id)
 }
 
-/// Safe to call from a spawned task because it reads a captured signal rather
-/// than looking up a Dioxus context from outside the component render.
 pub fn is_window_lifecycle_visible(lifecycle: Option<Signal<WindowLifecycle>>) -> bool {
     lifecycle
         .map(|signal| *signal.read() == WindowLifecycle::Visible)
@@ -150,7 +136,6 @@ impl ServiceSettingsState {
     }
 }
 
-/// A single open (or minimized) OS window hosting one app/page.
 #[derive(Clone, Debug, PartialEq)]
 pub struct WindowState {
     pub id: u64,
@@ -169,7 +154,6 @@ pub struct WindowState {
     pub snapshot_payload: Option<serde_json::Value>,
 }
 
-/// Which part of a window chrome a drag/resize gesture started from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DragKind {
     Move,
@@ -183,8 +167,6 @@ pub enum DragKind {
     ResizeSW,
 }
 
-/// In-flight drag/resize gesture, tracked so a single full-viewport overlay
-/// (see `window_manager.rs`) can turn mouse moves into window rect updates.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DragOp {
     pub window_id: u64,
@@ -199,8 +181,6 @@ pub struct DragOp {
     pub min_height: f64,
 }
 
-/// Global reactive state for the Lunar-OS shell, installed into context once by
-/// [`use_provide_os_state`] and read anywhere via [`use_os_state`].
 #[derive(Clone, Copy)]
 pub struct OsState {
     pub backend_online: Signal<bool>,
@@ -367,7 +347,6 @@ impl OsState {
         self.is_app_visible(app_id) && self.are_app_dependencies_running(app_id)
     }
 
-    /// Existing windows stay reachable even when launch dependencies go down.
     pub fn has_window(&self, app_id: &str) -> bool {
         self.windows
             .read()
@@ -396,8 +375,6 @@ impl OsState {
                 self.service_action_errors.write().remove(&service.name);
             }
         }
-        // Service/platform changes alter the window lifecycle to `Blocked`;
-        // they must never destroy an already-open (possibly minimized) window.
         self.services.set(next);
     }
 
@@ -962,7 +939,6 @@ impl OsState {
             return;
         }
 
-        // Unmount window completely from DOM tree:
         self.windows.with_mut(|ws| ws.retain(|w| w.id != id));
         self.clear_transition(&instance_id);
     }
@@ -1527,25 +1503,17 @@ pub fn validate_form(
     errors
 }
 
-/// Installs [`OsState`] into context. Call exactly once, near the app root (in `Room`).
 pub fn use_provide_os_state() -> OsState {
     use_context_provider(OsState::new)
 }
 
-/// Reads the [`OsState`] previously installed by [`use_provide_os_state`].
 pub fn use_os_state() -> OsState {
     use_context::<OsState>()
 }
 
-/// Spawns the background tasks that drive the whole shell: polls `/health` to
-/// advance the boot sequence, polls `/services` + `/services/meta`, and keeps
-/// a live SSE log stream flowing into `logs`. Call exactly once, from `Room`.
 pub fn use_os_runtime() {
     let mut os = use_os_state();
 
-    // Health polling -> one-way boot sequence. Once the desktop has reached
-    // Ready, a transient backend outage may mark it offline but must not unmount
-    // WindowManager/AppHost and destroy the sessions kept by minimized windows.
     use_future(move || async move {
         let mut boot_completed = matches!(*os.boot_phase.read(), BootPhase::Ready);
         loop {
@@ -1575,7 +1543,6 @@ pub fn use_os_runtime() {
         }
     });
 
-    // Service manifest (fetched once, rarely changes) + service list polling.
     use_future(move || async move {
         if let Ok(meta) = api::services_meta().await {
             os.meta.set(meta);
@@ -1588,7 +1555,6 @@ pub fn use_os_runtime() {
         }
     });
 
-    // Live log stream, reconnecting on drop/error.
     use_future(move || async move {
         loop {
             let url = api::start_backend_logs_url();
@@ -1831,14 +1797,11 @@ mod settings_tests {
             os.register_instance_snapshot("win-1", serde_json::json!({ "cursor": 10 }));
             os.register_instance_snapshot("win-2", serde_json::json!({ "cursor": 20 }));
 
-            // Close win-1
             os.close_window(win1_id);
 
-            // win-1 is evicted from RAM and providers
             assert_eq!(os.ram_store.read().is_instance_open("win-1"), false);
             assert_eq!(os.get_instance_snapshot("win-1"), None);
 
-            // win-2 remains completely untouched
             assert_eq!(os.ram_store.read().is_instance_open("win-2"), true);
             assert_eq!(
                 os.get_instance_snapshot("win-2"),
@@ -1856,24 +1819,20 @@ mod settings_tests {
             let win1_id = os.open_new_window("log:backend", "Log 1");
             assert_eq!(os.windows.read().len(), 1);
 
-            // Minimize win1
             os.minimize_window(win1_id);
             assert_eq!(os.windows.read().len(), 0);
             assert!(os.ram_store.read().is_app_minimized("log:backend"));
 
-            // Restore via activate_instance (Dock click)
             os.activate_instance("win-1");
             assert_eq!(os.windows.read().len(), 1);
             let restored_id = os.windows.read()[0].id;
             assert!(!os.ram_store.read().is_app_minimized("log:backend"));
             assert!(!os.is_transition_in_flight("win-1"));
 
-            // Minimize again
             os.minimize_window(restored_id);
             assert_eq!(os.windows.read().len(), 0);
             assert!(os.ram_store.read().is_app_minimized("log:backend"));
 
-            // Restore via open_window (Desktop click)
             os.open_window("log:backend", "Log 1");
             assert_eq!(os.windows.read().len(), 1);
             assert!(!os.ram_store.read().is_app_minimized("log:backend"));

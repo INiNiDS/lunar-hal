@@ -1,13 +1,3 @@
-//! Stage 4A / пункт 10: JPL Horizons Solar System scene provider (anonymous).
-//!
-//! Ephemerides for Solar System bodies (planets/moons/observatories targets)
-//! rendered as *scene* rows: they must NEVER enter the stellar training
-//! backbone (`enters_stellar_backbone = false`), per the plan's P2 contract.
-//!
-//! Live endpoint: `GET {HORIZONS_URL}?format=json&COMMAND='<body>'&...` — all
-//! request parameters quoted, `QUANTITIES='1,2'` (apparent RA/Dec + range).
-//! The recorded fixture replays Uranus (799) observed from Earth center over
-//! one day at 1d step; parsing is stateless and deterministic.
 
 use crate::sources::{SourceAdapter, SourceAuth, SourceProvenance};
 use serde_json::Value;
@@ -17,7 +7,6 @@ pub const ADAPTER_ID: &str = "jpl_horizons_scene_v1";
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SceneRequest {
-    /// Horizons body code (e.g. "799" = Uranus, "301" = Moon).
     pub body_code: String,
     pub center: String,
     pub start_time: String,
@@ -38,10 +27,6 @@ impl Default for SceneRequest {
 }
 
 impl SceneRequest {
-    /// Builds the documented query string. Every value is single-quoted — the
-    /// unquoted variant triggers Horizons "Too many constants" input errors.
-    /// QUANTITIES freezes to astrometric+apparent RA/Dec plus observer range,
-    /// which fixes the positional column contract below.
     pub fn to_query(&self) -> String {
         let q = |s: &str| format!("'{s}'");
         format!(
@@ -59,17 +44,11 @@ impl SceneRequest {
     }
 }
 
-/// One ephemeris row extracted from the text payload embedded in the JSON
-/// envelope (`result` field) between `$$(...)$$` markers.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SceneEphemerisRow {
-    /// UT timestamp exactly as reported ("2026-Aug-27 00:00").
     pub time_utc: String,
-    /// Apparent right ascension in degrees (0..=360).
     pub ra_deg: f64,
-    /// Apparent declination in degrees (-90..=90).
     pub dec_deg: f64,
-    /// Observer range in AU.
     pub delta_au: f64,
 }
 
@@ -84,10 +63,6 @@ fn extract_ephemeris_text(result_field: &str) -> &str {
     }
 }
 
-/// Parses fixed-width Horizons OBSERVER lines for the frozen QUANTITIES
-/// contract `1,2,20`, whose positional layout after `date time` is exactly:
-///   [RA_ast h m s, Dec_ast d m s (signed degrees), RA_app h m s,
-///    Dec_app d m s (signed), Delta_AU, range-rate km/s]
 pub fn parse_horizons_result(result_field: &str) -> Result<Vec<SceneEphemerisRow>, String> {
     let block = extract_ephemeris_text(result_field);
     if block.is_empty() {
@@ -131,14 +106,11 @@ pub fn parse_horizons_result(result_field: &str) -> Result<Vec<SceneEphemerisRow
             ));
         }
 
-        // Astrometric ICRF pair.
         let ra_hours = parse_trio(&rest, 0)?;
         let dec_deg_tok = rest[3];
         let dec_sign = dec_deg_tok.starts_with('-');
         let dec_abs = parse_trio(&rest, 3)?;
 
-        // Apparent pair occupies offsets 6..=11 — validated for shape but the
-        // astrometric coordinates are canonical for scene placement.
         let _apparent_ra = parse_trio(&rest, 6)?;
         let _apparent_dec = parse_trio(&rest, 9)?;
 
@@ -180,7 +152,6 @@ impl SourceAdapter for JplHorizonsAdapter {
     }
 }
 
-/// Live anonymous download helper (CI replays the recorded fixture).
 pub fn fetch_scene(req: &SceneRequest) -> Result<(String, Vec<SceneEphemerisRow>), String> {
     use std::io::Read;
     let url = format!("{JPL_HORIZONS_URL}?{q}", q = req.to_query());
@@ -223,8 +194,6 @@ mod tests {
         let recs = parse_horizons_json_envelope(FIXTURE).expect("recorded fixture must parse");
         assert_eq!(recs.len(), 3);
         assert_eq!(recs[0].time_utc, "2026-Aug-27 00:00");
-        // Real values from the recorded dump: RA 04h13m19.15s -> 63.32965 deg,
-        // Dec +21d01m02.9s -> 21.017472, Delta 19.4537279825014 AU.
         let expected_ra = (4.0 + 13.0 / 60.0 + 19.15 / 3600.0) * 15.0;
         let expected_dec = 21.0 + 1.0 / 60.0 + 2.9 / 3600.0;
         assert!(
@@ -234,7 +203,6 @@ mod tests {
         );
         assert!((recs[0].dec_deg - expected_dec).abs() < 1e-9);
         assert!((recs[0].delta_au - 19.453_727_982_501_4).abs() < 1e-9);
-        // Range shrinks monotonically over the three recorded days.
         assert!(recs[2].delta_au < recs[1].delta_au && recs[1].delta_au < recs[0].delta_au);
     }
 

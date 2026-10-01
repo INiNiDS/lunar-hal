@@ -4,12 +4,6 @@ use crate::api::{self, ServiceMeta, ServiceStatus};
 use crate::os::led::Led;
 use crate::os::use_os_state;
 
-/// One equal-width slot in the service rack.
-///
-/// Interaction follows the Lunar-OS spec: the first press on a stopped service
-/// starts it, and once it is running the same press opens its log window.
-/// Stop/restart live in a hover-revealed corner cluster so the resting state
-/// stays clean instead of looking like an admin panel.
 #[component]
 pub fn RackSection(meta: ServiceMeta) -> Element {
     let mut os = use_os_state();
@@ -69,7 +63,6 @@ pub fn RackSection(meta: ServiceMeta) -> Element {
                 span { class: "{title_class}", "{meta.title}" }
                 span { class: "{hint_class}", "{hint}" }
 
-                // Status lamp sits at the bottom of the slot, as specified.
                 div { class: "mt-auto pt-4",
                     Led { status: status.clone() }
                 }

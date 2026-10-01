@@ -1,11 +1,3 @@
-//! Reactivity bridge between [`StellarScene`] and Dioxus.
-//!
-//! The game layer is framework-agnostic. To make it play nicely with
-//! Dioxus's reactive system, this module installs a version signal
-//! in the current context and pipes the game's internal change
-//! notifications (delivered via `tokio::sync::watch`) into that
-//! signal. Components that need to re-render read the version (or a
-//! [`GameSnapshot`]) and Dioxus tracks the dependency for us.
 
 use dioxus::prelude::*;
 use lunar_stellar_core::{StellarScene, GameSnapshot};
@@ -13,7 +5,6 @@ use tracing::warn;
 
 use crate::local_storage;
 
-/// Private helper hook to eliminate code duplication for Tokio channel subscription.
 fn use_setup_game_listener(game: Signal<StellarScene>, version: Signal<u64>) {
     use_hook(|| {
         let mut changes = game.read().subscribe();
@@ -28,10 +19,6 @@ fn use_setup_game_listener(game: Signal<StellarScene>, version: Signal<u64>) {
     });
 }
 
-/// Provide a [`StellarScene`] instance to the component subtree. Wraps the
-/// game in a Dioxus context, installs a `Signal<u64>` version
-/// counter, and starts a coroutine that bumps the counter on every
-/// game mutation.
 #[allow(clippy::future_not_send, clippy::used_underscore_binding)]
 pub fn use_provide_game() -> Signal<StellarScene> {
     let version = use_signal(|| 0u64);
@@ -44,9 +31,6 @@ pub fn use_provide_game() -> Signal<StellarScene> {
     game
 }
 
-/// Provide a pre-configured [`StellarScene`] instance. Useful when a host
-/// application already constructed a game and wants to inject it
-/// into the Dioxus context.
 #[allow(dead_code)]
 pub fn use_provide_game_with(initial: StellarScene) -> Signal<StellarScene> {
     let version = use_signal(|| 0u64);
@@ -59,20 +43,14 @@ pub fn use_provide_game_with(initial: StellarScene) -> Signal<StellarScene> {
     game
 }
 
-/// Borrow the shared [`StellarScene`] from the current context.
 pub fn use_game() -> Signal<StellarScene> {
     use_context::<Signal<StellarScene>>()
 }
 
-/// Read the shared version signal. Components that need to re-render
-/// after a game mutation should call this first to subscribe.
 pub fn use_game_version() -> Signal<u64> {
     use_context::<Signal<u64>>()
 }
 
-/// Reactive snapshot of the entire game state. Subscribes to the
-/// version signal so the calling component re-renders on every
-/// mutation.
 pub fn use_game_snapshot() -> GameSnapshot {
     let version = use_game_version();
     let game = use_game();
@@ -80,9 +58,6 @@ pub fn use_game_snapshot() -> GameSnapshot {
     game.read().snapshot()
 }
 
-/// Install a per-world camera persistence hook that mirrors the
-/// game's `world_cameras` map into `localStorage` (web) or a no-op
-/// stub (desktop). Call this once near the top of the editor.
 pub fn use_provide_world_camera_persistence() {
     let game = use_game();
     let version = use_game_version();
@@ -106,8 +81,6 @@ pub fn hydrate_world_camera_from_storage(game: &StellarScene, world_id: &str) {
     }
 }
 
-/// Helper for components that want to know whether the world id
-/// they last saw has changed (used to apply persisted cameras).
 pub fn use_world_id_change<F>(mut on_change: F)
 where
     F: FnMut(Option<&str>, Option<&str>) + 'static,
@@ -127,11 +100,6 @@ where
     });
 }
 
-/// Keep the per-world camera persistence in sync after the camera
-/// moves. Records the current camera into the game's in-memory
-/// `world_cameras` map on every version bump. The actual
-/// `localStorage` writing is handled by
-/// [`use_provide_world_camera_persistence`].
 pub fn use_persist_world_camera() {
     let game = use_game();
     let version = use_game_version();
@@ -147,8 +115,6 @@ pub fn use_persist_world_camera() {
     });
 }
 
-/// Pipeline response for the currently selected star. Re-renders
-/// the calling component on every game mutation.
 pub fn use_pipeline_snapshot() -> Option<lunar_structures::PipelineResponse> {
     let game = use_game();
     let version = use_game_version();
@@ -156,9 +122,6 @@ pub fn use_pipeline_snapshot() -> Option<lunar_structures::PipelineResponse> {
     game.read().pipeline()
 }
 
-/// Fetch the pipeline for the currently selected star, if any. The
-/// actual work is done inside the game layer; this is a thin helper
-/// for components that want to fire-and-forget.
 #[allow(dead_code)]
 pub fn fetch_pipeline_for_selected(game: &StellarScene) {
     if let Some(star) = game.selected_star() {

@@ -1,11 +1,3 @@
-//! LogBackend — A backend process manager that spawns services and streams their output logs.
-//!
-//! The backend handles:
-//! - Process spawning (executables, `dx serve`, `cargo watch`)
-//! - Reading stdout/stderr streams for each process
-//! - Forwarding log lines as structured [`LogEvent`] instances
-//! - Process health status tracking (starting / running / stopped / failed)
-//! - Process lifecycle management (start / stop / restart)
 
 use std::collections::HashMap;
 use std::net::IpAddr;
@@ -24,7 +16,6 @@ use crate::ansi::clean_line;
 use crate::config::{LauncherConfig, ServiceConfig, ServiceKind};
 use crate::service_settings::FrontendLaunchConfig;
 
-/// Coarse severity classification for a [`LogEvent`], derived from its text content.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum LogLevel {
@@ -33,7 +24,6 @@ pub enum LogLevel {
     Error,
 }
 
-/// Case-insensitive substring check without heap allocation.
 fn contains_ignore_case(haystack: &str, needle: &str) -> bool {
     haystack.as_bytes().windows(needle.len()).any(|window| {
         window
@@ -43,7 +33,6 @@ fn contains_ignore_case(haystack: &str, needle: &str) -> bool {
     })
 }
 
-/// Classifies a single cleaned log line into a [`LogLevel`].
 fn classify_level(text: &str, is_stderr: bool) -> LogLevel {
     if contains_ignore_case(text, "error")
         || contains_ignore_case(text, "panicked at")
@@ -57,26 +46,17 @@ fn classify_level(text: &str, is_stderr: bool) -> LogLevel {
     }
 }
 
-// ── LogEvent ─────────────────────────────────────────────────────────────────
 
-/// A single log entry produced by a service and emitted by the backend.
 #[derive(Clone, Debug, Serialize)]
 pub struct LogEvent {
-    /// Formatted elapsed time since backend launch (MM:SS or HH:MM:SS).
     pub timestamp: String,
-    /// Identifier name of the originating service.
     pub service: String,
-    /// Stripped, plain-text log content (ANSI escape sequences removed).
     pub text: String,
-    /// Indicates whether the entry was received via stderr.
     pub is_stderr: bool,
-    /// Coarse severity classification (`info` / `warn` / `error`).
     pub level: LogLevel,
 }
 
-// ── ServiceStatus ────────────────────────────────────────────────────────────
 
-/// Represents the runtime execution state of a service.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum ServiceStatus {
@@ -86,7 +66,6 @@ pub enum ServiceStatus {
     Failed { reason: String },
 }
 
-/// Active runtime state of a service, tracking configuration, execution status, and process ID.
 #[derive(Clone, Debug)]
 pub struct ServiceRuntime {
     pub config: ServiceConfig,
@@ -94,7 +73,6 @@ pub struct ServiceRuntime {
     pub pid: Option<u32>,
 }
 
-/// Log processing and execution management engine.
 pub struct LogBackend {
     workspace: PathBuf,
     watch: bool,
@@ -146,7 +124,6 @@ impl LogBackend {
             .find(|service| service.config.name == name)
     }
 
-    /// Replaces the configuration of a service that has no active process.
     pub fn replace_service_config(&mut self, config: ServiceConfig) -> Result<()> {
         if self.is_running(&config.name) {
             anyhow::bail!("service '{}' is running", config.name);
@@ -178,7 +155,6 @@ impl LogBackend {
         self.build_release && !self.watch
     }
 
-    /// Spawns and starts all configured services.
     pub async fn start_all(&mut self) {
         eprintln!(
             "[lns] Starting {} service(s) from {}",
@@ -200,7 +176,6 @@ impl LogBackend {
         }
     }
 
-    /// Terminates all currently active child services.
     pub async fn stop_all(&mut self) {
         let names: Vec<String> = self.children.keys().cloned().collect();
         for name in names {
@@ -208,7 +183,6 @@ impl LogBackend {
         }
     }
 
-    /// Restarts a specific service by its identifier name.
     pub async fn restart(&mut self, name: &str) {
         self.stop(name).await;
         if let Some(idx) = self.services.iter().position(|s| s.config.name == name) {
@@ -222,7 +196,6 @@ impl LogBackend {
         }
     }
 
-    /// Stops an active service by name.
     pub async fn stop(&mut self, name: &str) {
         if let Some(mut child) = self.children.remove(name) {
             eprintln!("[lns] [{name}] stopping");
@@ -238,7 +211,6 @@ impl LogBackend {
         }
     }
 
-    /// Starts a previously stopped service by name.
     pub async fn start(&mut self, name: &str) {
         if let Some(idx) = self.services.iter().position(|s| s.config.name == name) {
             self.services[idx].status = ServiceStatus::Starting;
@@ -250,7 +222,6 @@ impl LogBackend {
         }
     }
 
-    /// Polls running child processes, updating statuses for terminated instances.
     pub fn poll(&mut self) {
         let mut exited = Vec::new();
         for (name, child) in &mut self.children {
@@ -287,7 +258,6 @@ impl LogBackend {
     async fn spawn_service_by_index(&mut self, idx: usize) -> Result<()> {
         let name = self.services[idx].config.name.clone();
 
-        // Clean up pre-existing child process if still registered
         if self.children.contains_key(&name) {
             self.stop(&name).await;
         }
@@ -376,7 +346,6 @@ impl LogBackend {
             None => eprintln!("[lns] [{name}] started"),
         }
 
-        // Spawn background tasks to stream stdout and stderr concurrently
         if let Some(stdout) = child.stdout.take() {
             read_output(
                 BufReader::new(stdout),
@@ -504,7 +473,6 @@ async fn probe_http(host: &str, port: u16, path: &str) -> bool {
         .is_ok_and(|result| result.unwrap_or(false))
 }
 
-/// Human-readable command summary used in launcher diagnostics.
 fn service_command(kind: &ServiceKind) -> String {
     match kind {
         ServiceKind::Binary { bin_name } => format!("target/release/{bin_name}"),
@@ -525,7 +493,6 @@ fn service_command(kind: &ServiceKind) -> String {
     }
 }
 
-/// Resolves precompiled binary path: prefers `target/release/<name>`, falls back to `target/debug/<name>`.
 pub fn resolve_binary_path(ws: &Path, name: &str) -> PathBuf {
     let release_bin = ws.join("target").join("release").join(name);
     let debug_bin = ws.join("target").join("debug").join(name);
@@ -538,7 +505,6 @@ pub fn resolve_binary_path(ws: &Path, name: &str) -> PathBuf {
     }
 }
 
-/// Builds command for executing a precompiled binary located in `target/release/` or `target/debug/`.
 pub fn build_binary_cmd(
     ws: &Path,
     name: &str,
@@ -556,7 +522,6 @@ pub fn build_binary_cmd(
     cmd
 }
 
-/// Spawns a precompiled binary (release or debug), or falls back to `cargo run` if not yet built.
 fn spawn_binary(
     ws: &Path,
     name: &str,
@@ -591,7 +556,6 @@ fn spawn_binary(
         .with_context(|| format!("failed to spawn binary at {}", bin.display()))
 }
 
-/// Builds command for `cargo run --bin <name> <cargo_args> -- <extra_args>`.
 pub fn build_cargo_run_cmd(
     ws: &Path,
     bin_name: &str,
@@ -619,7 +583,6 @@ pub fn build_cargo_run_cmd(
     cmd
 }
 
-/// Spawns `cargo run`.
 fn spawn_cargo_run(
     ws: &Path,
     bin_name: &str,
@@ -633,7 +596,6 @@ fn spawn_cargo_run(
         .with_context(|| format!("failed to spawn `cargo run --bin {bin_name}`"))
 }
 
-/// Builds command for `cargo watch -- cargo run --bin <name>`.
 pub fn build_cargo_watch_cmd(
     ws: &Path,
     bin_name: &str,
@@ -673,7 +635,6 @@ pub fn build_cargo_watch_cmd(
     cmd
 }
 
-/// Spawns `cargo watch`.
 fn spawn_cargo_watch(
     ws: &Path,
     bin_name: &str,
@@ -696,9 +657,6 @@ fn spawn_cargo_watch(
     .context("failed to spawn `cargo watch`")
 }
 
-/// Builds the managed frontend command from typed platform settings.  Port
-/// arguments are emitted only for the web target; callers cannot smuggle a
-/// conflicting platform or port through `EXTRA_ARGS`.
 pub fn build_frontend_dx_serve_cmd(
     ws: &Path,
     crate_name: &str,
@@ -720,7 +678,6 @@ pub fn build_frontend_dx_serve_cmd(
     Ok(cmd)
 }
 
-/// Spawns the managed multi-platform frontend.
 fn spawn_frontend_dx_serve(
     ws: &Path,
     crate_name: &str,
@@ -743,7 +700,6 @@ fn spawn_frontend_dx_serve(
         })
 }
 
-/// Builds command for `dx serve` inside targeted crate directory.
 pub fn build_dx_serve_cmd(
     ws: &Path,
     crate_name: &str,
@@ -770,7 +726,6 @@ pub fn build_dx_serve_cmd(
     cmd
 }
 
-/// Spawns `dx serve`.
 fn spawn_dx_serve(
     ws: &Path,
     crate_name: &str,
@@ -794,7 +749,6 @@ fn spawn_dx_serve(
         })
 }
 
-/// Asynchronously streams line-buffered output from a reader and dispatches formatted `LogEvent` items over `mpsc`.
 fn read_output<R>(
     mut reader: BufReader<R>,
     service_name: String,
@@ -846,7 +800,6 @@ fn read_output<R>(
     });
 }
 
-/// Asynchronously triggers a workspace-wide `cargo build --release` command.
 pub async fn cargo_build(ws: &Path, build_args: &[String]) -> Result<()> {
     let mut cmd = tokio::process::Command::new("cargo");
     cmd.args(["build", "--release"]);

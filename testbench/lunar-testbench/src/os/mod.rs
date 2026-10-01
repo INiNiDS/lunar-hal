@@ -1,9 +1,3 @@
-//! The Lunar-OS shell: a single-room desktop scene (lamp + desktop launchers + dock +
-//! floating windows) that replaces the old sidebar/router navigation. See
-//! `state.rs` for the shared reactive state.
-//!
-//! There is deliberately no separate taskbar: the dock is the single place that
-//! lists apps, shows which ones are open, and restores minimized windows.
 
 pub mod app_host;
 pub mod category_lamp;
@@ -35,8 +29,6 @@ pub use state::{
     use_window_snapshot_payload,
 };
 
-/// Current browser viewport size in CSS pixels, used for maximize/snap math.
-/// Falls back to a reasonable desktop default if unavailable.
 pub fn viewport_size() -> (f64, f64) {
     match web_sys::window() {
         Some(w) => {

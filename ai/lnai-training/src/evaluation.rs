@@ -1,9 +1,3 @@
-//! Stage 5 (task 7): read-only evaluation contract for all model kinds.
-//!
-//! Evaluation never runs an optimizer step and never rewrites checkpoints.
-//! Given an [`EvaluationSpec`](crate::spec::EvaluationSpec) plus an artifact
-//! directory it produces a deterministic [`EvaluationReport`] that CLI and
-//! Testbench serialize identically.
 
 use std::path::Path;
 
@@ -12,19 +6,14 @@ use serde::{Deserialize, Serialize};
 use crate::report::{ReportKind, ReportV1, RunIdentity};
 use crate::spec::{EvaluationSpec, ModelKind};
 
-/// Version of the evaluation report envelope (frozen with contracts v1).
 pub const EVALUATION_REPORT_VERSION: &str = "1.0.0";
 
-/// Minimal per-split loss summary. Rich per-target breakdowns live in
-/// `metrics/` suites; the worker emits these numbers as typed
-/// [`JobEvent::Metric`](crate::events::JobEvent) values, never stdout text.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SplitLosses {
     pub data_loss: f64,
     pub physics_loss: Option<f64>,
 }
 
-/// Deterministic evaluation result for one artifact + dataset pair.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EvaluationReport {
     pub version: String,
@@ -33,7 +22,6 @@ pub struct EvaluationReport {
     pub dataset_manifest_hash: String,
     pub validation: SplitLosses,
     pub holdout: Option<SplitLosses>,
-    /// Was the holdout split non-empty (Stage 1 non-empty holdout gate)?
     pub holdout_non_empty: bool,
     pub seed: u64,
 }
@@ -58,8 +46,6 @@ impl EvaluationReport {
         }
     }
 
-    /// Converts the report into the shared [`ReportV1`] JSON envelope so
-    /// evaluation results land in `target/ai-reports` like every other suite.
     pub fn to_report(&self, identity: RunIdentity) -> ReportV1 {
         let mut report = ReportV1::new(
             ReportKind::Correctness,
@@ -89,7 +75,6 @@ impl EvaluationReport {
         report
     }
 
-    /// Atomically writes `evaluation.json` into the artifact directory.
     pub fn write_to_artifact_dir(&self, dir: &Path) -> std::io::Result<std::path::PathBuf> {
         let json = serde_json::to_string_pretty(self)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;

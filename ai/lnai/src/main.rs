@@ -1,11 +1,3 @@
-//! Stage 5: PINN worker — thin compatibility wrapper around `lnai-training`.
-//!
-//! Argument surface is frozen (parity gate): every flag accepted before
-//! Stage 5 is still accepted with identical semantics. New library-owned
-//! flags are purely additive:
-//! * `--seed` — explicit global seed (overrides spec derivation)
-//! * `--evaluate-only` — read-only evaluation, no optimizer step
-//! * `--benchmark-iters/--benchmark-warmup` — forward-pass timing harness
 
 mod args;
 

@@ -1,5 +1,3 @@
-//! Integration: resume after an artificial interruption, retry-failed gating,
-//! verify re-checking and adaptive subdivision — all against a fake archive.
 
 use lnai_data::collector::{
     CollectConfig, CollectOptions, FetchError, ShardFetcher, run_collection,
@@ -12,12 +10,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 const TAP_CSV_HEADER: &str = "source_id,ra_deg,dec_deg,parallax_mas,pm_ra_mas_yr,pm_dec_mas_yr,radial_velocity_kms,mag_g,mag_bp,mag_rp,ruwe,astrometric_excess_noise";
 
-/// Deterministic fake archive server: writes header + N rows CSV to the
-/// requested temp path, keyed by shard RA so every shard has unique content.
 struct FakeArchive {
     rows_per_shard: usize,
     fail_queries_containing: Vec<&'static str>,
-    /// Counts every transport attempt including planned outages.
     total_calls: AtomicU64,
 }
 
@@ -83,7 +78,8 @@ fn three_shard_cfg(out_dir: PathBuf) -> CollectConfig {
     CollectConfig {
         out_dir,
         ra_start_deg: 0.0,
-        ra_end_deg: 3.0, // three top-level degree strips
+        ra_end_deg: 3.0,
+
         target_rows_per_shard: 100,
         concurrency: 2,
         retry_backoff_ms_base: 1,
@@ -104,9 +100,6 @@ fn interrupted_run_resumes_without_redownloading_verified_shards() {
     let cfg = three_shard_cfg(out_dir.clone());
 
     let archive = Arc::new(FakeArchive::new(50));
-    // Simulate a crash right after the first successful upload: with the
-    // budget spent, every further download silently stops this pass, leaving
-    // unstarted shards exactly as an OS kill would (still pending).
     let report1 = run_collection(
         cfg.clone(),
         archive.clone() as Arc<dyn ShardFetcher>,
@@ -128,8 +121,6 @@ fn interrupted_run_resumes_without_redownloading_verified_shards() {
 
     let calls_at_crash = archive.calls();
 
-    // Resume (plain defaults): completes everything, never re-touches the
-    // already-verified shard.
     let report2 = run_collection(
         cfg.clone(),
         archive.clone() as Arc<dyn ShardFetcher>,
@@ -153,7 +144,6 @@ fn interrupted_run_resumes_without_redownloading_verified_shards() {
         );
     }
 
-    // One more resume pass is a perfect network no-op.
     let before_noop = archive.calls();
     let calls_at_end = {
         run_collection(cfg, archive.clone(), CollectOptions::default()).unwrap();
@@ -168,18 +158,17 @@ fn failed_shards_are_skipped_until_retry_failed_is_requested() {
     let out_dir = dir.path().join("collect");
     let cfg = three_shard_cfg(out_dir.clone());
     let archive = Arc::new(
-        FakeArchive::new(20).with_always_failing("gs.ra >= 2"), // shard #3 always dies
+        FakeArchive::new(20).with_always_failing("gs.ra >= 2"),
+
     );
 
     let r1 = run_collection(cfg.clone(), archive.clone(), CollectOptions::default()).unwrap();
     assert_eq!(r1.failed, 1, "one permanently failing shard");
 
-    // Default resume skips it without spending any network call on it.
     let calls_before_skip = archive.calls();
     let _ = run_collection(cfg.clone(), archive.clone(), CollectOptions::default());
     assert_eq!(archive.calls(), calls_before_skip);
 
-    // --retry-failed attempts it again and keeps the failure recorded.
     let _ = run_collection(
         cfg,
         archive.clone(),
@@ -209,9 +198,6 @@ fn failed_shards_are_skipped_until_retry_failed_is_requested() {
 
 #[test]
 fn row_limit_hits_subdivide_deterministically_and_record_children() {
-    // Fake archive always answers 50 rows; budget 10 forces subdivision until
-    // children fit under the limit (depth > MAX_SUBDIVIDE_DEPTH leaves
-    // explicit Failed entries).
     let dir = tempfile::tempdir().unwrap();
     let out_dir = dir.path().join("collect");
     let mut cfg = three_shard_cfg(out_dir.clone());
@@ -241,7 +227,6 @@ fn row_limit_hits_subdivide_deterministically_and_record_children() {
         );
     }
 
-    // No temp/partial files may survive anywhere.
     let leftovers: Vec<_> = fs::read_dir(&out_dir)
         .unwrap()
         .filter_map(|e| e.ok())
@@ -260,7 +245,6 @@ fn verify_mode_rechecks_checksums_and_flags_corruption_then_recovers() {
     let archive = Arc::new(FakeArchive::new(30));
     run_collection(cfg.clone(), archive.clone(), CollectOptions::default()).unwrap();
 
-    // Clean --verify round: everything matches.
     let rv = run_collection(
         cfg.clone(),
         archive.clone(),
@@ -273,7 +257,6 @@ fn verify_mode_rechecks_checksums_and_flags_corruption_then_recovers() {
     assert_eq!(rv.failed, 0);
     let clean_calls = archive.calls();
 
-    // Corrupt one shard on disk, then verify again: exactly one mismatch.
     let victim = fs::read_dir(&out_dir)
         .unwrap()
         .find_map(|e| {
@@ -295,10 +278,8 @@ fn verify_mode_rechecks_checksums_and_flags_corruption_then_recovers() {
     )
     .unwrap();
     assert_eq!(rc.failed, 1, "corruption detected");
-    // Verification itself performs zero downloads.
     assert_eq!(archive.calls(), clean_calls);
 
-    // Recovery: the demoted shard re-downloads with retry_failed...
     let _ = run_collection(
         cfg.clone(),
         archive.clone(),
@@ -309,7 +290,6 @@ fn verify_mode_rechecks_checksums_and_flags_corruption_then_recovers() {
     )
     .unwrap();
 
-    // ...after which a fresh --verify round is perfectly clean.
     let rv2 = run_collection(
         cfg,
         archive,

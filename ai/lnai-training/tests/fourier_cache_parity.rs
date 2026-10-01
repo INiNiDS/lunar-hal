@@ -1,10 +1,3 @@
-//! Stage 7, item 2: Fourier-cache parity.
-//!
-//! `fourier_encode_cached` (device-resident frequency buffer, fused
-//! broadcast) must be numerically identical to the legacy
-//! `fourier_encode` loop, and `StellarMlp::forward` on the cached path
-//! must stay deterministic, finite and shape-stable. No accuracy gate
-//! may regress: this test fails the optimization otherwise.
 
 use burn::backend::NdArray;
 use burn::prelude::*;

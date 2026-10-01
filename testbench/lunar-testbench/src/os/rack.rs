@@ -3,8 +3,6 @@ use dioxus::prelude::*;
 use crate::os::rack_section::RackSection;
 use crate::os::use_os_state;
 
-/// The service rack: one horizontal slab under the lamp, split into equal-width
-/// sections (one per service).
 #[component]
 pub fn Rack() -> Element {
     let os = use_os_state();

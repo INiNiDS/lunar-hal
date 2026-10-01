@@ -1,10 +1,3 @@
-//! Local-weights integrity and liveness probes (ignored by default).
-//!
-//! The bundle test distinguishes file integrity from release approval; the
-//! forward test loads the real `.bpk` weights directly and asserts finite
-//! outputs, but does not certify model quality. Weight files are
-//! gitignored, so the suite only runs where weights exist:
-//! `cargo test -p lnai-training --test model_liveness -- --ignored`.
 
 use burn::backend::NdArray;
 use burn::prelude::*;
@@ -68,7 +61,6 @@ fn serving_weights_load_and_forward_finite() {
     }
     let device = burn::backend::ndarray::NdArrayDevice::default();
 
-    // PINN.
     let mut pinn = lnai_models::StellarMlpConfig::new().init::<B>(&device);
     let mut store = BurnpackStore::from_file(weight_file("stellar_model.bpk").to_str().unwrap());
     pinn.load_from(&mut store).expect("pinn weights must load");
@@ -80,7 +72,6 @@ fn serving_weights_load_and_forward_finite() {
     assert_eq!(out.len(), 8);
     finite_check("pinn", &out);
 
-    // GNN (either head, resolved by load).
     let adj: Tensor<B, 2> = Tensor::from_floats([[1.0, 0.5], [0.5, 1.0]], &device);
     let nodes: Tensor<B, 2> = Tensor::from_floats(
         [
@@ -109,7 +100,6 @@ fn serving_weights_load_and_forward_finite() {
     }
     assert!(loaded, "gnn weights must load as det or var");
 
-    // SIREN.
     let mut siren = lnai_models::StellarSirenConfig::new().init::<B>(&device);
     let mut store =
         BurnpackStore::from_file(weight_file("stellar_siren_model.bpk").to_str().unwrap());

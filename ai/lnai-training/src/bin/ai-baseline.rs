@@ -1,13 +1,3 @@
-//! Report-only CPU baseline runner (Stage 3, task 8).
-//!
-//! Executes an identical deterministic workload `--runs N` times on the same
-//! machine, measures wall time per run and reports natural noise:
-//!
-//! ```bash
-//! cargo run -p lnai-training --bin ai-baseline -- --runs 3
-//! ```
-//!
-//! The output JSON lands in `$LUNAR_AI_REPORT_DIR` or `target/ai-reports`.
 
 use lnai_training::metrics::pinn::{per_target_metrics, stefan_boltzmann_residual};
 use lnai_training::metrics::rollout::position_rollout;
@@ -17,7 +7,6 @@ use std::time::Instant;
 const ROWS: usize = 4096;
 const WORKLOAD_ITERATIONS: usize = 25;
 
-/// Deterministic LCG so every run performs identical work.
 struct Lcg(u64);
 
 impl Lcg {
@@ -122,7 +111,6 @@ fn main() {
         report.add_metric(&format!("run_{}_ms", i + 1), *d);
     }
 
-    // Identity carries no artifact/dataset for a pure synthetic workload.
     report.identity = RunIdentity {
         dataset_manifest_hash: String::new(),
         artifact_hash: None,

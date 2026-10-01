@@ -1,13 +1,3 @@
-//! Stage 4A / пункт 8: MAST TIC metadata spike (anonymous).
-//!
-//! The public TIC cone search is served by the STScI Mashup endpoint
-//! (`POST /portal/Mashup/Mashup.asmx/invoke`, service
-//! `Mast.Catalogs.Tic.Cone`) and requires no token for public catalog data.
-//! `MAST_API_TOKEN` stays optional for protected/EAP products only; this
-//! adapter never sends credentials unless explicitly configured by the caller.
-//!
-//! Scope guard: metadata (coordinates/PM/photometry/cross-IDs) only. Bulk
-//! light-curve download is intentionally NOT part of this source.
 
 use crate::sources::{SourceAdapter, SourceAuth, SourceProvenance};
 use serde_json::Value;
@@ -15,7 +5,6 @@ use serde_json::Value;
 pub const MAST_INVOKE_URL: &str = "https://mast.stsci.edu/portal/Mashup/Mashup.asmx/invoke";
 pub const ADAPTER_ID: &str = "mast_tic_cone_v1";
 
-/// Frozen cone parameters used by the spike; part of provenance hashing.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ConeParams {
     pub ra_deg: f64,
@@ -36,7 +25,6 @@ impl Default for ConeParams {
 }
 
 impl ConeParams {
-    /// Encodes the documented Mashup request envelope deterministically.
     pub fn request_body(&self) -> String {
         format!(
             r#"{{"service":"Mast.Catalogs.Tic.Cone","format":"json","pageSize":{},"page":1,"params":{{"ra":{:.4},"dec":{:.4},"radius":{:.4}}}}}"#,
@@ -54,12 +42,10 @@ pub struct TicRecord {
     pub tic_id: u64,
     pub ra_deg: f64,
     pub dec_deg: f64,
-    /// μα* and μδ in mas/yr; TIC reports them null for many faint sources.
     pub pm_ra_mas_yr: Option<f64>,
     pub pm_dec_mas_yr: Option<f64>,
     pub teff_k: Option<f64>,
     pub magnitude_t: Option<f64>,
-    /// Stable cross-identifiers straight from TIC (typed as strings server-side).
     pub twomass_id: Option<String>,
     pub gaia_source_id: Option<String>,
 }
@@ -79,8 +65,6 @@ fn opt_str(v: Option<&Value>) -> Option<String> {
     }
 }
 
-/// Parses the `data` array of a COMPLETE Mashup response. Rows missing ID or
-/// coordinates are rejected loudly instead of being dropped silently.
 pub fn parse_tic_cone_response(body: &str) -> Result<Vec<TicRecord>, String> {
     let root: Value =
         serde_json::from_str(body).map_err(|e| format!("tic response is not JSON: {e}"))?;
@@ -102,7 +86,6 @@ pub fn parse_tic_cone_response(body: &str) -> Result<Vec<TicRecord>, String> {
             .get("ID")
             .and_then(Value::as_u64)
             .ok_or("tic row without numeric ID")?;
-        // ra/dec mandatory per contract (same policy as PSCompPars).
         let (Some(ra), Some(dec)) = (opt_f64(row.get("ra")), opt_f64(row.get("dec"))) else {
             return Err(format!("tic row {id} has unparseable coordinates"));
         };
@@ -141,7 +124,6 @@ impl SourceAdapter for MastTicAdapter {
     }
 }
 
-/// Live anonymous download helper (CI replays the recorded fixture).
 pub fn fetch_cone(params: &ConeParams) -> Result<(String, Vec<TicRecord>), String> {
     use std::io::Read;
     let client = reqwest::blocking::Client::builder()

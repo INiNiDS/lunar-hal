@@ -1,8 +1,3 @@
-//! HTTP client for talking to the AI backend (`lunar-backend`).
-//!
-//! The game layer never talks to AI models directly; it always goes
-//! through this client. The frontend (or test harness) supplies the
-//! base URL, the client is constructed by [`Game`].
 
 use lunar_structures::{
     CreateStarSceneRequest, GnnResponse, LiveSceneSnapshot, PipelineRequest, PipelineResponse,
@@ -16,7 +11,6 @@ use serde_json::Value;
 use std::time::Duration;
 use thiserror::Error;
 
-/// Errors that can occur when communicating with the AI backend.
 #[derive(Debug, Error)]
 pub enum ApiError {
     #[error("HTTP error: {0}")]
@@ -41,8 +35,6 @@ impl From<serde_json::Error> for ApiError {
     }
 }
 
-/// Lightweight async client. It owns a `reqwest::Client` for the
-/// process lifetime and forwards calls to the AI backend endpoints.
 pub struct ApiClient {
     base_url: RwLock<String>,
     http: reqwest::Client,
@@ -58,7 +50,6 @@ impl std::fmt::Debug for ApiClient {
 }
 
 impl ApiClient {
-    /// Create a new client with an explicit base URL.
     pub fn new(base_url: impl Into<String>) -> Self {
         let builder = reqwest::Client::builder();
 
@@ -73,8 +64,6 @@ impl ApiClient {
         }
     }
 
-    /// Create a client pointed at the URL described by `LUNAR_BACKEND_HOST`
-    /// / `LUNAR_BACKEND_PORT` (or the default `127.0.0.1:25255`).
     pub fn from_env() -> Self {
         Self::new(get_url())
     }
@@ -128,7 +117,6 @@ impl ApiClient {
     }
 
     pub async fn create_scene(&self, req: CreateStarSceneRequest) -> Result<StarScene, ApiError> {
-        // The backend wraps newly created scenes in a live-scene snapshot.
         let snapshot: LiveSceneSnapshot = self.post_json("/scenes/create", &req).await?;
         Ok(snapshot.scene)
     }
@@ -148,15 +136,12 @@ impl ApiClient {
         self.post_json("/random_star", &req).await
     }
 
-    // === Pipeline ===
 
     pub async fn pipeline(&self, req: PipelineRequest) -> Result<PipelineResponse, ApiError> {
         self.post_json("/pipeline", &req).await
     }
 }
 
-/// Raw value passthrough for endpoints that should remain flexible
-/// (e.g., testbench probes). The game layer itself does not use this.
 pub async fn raw_post(client: &ApiClient, path: &str, body: &Value) -> Result<Value, ApiError> {
     let url = format!("{}{}", client.base_url(), path);
     let builder = client.http.post(url).json(body);
@@ -164,8 +149,6 @@ pub async fn raw_post(client: &ApiClient, path: &str, body: &Value) -> Result<Va
     Ok(resp.json().await?)
 }
 
-/// Helper function to perform the request and validate the response status,
-/// reducing duplicate error handling across different HTTP methods.
 async fn send_and_validate(
     builder: reqwest::RequestBuilder,
 ) -> Result<reqwest::Response, ApiError> {

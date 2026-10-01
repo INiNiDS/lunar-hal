@@ -1,11 +1,3 @@
-//! Reactivity bridge between [`StellarScene`] and Dioxus.
-//!
-//! The stellar-scene client is framework-agnostic. To make it play nicely with
-//! Dioxus's reactive system, this module installs a version signal
-//! in the current context and pipes the client’s internal change
-//! notifications (delivered via `tokio::sync::watch`) into that
-//! signal. Components that need to re-render read the version (or a
-//! [`StellarSceneSnapshot`]) and Dioxus tracks the dependency for us.
 
 use dioxus::prelude::*;
 use lunar_stellar_core::{SceneCamera, StellarScene, StellarSceneConfig, StellarSceneSnapshot};
@@ -14,7 +6,6 @@ use tracing::warn;
 use crate::local_storage;
 use crate::runtime_config::RuntimeConfig;
 
-/// Private helper hook to eliminate code duplication for Tokio channel subscription.
 fn use_setup_stellar_scene_listener(game: Signal<StellarScene>, version: Signal<u64>) {
     use_hook(|| {
         let mut changes = game.read().subscribe();
@@ -29,10 +20,6 @@ fn use_setup_stellar_scene_listener(game: Signal<StellarScene>, version: Signal<
     });
 }
 
-/// Provide a [`StellarScene`] instance to the component subtree. Wraps the
-/// stellar scene in a Dioxus context, installs a `Signal<u64>` version
-/// counter, and starts a coroutine that bumps the counter on every
-/// scene mutation.
 #[allow(clippy::future_not_send, clippy::used_underscore_binding)]
 pub fn use_provide_stellar_scene() -> Signal<StellarScene> {
     let version = use_signal(|| 0u64);
@@ -48,9 +35,6 @@ pub fn use_provide_stellar_scene() -> Signal<StellarScene> {
     game
 }
 
-/// Provide a pre-configured [`StellarScene`] instance. Useful when a host
-/// application already constructed a stellar-scene client and wants to inject it
-/// into the Dioxus context.
 pub fn use_provide_stellar_scene_with(initial: StellarScene) -> Signal<StellarScene> {
     let version = use_signal(|| 0u64);
     let game = use_signal(|| initial);
@@ -62,20 +46,14 @@ pub fn use_provide_stellar_scene_with(initial: StellarScene) -> Signal<StellarSc
     game
 }
 
-/// Borrow the shared [`StellarScene`] from the current context.
 pub fn use_stellar_scene() -> Signal<StellarScene> {
     use_context::<Signal<StellarScene>>()
 }
 
-/// Read the shared version signal. Components that need to re-render
-/// after a scene mutation should call this first to subscribe.
 pub fn use_stellar_scene_version() -> Signal<u64> {
     use_context::<Signal<u64>>()
 }
 
-/// Reactive snapshot of the entire game state. Subscribes to the
-/// version signal so the calling component re-renders on every
-/// mutation.
 pub fn use_stellar_scene_snapshot() -> StellarSceneSnapshot {
     let version = use_stellar_scene_version();
     let game = use_stellar_scene();
@@ -96,8 +74,6 @@ async fn wait_for_camera_persist_debounce() {
     .await;
 }
 
-/// Schedule one durable camera write after a quiet period. A newer mutation
-/// supersedes the older task, so panning/zooming does not write every frame.
 fn persist_camera_debounced(
     scene_id: String,
     camera: SceneCamera,
@@ -112,8 +88,6 @@ fn persist_camera_debounced(
     });
 }
 
-/// Install per-scene camera persistence. The same schema is used by web
-/// localStorage and desktop/Android filesystem storage.
 pub fn use_provide_scene_camera_persistence() {
     let game = use_stellar_scene();
     let version = use_stellar_scene_version();
@@ -132,8 +106,6 @@ pub fn use_provide_scene_camera_persistence() {
     });
 }
 
-/// Load a persisted camera, validate it through the stellar core, and apply it
-/// as the active view. Corrupt records are deleted by `local_storage`.
 pub fn restore_camera(game: &StellarScene, scene_id: &str) {
     let Some(camera) = local_storage::load_scene_camera(scene_id) else {
         return;
@@ -148,19 +120,16 @@ pub fn restore_camera(game: &StellarScene, scene_id: &str) {
     }
 }
 
-/// Clear transient editor selection without replacing the scene session.
 pub fn clear_selection(game: &StellarScene) {
     game.select_star(None);
 }
 
-/// Export current camera offset, zoom, and selected star ID as a snapshot.
 pub fn export_camera_snapshot(game: &StellarScene) -> ((f32, f32), f32, Option<u64>) {
     let cam = game.camera();
     let star_id = game.selected_star().map(|s| s.id as u64);
     (cam.offset, cam.zoom, star_id)
 }
 
-/// Apply restored camera offset and zoom to the active stellar scene.
 pub fn apply_camera_snapshot(game: &StellarScene, offset: (f32, f32), zoom: f32) {
     let mut cam = game.camera();
     cam.offset = offset;
@@ -168,8 +137,6 @@ pub fn apply_camera_snapshot(game: &StellarScene, offset: (f32, f32), zoom: f32)
     game.set_camera(cam);
 }
 
-/// Helper for components that want to know whether the scene id
-/// they last saw has changed (used to apply persisted cameras).
 pub fn use_scene_id_change<F>(mut on_change: F)
 where
     F: FnMut(Option<&str>, Option<&str>) + 'static,
@@ -189,11 +156,6 @@ where
     });
 }
 
-/// Keep the per-scene camera persistence in sync after the camera
-/// moves. Records the current camera into the client’s in-memory
-/// `scene_cameras` map on every version bump. The actual
-/// `localStorage` writing is handled by
-/// [`use_provide_scene_camera_persistence`].
 pub fn use_persist_scene_camera() {
     let game = use_stellar_scene();
     let version = use_stellar_scene_version();
@@ -209,8 +171,6 @@ pub fn use_persist_scene_camera() {
     });
 }
 
-/// Pipeline response for the currently selected star. Re-renders
-/// the calling component on every scene mutation.
 pub fn use_pipeline_snapshot() -> Option<lunar_structures::PipelineResponse> {
     let game = use_stellar_scene();
     let version = use_stellar_scene_version();
@@ -218,9 +178,6 @@ pub fn use_pipeline_snapshot() -> Option<lunar_structures::PipelineResponse> {
     game.read().pipeline()
 }
 
-/// Fetch the pipeline for the currently selected star, if any. The
-/// actual work is done inside the stellar-scene client; this is a thin helper
-/// for components that want to fire-and-forget.
 #[allow(dead_code)]
 pub fn fetch_pipeline_for_selected(game: &StellarScene) {
     if let Some(star) = game.selected_star() {

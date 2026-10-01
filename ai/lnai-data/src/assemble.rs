@@ -7,7 +7,6 @@ use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-/// Result of the assembly stage: canonical parquet + per-model view files.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AssembleReport {
     pub canonical_path: PathBuf,
@@ -19,9 +18,6 @@ pub struct AssembleReport {
     pub holdout_rows: u64,
 }
 
-/// Checks the union of verified half-open shard rectangles, not their status
-/// counts. The stock query requires all-sky coverage; custom queries are
-/// checked within the outer bounds represented by their manifest shards.
 pub fn validate_shard_coverage(manifest: &DatasetManifestV1) -> Result<(), String> {
     let shards = &manifest.shards;
     if shards.is_empty() {
@@ -132,8 +128,6 @@ fn col_f32(records: &[StarRecord], get: fn(&StarRecord) -> Option<f32>) -> Float
     records.iter().map(|r| get(r)).collect::<Float32Chunked>()
 }
 
-/// Builds the canonical DataFrame with columns exactly matching the golden
-/// schema's non-view-only ordering.
 pub fn build_canonical_frame(records: &[StarRecord]) -> PolarsResult<DataFrame> {
     let ids: StringChunked = records
         .iter()
@@ -266,8 +260,6 @@ fn view_columns(df: &DataFrame, view: &SchemaView) -> Result<DataFrame, String> 
         .map_err(|e| format!("view {view:?}: {e}"))
 }
 
-/// Regenerates the three model views from an existing canonical parquet,
-/// including one enriched with AP targets. Does not edit the source parquet.
 pub fn assemble_model_views_from_parquet(
     canonical_path: &Path,
 ) -> Result<Vec<(SchemaView, PathBuf)>, String> {
@@ -331,7 +323,6 @@ fn write_views_provenance(
     std::fs::rename(&tmp, &target).map_err(|e| format!("publish {}: {e}", target.display()))
 }
 
-/// Loads and cleans every verified shard CSV from a collection directory.
 pub fn load_verified_records(
     out_dir: &Path,
     manifest: &DatasetManifestV1,
@@ -351,14 +342,8 @@ pub fn load_verified_records(
     Ok(crate::clean::clean_records(all, policy))
 }
 
-/// Tunables for the memory-bounded [`assemble_dataset_streaming`] build.
 pub struct StreamingAssembleOptions {
-    /// How many verified shards to parse/clean per batch. Peak RAM is
-    /// proportional to one batch (shard CSV text + its records), so lower
-    /// this on memory-constrained hosts; raise it to produce fewer part
-    /// files. Must be >= 1.
     pub batch_shards: usize,
-    /// Keep `assembled/parts/` on disk after the merge (debugging aid).
     pub keep_parts: bool,
 }
 
@@ -371,14 +356,6 @@ impl Default for StreamingAssembleOptions {
     }
 }
 
-/// Incremental [`crate::clean::QualityReport`] accumulation so the streaming
-/// build never needs to hold the full record set for QA. No global id set is
-/// kept (that alone would cost ~0.5-1 GB at tens of millions of rows):
-/// dedup happens per batch inside [`crate::clean::clean_records`], and
-/// cross-batch duplicates are impossible for verified shards since their RA
-/// windows are disjoint half-open ranges (`ra >= start AND ra < end`) — the
-/// in-memory build's report reported `unique_ids == total_rows` for exactly
-/// the same reason.
 #[derive(Debug)]
 struct QualityAccumulator {
     total_rows: u64,
@@ -459,8 +436,6 @@ impl QualityAccumulator {
     }
 }
 
-/// Lazy scan over the given parquet files; the plan is executed by the
-/// streaming engine, keeping merge memory independent of dataset size.
 fn scan_parquet_plan(paths: &[PathBuf]) -> Result<LazyFrame, String> {
     let mut refs: Vec<PlRefPath> = Vec::with_capacity(paths.len());
     for p in paths {
@@ -478,9 +453,6 @@ fn scan_parquet_plan(paths: &[PathBuf]) -> Result<LazyFrame, String> {
     Ok(LazyFrame::from(builder.0))
 }
 
-/// Writes `lf` to `target` as parquet via the streaming engine (bounded RAM).
-/// `row_group_size` MUST be set: with `None` the writer accumulates the whole
-/// output as a single row group in memory before flushing.
 fn sink_parquet_streaming(lf: LazyFrame, target: &Path) -> Result<(), String> {
     let target_ref = PlRefPath::from(
         target
@@ -488,8 +460,6 @@ fn sink_parquet_streaming(lf: LazyFrame, target: &Path) -> Result<(), String> {
             .ok_or_else(|| format!("non-utf8 path {}", target.display()))?,
     );
     let write_options = ParquetWriteOptions {
-        // Small row groups keep the sink's in-memory row-group buffer bounded
-        // AND make later scans of this file decode in small bounded slices.
         row_group_size: Some(64 * 1024),
         data_page_size: Some(1024 * 1024),
         ..Default::default()
@@ -507,7 +477,6 @@ fn sink_parquet_streaming(lf: LazyFrame, target: &Path) -> Result<(), String> {
     .map_err(|e| format!("streaming sink {}: {e}", target.display()))
 }
 
-/// Row count read through the streaming engine (O(1) memory, no full decode).
 fn count_parquet_rows(path: &Path) -> Result<u64, String> {
     let lf = scan_parquet_plan(std::slice::from_ref(&path.to_path_buf()))?;
     let df = lf
@@ -527,18 +496,6 @@ fn count_parquet_rows(path: &Path) -> Result<u64, String> {
     Ok(n)
 }
 
-/// Memory-bounded alternative to [`assemble_dataset`] + [`load_verified_records`]:
-/// verified shards are processed in batches of
-/// [`StreamingAssembleOptions::batch_shards`] — each batch is parsed, cleaned,
-/// deduplicated and immediately flushed to `parts/canonical_part_XXXXX.parquet`
-/// before being dropped. The final canonical parquet and model views are then
-/// merged with polars' streaming engine (scan parts -> sink), so peak RAM stays
-/// proportional to a single batch instead of the whole dataset.
-///
-/// Cross-batch duplicates are impossible for verified shards (RA windows are
-/// disjoint half-open ranges), so the QA report keeps the same
-/// `unique_ids == total_rows` semantics as the in-memory build without a
-/// global id set.
 pub fn assemble_dataset_streaming(
     out_dir: &Path,
     manifest: &mut DatasetManifestV1,
@@ -555,8 +512,6 @@ pub fn assemble_dataset_streaming(
     }
     validate_shard_coverage(manifest)?;
     std::fs::create_dir_all(out_dir).map_err(|e| e.to_string())?;
-    // Contract from the in-memory build: everything lands in
-    // `<out_dir>/assembled/` (canonical + views + parts staging).
     let assembled_dir = out_dir.join("assembled");
 
     let parts_dir = assembled_dir.join("parts");
@@ -600,9 +555,6 @@ pub fn assemble_dataset_streaming(
         }
         let frame = build_canonical_frame(&cleaned).map_err(|e| format!("canonical frame: {e}"))?;
         let part_path = parts_dir.join(format!("canonical_part_{batch_idx:05}.parquet"));
-        // Small row groups: the streaming merge re-scans these files, and
-        // decode granularity equals the row-group size, so this directly
-        // bounds the merge's RAM.
         let file = File::create(&part_path)
             .map_err(|e| format!("cannot create {}: {e}", part_path.display()))?;
         ParquetWriter::new(file)
@@ -621,15 +573,9 @@ pub fn assemble_dataset_streaming(
 
     let total_rows = qacc.total_rows;
 
-    // "All in one heap": streaming merge of the parts into canonical.parquet.
     let canonical_path = assembled_dir.join("canonical.parquet");
     sink_parquet_streaming(scan_parquet_plan(&part_paths)?, &canonical_path)?;
 
-    // Model views (excluding Base): pinn / gnn_kinematics / siren streamed
-    // from the canonical file; gnn_localization additionally gets its pairs
-    // file built from the capped candidate buffer (identical to the in-memory
-    // selection: first LOCALIZATION_KNN_SAMPLE_CAP valid positioned rows in
-    // shard order).
     let mut view_paths = write_standard_views(&canonical_path, &assembled_dir)?;
 
     let pairs = build_localization_pairs(&knn_candidates);
@@ -648,7 +594,6 @@ pub fn assemble_dataset_streaming(
         view_paths.push((SchemaView::GnnLocalization, pairs_path));
     }
 
-    // Integrity check: the merged canonical must hold exactly the batched rows.
     let rows_written = count_parquet_rows(&canonical_path)?;
     if rows_written != total_rows {
         return Err(format!(
@@ -657,8 +602,6 @@ pub fn assemble_dataset_streaming(
     }
     write_views_provenance(&canonical_path, &view_paths)?;
 
-    // Manifest checkpoint: the global checksum covers the canonical dataset;
-    // shard checksums already cover the raw inputs.
     let checksum = crate::integrity::sha256_file(&canonical_path)?;
     manifest.finalize(&checksum);
 
@@ -678,9 +621,6 @@ pub fn assemble_dataset_streaming(
     Ok((report, qacc.finish()))
 }
 
-/// K-NN cap for the GNN-Localization anchor/neighbor pairs. Brute force is
-/// deterministic (sorted by source_id then angular distance); datasets larger
-/// than this cap are split into RA windows first to bound comparisons.
 pub const LOCALIZATION_KNN_SAMPLE_CAP: usize = 4_000;
 const LOCALIZATION_NEIGHBOR_LIMIT: usize = 8;
 
@@ -692,8 +632,6 @@ pub struct NeighborRow {
     pub rel_z: f32,
 }
 
-/// Builds deterministic k-NN neighbor pairs in Cartesian space among valid,
-/// position-bearing rows (capped by [`LOCALIZATION_KNN_SAMPLE_CAP`]).
 pub fn build_localization_pairs(records: &[StarRecord]) -> Vec<NeighborRow> {
     let candidates: Vec<&StarRecord> = records
         .iter()
@@ -701,8 +639,6 @@ pub fn build_localization_pairs(records: &[StarRecord]) -> Vec<NeighborRow> {
         .take(LOCALIZATION_KNN_SAMPLE_CAP)
         .collect();
     let mut pairs = Vec::new();
-    // Deterministic ordering: candidate order is already sorted by source_id
-    // thanks to BTreeMap dedup upstream.
     for anchor in &candidates {
         let ax = anchor.x_pc.unwrap() as f64;
         let ay = anchor.y_pc.unwrap() as f64;
@@ -732,8 +668,6 @@ pub fn build_localization_pairs(records: &[StarRecord]) -> Vec<NeighborRow> {
     pairs
 }
 
-/// Full dataset build: clean records -> canonical parquet -> model views ->
-/// holdout-aware row accounting. Also finalizes the passed manifest checksum.
 pub fn assemble_dataset(
     out_dir: &Path,
     manifest: &mut DatasetManifestV1,
@@ -753,11 +687,8 @@ pub fn assemble_dataset(
     let canonical_path = out_dir.join("canonical.parquet");
     write_parquet(&canonical, &canonical_path)?;
 
-    // Model views (excluding Base) share the streaming projector.
     let mut view_paths = write_standard_views(&canonical_path, out_dir)?;
 
-    // GNN-Localization: anchors + deterministic k-NN pairs stored as their own
-    // typed tables joined by stable source IDs at training time.
     let pairs = build_localization_pairs(records);
     if !pairs.is_empty() {
         let pair_df = df![
@@ -785,7 +716,6 @@ pub fn assemble_dataset(
         }
     }
 
-    // Integrity check on what we just wrote (round-trip read back).
     let bytes_read = File::open(&canonical_path).map_err(|e| format!("reopen canonical: {e}"))?;
     let round_trip = ParquetReader::new(bytes_read)
         .finish()
@@ -795,8 +725,6 @@ pub fn assemble_dataset(
     }
     write_views_provenance(&canonical_path, &view_paths)?;
 
-    // Manifest checkpoint: the global checksum covers the canonical dataset;
-    // shard checksums already cover the raw inputs.
     let checksum = crate::integrity::sha256_file(&canonical_path)?;
     manifest.finalize(&checksum);
     let report = AssembleReport {
@@ -906,7 +834,6 @@ mod tests {
                 || report.canonical_path.exists()
         );
 
-        // Round-trip parquet keeps identical height and frozen column layout.
         let f = File::open(&report.canonical_path).unwrap();
         let rt = ParquetReader::new(f).finish().unwrap();
         assert_eq!(rt.height(), 300);
@@ -928,8 +855,6 @@ mod tests {
         assert!(a.len() > 0);
     }
 
-    /// Streaming assembly must produce the same canonical content and split
-    /// accounting as the in-memory assembly, with parts cleaned up.
     #[test]
     fn streaming_assemble_matches_in_memory_assemble() {
         let dir = tempfile::tempdir().unwrap();
@@ -972,7 +897,6 @@ mod tests {
         }
         assert!(!dir.path().join("parts").exists(), "parts cleaned up");
 
-        // Same accounting as the in-memory path on identical inputs.
         let recs = load_verified_records(dir.path(), &manifest, &CleanPolicy::default()).unwrap();
         let mut manifest2 = DatasetManifestV1::new("gaia_dr3", "q", "s");
         let in_memory =
@@ -1012,8 +936,6 @@ mod tests {
 
     #[test]
     fn holdout_rows_never_receive_a_split_label() {
-        // Localize rows inside a known-holdout tile by construction: find any
-        // tile flagged holdout and fabricate coordinates within it.
         let held: Vec<(i64, i64)> = (0..24i64)
             .flat_map(|a| (0..12i64).map(move |b| (a, b)))
             .filter(|(a, b)| split::is_holdout_tile(&format!("tile_ra{a}_dec{b}")))

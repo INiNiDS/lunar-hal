@@ -22,7 +22,8 @@ pub struct MetricComparison {
     pub current_value: f64,
     pub delta: f64,
     pub delta_pct: f64,
-    pub status: String, // "improved", "regression", "parity"
+    pub status: String,
+
 }
 
 pub fn compute_baseline_delta(
@@ -31,7 +32,6 @@ pub fn compute_baseline_delta(
     report: &Value,
     workspace_root: &Path,
 ) -> Option<Value> {
-    // Try to load stage 7 approved baseline fixture
     let stage7_path = workspace_root.join("ai/fixtures/stage7-approved-baseline.json");
     let baseline_ref = if stage7_path.exists() {
         "stage7-approved-baseline".to_string()
@@ -41,7 +41,6 @@ pub fn compute_baseline_delta(
 
     let mut comparisons = Vec::new();
 
-    // Check if report contains benchmark metrics
     if kind == "benchmark"
         || report.get("iterations").is_some()
         || report.get("avg_latency_ms").is_some()
@@ -84,7 +83,6 @@ pub fn compute_baseline_delta(
             });
         }
     } else if kind == "evaluation" {
-        // Compare evaluation metrics (e.g. loss or mse)
         let current_val_loss = report
             .get("val_loss")
             .or_else(|| report.get("loss"))

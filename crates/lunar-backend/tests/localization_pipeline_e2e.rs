@@ -1,16 +1,3 @@
-//! Stage 8 & 9 Exit Gate: GNN-Localization and chained PINN pipeline E2E tests.
-//!
-//! Verifies:
-//! 1. Contract adherence of `/localization/neighbors`:
-//!    - Mandatory fields: `anchor_position`, `radius_pc`, `version`, `seed`, `model_used`, `candidates`.
-//!    - Existence probability in [0, 1], relative position bounded by search radius.
-//!    - Determinism with fixed seed.
-//!    - Respect of `max_slots` parameter.
-//! 2. Chained `/pipeline/localize-physics` (GNN-Localization -> PINN):
-//!    - Coordinates are translated to absolute positions [anchor + delta].
-//!    - PINN calculates physical parameters: positive, finite Teff, R, M, L.
-//! 3. Fallback behavior when model bundle is absent: uses approved baseline generator.
-//! 4. Manifest contracts and file names compatibility for ModelKind::GnnLocalization.
 
 use lnai_training::artifacts::{architecture_version, norm_file_name, weight_file_name};
 use lnai_training::spec::ModelKind;
@@ -54,23 +41,19 @@ async fn localization_neighbors_contract_and_determinism() {
     let res1 = predict_localization_neighbors(&req).await;
     let res2 = predict_localization_neighbors(&req).await;
 
-    // 1. Mandatory contract fields
     assert_eq!(res1.anchor_position, [10.0, -20.0, 30.0]);
     assert_eq!(res1.radius_pc, 25.0);
     assert_eq!(res1.version, "1.0.0");
     assert_eq!(res1.seed, 42);
     assert!(!res1.model_used.is_empty());
 
-    // 2. Determinism
     assert_eq!(
         res1, res2,
         "identical requests must produce identical responses"
     );
 
-    // 3. Slot constraints
     assert!(res1.candidates.len() <= 6, "must respect max_slots cap");
 
-    // 4. Candidate bounds and positive variances
     for cand in &res1.candidates {
         assert!(cand.existence_prob >= 0.0 && cand.existence_prob <= 1.0);
         let dist = (cand.relative_position[0].powi(2)
@@ -89,7 +72,6 @@ async fn localization_neighbors_contract_and_determinism() {
         );
     }
 
-    // 5. Different seeds produce different results
     let mut req_other_seed = req.clone();
     req_other_seed.seed = Some(999);
     let res_other = predict_localization_neighbors(&req_other_seed).await;
@@ -135,7 +117,6 @@ async fn chained_pipeline_requires_a_release_approved_pinn() {
     assert!(pipeline_res.stars.len() <= 4);
 
     for s in &pipeline_res.stars {
-        // Absolute position must equal anchor + relative position
         let expected_abs = [
             req.anchor_x + s.candidate.relative_position[0],
             req.anchor_y + s.candidate.relative_position[1],
@@ -143,7 +124,6 @@ async fn chained_pipeline_requires_a_release_approved_pinn() {
         ];
         assert_eq!(s.absolute_position, expected_abs);
 
-        // Physics predicted by PINN must be present and physically sound
         let physics = s.physics.as_ref().expect("PINN physics must be populated");
         assert!(physics.temperature_k.is_finite() && physics.temperature_k > 0.0);
         assert!(physics.radius_solar.is_finite() && physics.radius_solar > 0.0);

@@ -1,36 +1,18 @@
-//! Stage 4A / пункты 6–7: NASA-enriched feature rows and the honest
-//! before/after evaluation report.
-//!
-//! Pipeline:
-//! 1. [`build_enrichment`] crossmatches parsed PSCompPars host stars against a
-//!    Gaia backbone sample with the frozen ID-first / epoch-aware strategy
-//!    (reuses [`crate::crossmatch`], no second implementation).
-//! 2. [`evaluate`] runs identical closed-form ridge regressions over a
-//!    deterministic 2-fold split — baseline uses Gaia photometry only;
-//!    enriched adds NASA stellar parameters. The ONLY difference between the
-//!    arms is feature availability, so the delta cannot hide leakage.
-//! 3. Verdict stays conservative: "improved" only when enriched MAE beats
-//!    baseline across folds; otherwise "no_improvement" is recorded verbatim
-//!    (plan requirement: не объявлять улучшение без report).
 
 use crate::crossmatch::{CrossmatchCandidate, CrossmatchOutcome, MatchKind, crossmatch_candidate};
 use crate::sources::nasa_exoplanet::NasaExoplanetRecord;
 use serde::{Deserialize, Serialize};
 
-/// One enrichment row after joining PSCompPars onto Gaia.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct NasaEnrichedRow {
     pub planet_name: String,
     pub hostname: String,
     pub outcome: CrossmatchOutcome,
-    /// NASA-derived feature block (all optional — coverage gets measured).
     pub teff_k: Option<f64>,
     pub radius_rsun: Option<f64>,
     pub mass_msun: Option<f64>,
 }
 
-/// Owned Gaia backbone row extended with the photometry/target columns the
-/// report needs beyond plain crossmatching.
 #[derive(Debug, Clone)]
 pub struct GaiaSampleRow {
     pub source_id: String,
@@ -42,7 +24,6 @@ pub struct GaiaSampleRow {
     pub mag_g: f64,
     pub mag_bp: f64,
     pub mag_rp: f64,
-    /// Strictly positive for evaluable samples.
     pub parallax_mas: f64,
 }
 
@@ -59,9 +40,6 @@ impl GaiaSampleRow {
     }
 }
 
-/// Deterministic host-star crossmatch of an exoplanet record set against the
-/// Gaia sample. Candidate epoch freezes at 2016.0 (Gaia DR3 reference epoch).
-/// Tolerance applies only to the positional fallback path.
 pub fn build_enrichment(
     nasa_rows: &[NasaExoplanetRecord],
     gaia_rows: &[GaiaSampleRow],
@@ -74,10 +52,12 @@ pub fn build_enrichment(
         .iter()
         .map(|r| {
             let outcome = crossmatch_candidate(
-                None, // PSCompPars carries no trusted Gaia ID: positional path
+                None,
+
                 (r.ra_deg, r.dec_deg),
                 2016.0,
-                (None, None), // TAP payload has no host proper-motion columns
+                (None, None),
+
                 &candidates,
                 tolerance_arcsec,
             );
@@ -93,14 +73,12 @@ pub fn build_enrichment(
         .collect()
 }
 
-// ---------------------------------------------------------------------------
-// Before/after evaluation (пункт 7)
-// ---------------------------------------------------------------------------
 
-const BASELINE_DIM: usize = 2; // [mag_g, bp_rp]
-const NASA_DIM: usize = 3; // [teff_k / 6000, radius_rsun, mass_msun]
+const BASELINE_DIM: usize = 2;
 
-/// Training sample assembled only from confidently matched rows.
+const NASA_DIM: usize = 3;
+
+
 #[derive(Debug, Clone)]
 pub struct Sample {
     pub baseline_features: [f64; BASELINE_DIM],
@@ -108,11 +86,6 @@ pub struct Sample {
     pub target_parallax_mas: f64,
 }
 
-/// Builds evaluable samples plus an explicit unmatched count so callers must
-/// account for dropped rows instead of swallowing them silently.
-///
-/// Matching policy: positional wins only (PSCompPars has no trusted Gaia id),
-/// unambiguous (no duplicate-id marker ambiguity_ratio==0 cases kept).
 pub fn enrichment_samples_from_records(
     nasa_rows: &[NasaExoplanetRecord],
     gaia_rows: &[GaiaSampleRow],
@@ -145,8 +118,6 @@ pub fn enrichment_samples_from_records(
             unmatched += 1;
             continue;
         };
-        // Complete NASA feature vector required — coverage gaps are reported,
-        // never imputed here.
         let (Some(teff), Some(rad), Some(mass)) = (r.teff_k, r.radius_rsun, r.mass_msun) else {
             unmatched += 1;
             continue;
@@ -167,7 +138,6 @@ pub fn enrichment_samples_from_records(
 
 fn ridge_solve(x: &[Vec<f64>], y: &[f64], lambda: f64) -> Vec<f64> {
     let d = x[0].len();
-    // Normal equations: A = X^T X + lambda I, b = X^T y.
     let mut a = vec![vec![0.0; d + 1]; d];
     for (row_i, xi) in x.iter().enumerate() {
         for j in 0..d {
@@ -181,7 +151,6 @@ fn ridge_solve(x: &[Vec<f64>], y: &[f64], lambda: f64) -> Vec<f64> {
         a[j][j] += lambda;
     }
 
-    // Gaussian elimination with partial pivoting + back substitution.
     for col in 0..d {
         let pivot = (col..d)
             .max_by(|u, v| {
@@ -239,11 +208,8 @@ pub struct EnrichmentReportV1 {
     pub version: String,
     pub task: String,
     pub matched_rows: usize,
-    /// Mean MAE across both folds, baseline arm.
     pub before: EvalMetrics,
-    /// Mean MAE across both folds, enriched arm.
     pub after: EvalMetrics,
-    /// Signed relative MAE change (>0 means enrichment helped).
     pub mae_delta_fraction: f64,
     pub verdict: EnrichmentVerdict,
 }
@@ -261,10 +227,6 @@ impl EnrichmentReportV1 {
         "ridge 2-fold: predict parallax_mas from gaia photometry vs photometry+nasa-stellar-params";
 }
 
-/// Runs the deterministic before/after comparison. Requires >= 8 complete
-/// matched samples; returns None otherwise so callers report honestly rather
-/// than fabricating numbers. Full PINN-level retraining comparison belongs to
-/// stage 5 (lnai-training); this module provides the data-level gate.
 pub fn evaluate(samples: &[Sample]) -> Option<EnrichmentReportV1> {
     if samples.len() < 8 {
         return None;
@@ -416,7 +378,6 @@ mod tests {
             })
             .chain(std::iter::once(host(99, 359.9, 89.9, f64::NAN, 1.0, 1.0)))
             .collect::<Vec<_>>();
-        // Row 99 loses NaN-purged Teff -> counted unmatched explicitly.
         nasa[12].teff_k = None;
 
         let gaia = (0..12u32)
@@ -439,8 +400,6 @@ mod tests {
 
     #[test]
     fn ridge_recovers_linear_relationship_after_centering() {
-        // Same transformation the evaluator applies (mean-center features and
-        // target): the raw relationship y = 2x0 - x1 + 5 must be recoverable.
         let xs_raw: Vec<Vec<f64>> = (0..16)
             .map(|i| vec![i as f64, (i % 5) as f64, (i % 3) as f64])
             .collect();
@@ -478,7 +437,6 @@ mod tests {
         assert_eq!(report.matched_rows, 16);
         assert_eq!(report.before.rows, 16);
         assert!(report.mae_delta_fraction.is_finite());
-        // Determinism: same input yields identical metrics bit-for-bit.
         assert_eq!(report, evaluate(&some).unwrap());
     }
 

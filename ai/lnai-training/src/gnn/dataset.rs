@@ -58,7 +58,8 @@ impl StarGroup {
 }
 
 pub struct GnnDataset {
-    pub groups: Arc<Vec<StarGroup>>, // Wrapped in Arc for fast reference cloning
+    pub groups: Arc<Vec<StarGroup>>,
+
     pub norm: GnnNormParams,
     indices: Vec<usize>,
     canonical_train_groups: Option<usize>,
@@ -417,7 +418,6 @@ fn build_groups_from_parquet(
 
     let n = df.height();
 
-    // Absolute G magnitude from apparent mag + Cartesian distance (pc).
     let mg: Vec<f32> = (0..n)
         .map(|i| {
             let d = (x[i] * x[i] + y[i] * y[i] + z[i] * z[i]).sqrt().max(1e-6);
@@ -544,7 +544,6 @@ fn build_groups_from_frame(
 
     let n = df.height();
 
-    // Absolute G magnitude from apparent mag + Cartesian distance (pc).
     let mg: Vec<f32> = (0..n)
         .map(|i| {
             let d = (x[i] * x[i] + y[i] * y[i] + z[i] * z[i]).sqrt().max(1e-6);
@@ -624,11 +623,6 @@ fn build_star_groups(config: &GroupBuildConfig<'_>) -> Vec<StarGroup> {
     let mut order: Vec<usize> = (0..n).collect();
     order.shuffle(&mut StdRng::seed_from_u64(config.seed));
 
-    // Spatial hash grid (cell = search radius): neighbor lookup is O(1)
-    // amortized instead of O(n) per seed — required at canonical scale.
-    // With cell == radius, every point within `radius_pc` of the seed is
-    // guaranteed to sit in the 27 cells around it, and ascending candidate
-    // order reproduces the exact output of the old full scan.
     let cell = radius_pc;
     let mut grid: HashMap<(i32, i32, i32), Vec<usize>> = HashMap::new();
     for (i, (&xi, &yi)) in x.iter().zip(y.iter()).enumerate() {
@@ -757,18 +751,12 @@ fn read_gnn_parquet_mode(
     let path_str = path
         .to_str()
         .ok_or_else(|| anyhow::anyhow!("non-utf8 data path"))?;
-    // Lazy scan with column projection: the canonical file is gigabytes wide,
-    // but GNN needs only 12 columns — never materialize the rest.
     let mut lf = anyhow::Context::context(
         LazyFrame::scan_parquet(PlRefPath::from(path_str), Default::default()),
         "failed to scan parquet",
     )?;
     let schema = anyhow::Context::context(lf.collect_schema(), "read parquet schema")?;
 
-    // Canonical-v1 (Stage 4) schema: positions + photometry + full 3D velocities.
-    // radial_velocity_kms must be present (non-null): rows without a measured RV
-    // would otherwise carry an RV=0 assumption baked into vx/vy/vz
-    // (see lnai-data clean.rs), which must not become a training target.
     let required_cols: &[&str] = &[
         "x_pc",
         "y_pc",
@@ -814,17 +802,12 @@ fn read_gnn_parquet_mode(
     for &col_name in required_cols {
         lf = lf.filter(col(col_name).is_not_null());
     }
-    // Physicality guard: transverse velocity explodes as 1/parallax, so
-    // near-zero parallaxes (crowded inner-galaxy tiles especially) produce
-    // garbage rows up to 1e11 km/s that dominate MSE and poison gradients.
-    // Galactic escape velocity is ~550 km/s; keep a 1000 km/s speed ceiling.
     lf = lf.filter(
         (col("vx_kms") * col("vx_kms")
             + col("vy_kms") * col("vy_kms")
             + col("vz_kms") * col("vz_kms"))
         .lt(lit(1_000_000.0)),
     );
-    // Optional spatial-tile subset: shard the sky without loading the rest.
     if let Some(wanted) = tiles.as_deref() {
         let wanted: Vec<&str> = wanted
             .split(',')
@@ -879,9 +862,6 @@ fn read_gnn_parquet_mode(
     Ok(df)
 }
 
-/// Deterministic systematic sample: every k-th row in file order, at most
-/// `cap` rows (file order follows RA-shard assembly, so a stride stays
-/// spatially uniform).
 fn apply_max_rows(df: DataFrame, max_rows: Option<u64>) -> Result<DataFrame> {
     let cap = match max_rows {
         Some(n) if n > 0 && (n as usize) < df.height() => n as usize,
@@ -1028,10 +1008,8 @@ mod tests {
     #[test]
     fn read_tiles_filter_and_rv_requirement() {
         let (_dir, path) = write_parquet(&mut canonical_like_frame(), "gnn.parquet");
-        // tileA: 2 rows, one without RV -> 1 survives.
         let df = read_gnn_parquet(&path, None, Some("tileA".to_string())).expect("read");
         assert_eq!(df.height(), 1);
-        // No filter: 3 rows (null-RV row dropped).
         let df_all = read_gnn_parquet(&path, None, None).expect("read");
         assert_eq!(df_all.height(), 3);
     }
@@ -1039,15 +1017,12 @@ mod tests {
     #[test]
     fn read_max_rows_strides() {
         let (_dir, path) = write_parquet(&mut canonical_like_frame(), "gnn.parquet");
-        // 3 valid rows capped at 2 -> stride 2 -> 2 rows.
         let df = read_gnn_parquet(&path, Some(2), None).expect("read");
         assert_eq!(df.height(), 2);
     }
 
     #[test]
     fn read_drops_unphysical_velocities() {
-        // 1e6 km/s from a near-zero parallax must not reach training:
-        // a single such row would dominate MSE and poison gradients.
         let mut df = df![
             "x_pc" => [0.0f32, 10.0],
             "y_pc" => [0.0f32, 0.0],

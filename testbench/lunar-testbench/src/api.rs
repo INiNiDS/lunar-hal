@@ -209,10 +209,6 @@ pub use lunar_structures_testbench::{
     Job, JobIdPayload, ModelArtifact, SystemSnapshot, TrainSpec, ValidateSpec,
 };
 
-/// Runtime execution state of a service (mirrors `lunar_start::backend::ServiceStatus`).
-///
-/// Deserializes from the tagged JSON shape emitted by `lunar-start-backend`,
-/// e.g. `{ "kind": "stopped", "reason": "Pending" }`.
 #[derive(serde::Deserialize, serde::Serialize, Debug, Clone, PartialEq)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum ServiceStatus {
@@ -223,7 +219,6 @@ pub enum ServiceStatus {
 }
 
 impl ServiceStatus {
-    /// Short lowercase tag suitable for CSS classes / LED color lookups.
     pub fn tag(&self) -> &'static str {
         match self {
             ServiceStatus::Starting => "starting",
@@ -256,7 +251,6 @@ impl std::fmt::Display for ServiceStatus {
     }
 }
 
-/// A service managed by `lunar-start-backend` (mirrors `ServiceInfo` there).
 #[derive(serde::Deserialize, serde::Serialize, Debug, Clone, PartialEq)]
 pub struct ServiceInfo {
     pub name: String,
@@ -268,7 +262,6 @@ pub struct ServiceInfo {
     pub public_url: Option<String>,
 }
 
-/// Coarse severity of a streamed log line (mirrors `lunar_start::backend::LogLevel`).
 #[derive(serde::Deserialize, serde::Serialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum LogLevel {
@@ -277,7 +270,6 @@ pub enum LogLevel {
     Error,
 }
 
-/// A single streamed log line from `lunar-start-backend` (mirrors `lunar_start::backend::LogEvent`).
 #[derive(serde::Deserialize, serde::Serialize, Debug, Clone, PartialEq)]
 pub struct ServiceLogEvent {
     pub timestamp: String,
@@ -287,7 +279,6 @@ pub struct ServiceLogEvent {
     pub level: LogLevel,
 }
 
-/// Cheap liveness probe for `lunar-start-backend` (mirrors `HealthResponse` there).
 #[derive(serde::Deserialize, serde::Serialize, Debug, Clone, PartialEq)]
 pub struct HealthResponse {
     pub ok: bool,
@@ -295,7 +286,6 @@ pub struct HealthResponse {
     pub uptime_ms: u128,
 }
 
-/// Static per-service manifest entry (mirrors `lunar_start_backend::service_meta::ServiceMeta`).
 #[derive(serde::Deserialize, serde::Serialize, Debug, Clone, PartialEq)]
 pub struct ServiceMeta {
     pub name: String,
@@ -308,7 +298,6 @@ pub struct ServiceMeta {
     pub depends_on: Vec<String>,
 }
 
-/// Aggregated warn/error counts for a service's buffered logs (mirrors `ServiceStats` there).
 #[derive(serde::Deserialize, serde::Serialize, Debug, Clone, PartialEq)]
 pub struct ServiceStats {
     pub name: String,
@@ -476,22 +465,18 @@ pub async fn cancel_job(id: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// List services managed by `lunar-start-backend` (testbench, testbench-backend, etc.).
 pub async fn list_start_services() -> Result<Vec<ServiceInfo>, String> {
     get_json(&current_start_backend_url(), "/services").await
 }
 
-/// Cheap liveness probe used to detect when `lunar-start-backend` itself has come online.
 pub async fn health() -> Result<HealthResponse, String> {
     get_json(&current_start_backend_url(), "/health").await
 }
 
-/// Static manifest of managed services (display metadata + dock app `provides`/`depends_on`).
 pub async fn services_meta() -> Result<Vec<ServiceMeta>, String> {
     get_json(&current_start_backend_url(), "/services/meta").await
 }
 
-/// Last `tail` buffered log lines for a service, so a newly opened log window isn't empty.
 pub async fn service_log_tail(name: &str, tail: usize) -> Result<Vec<ServiceLogEvent>, String> {
     get_json(
         &current_start_backend_url(),
@@ -500,7 +485,6 @@ pub async fn service_log_tail(name: &str, tail: usize) -> Result<Vec<ServiceLogE
     .await
 }
 
-/// Aggregated warn/error counts for a service, used for LED badges on the rack.
 pub async fn service_stats(name: &str) -> Result<ServiceStats, String> {
     get_json(
         &current_start_backend_url(),
@@ -565,7 +549,6 @@ pub async fn restart_service(name: &str) -> Result<ServiceActionResponse, Servic
     restart_service_request(name, &StartServiceRequest::default()).await
 }
 
-/// SSE endpoint that streams `ServiceLogEvent`s for all services managed by `lunar-start-backend`.
 pub fn start_backend_logs_url() -> String {
     format!("{}/logs", current_start_backend_url())
 }
@@ -749,7 +732,6 @@ async fn post_ok<B: Serialize>(base: &str, path: &str, body: &B) -> Result<(), S
     Ok(())
 }
 
-/// Public backend base URL used by iframe-adjacent WebOS pages.
 pub fn stellar_backend_url() -> String {
     current_backend_url()
 }
@@ -962,7 +944,6 @@ mod config_api_tests {
     }
 }
 
-// ------------------- Stage 4: canonical dataset coverage -------------------
 
 #[derive(serde::Deserialize, serde::Serialize, Debug, Clone, PartialEq)]
 pub struct DataCoverage {

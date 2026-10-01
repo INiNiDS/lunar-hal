@@ -1,5 +1,3 @@
-//! Integration: NASA Exoplanet Archive offline fixture replay (4A / пункт 4).
-//! No network involved — CI must run without credentials.
 
 use lnai_data::sources::nasa_exoplanet::{adql_query, parse_pscomppars_csv};
 use lnai_data::sources::{SourceAdapter, SourceAuth};
@@ -18,8 +16,6 @@ fn recorded_fixture_replays_deterministically_without_network() {
 fn fixture_rows_carry_enrichment_features_and_valid_coordinates() {
     use lnai_data::sources::nasa_exoplanet::NasaExoplanetRecord;
     let recs = parse_pscomppars_csv(FIXTURE).unwrap();
-    // Real composite dumps contain honest nulls; require healthy *coverage*
-    // (a majority of rows carrying core stellar parameters), not perfection.
     let has_mass = |r: &NasaExoplanetRecord| r.mass_msun.is_some();
     let has_teff = |r: &NasaExoplanetRecord| r.teff_k.is_some();
     assert!(
@@ -38,8 +34,6 @@ fn fixture_rows_carry_enrichment_features_and_valid_coordinates() {
 
 #[test]
 fn parser_preserves_honest_nulls_for_partial_rows() {
-    // Synthetic counterpart: composite tables often lack individual stellar
-    // parameters; missing values must stay None, never zero-filled.
     let csv = "pl_name,hostname,ra,dec,sy_plx,sy_dist,st_teff,st_rad,st_mass,st_lum,disc_year\n\
                Test b,Star,10.5,-3.25,12.1,,,,,\n";
     let recs = parse_pscomppars_csv(csv).unwrap();

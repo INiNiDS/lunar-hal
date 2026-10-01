@@ -1,31 +1,15 @@
-//! Position rollout kinematic-consistency test (Stage 3).
-//!
-//! Integrates positions from predicted velocities and compares the rollout
-//! against the ground-truth trajectory. For a constant velocity error the
-//! gap must grow **linearly** with step count — sub-linear growth indicates
-//! error cancellation (suspicious smoothing), super-linear growth indicates
-//! instability.
 
-/// Result of a rollout comparison.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RolloutResult {
-    /// Mean position error (in position units) after each step, index 0 = first step.
     pub errors: Vec<f64>,
 }
 
 impl RolloutResult {
-    /// Final-step mean error.
     pub fn final_error(&self) -> f64 {
         self.errors.last().copied().unwrap_or(0.0)
     }
 }
 
-/// Rolls both prediction and truth forward with their respective velocities.
-///
-/// * `p0`      — initial positions `[N, 3]`
-/// * `v_pred`  — velocities under test `[N, 3]`
-/// * `v_truth` — reference velocities `[N, 3]`
-/// * `dt`      — integration step
 pub fn position_rollout(
     p0: &[[f32; 3]],
     v_pred: &[[f32; 3]],
@@ -59,7 +43,6 @@ pub fn position_rollout(
     RolloutResult { errors }
 }
 
-/// Mean squared error over `[N, 3]` batches (shared with GNN metrics).
 pub fn mean_squared_error3(a: &[[f32; 3]], b: &[[f32; 3]]) -> f64 {
     assert_eq!(a.len(), b.len(), "batch length mismatch");
     if a.is_empty() {
@@ -96,7 +79,6 @@ mod tests {
         let v_truth = [[1.0_f32; 3]; 8];
         let result = position_rollout(&p0, &v_pred, &v_truth, 1.0, 5);
 
-        // Error after step k must be k*dt*|bias| (linear growth).
         for (idx, err) in result.errors.iter().enumerate() {
             let k = idx + 1;
             let expected = (k as f32 * 0.1_f32 * 3.0_f32.sqrt()) as f64;

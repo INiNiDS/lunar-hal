@@ -24,9 +24,6 @@ void main() {
     gl_Position = vec4(aPos, 0.0, 1.0);
 }"#;
 
-// Preview shaders must never allocate an unbounded backing store on a
-// fractional/high-DPI browser layout. This upper bound is about 8 MiB of RGBA
-// pixels at the largest supported preview size.
 #[cfg(all(feature = "web", target_family = "wasm"))]
 const MAX_BACKING_DIMENSION: f64 = 2_048.0;
 #[cfg(all(feature = "web", target_family = "wasm"))]
@@ -97,9 +94,6 @@ void main() {
     fragColor = vec4(max(color*disk,vec3(0.0)),1.0);
 }"#;
 
-/// JS bootstrap used on the desktop build, where the Rust side has no
-/// `web-sys` and therefore has to drive the canvas from inside the
-/// WebView via `document::eval`.
 #[cfg(not(all(feature = "web", target_family = "wasm")))]
 const DESKTOP_JS: &str = r#"
 (function() {
@@ -527,9 +521,6 @@ pub fn StarShaderCanvas(
             let u_speed_c = u_speed.clone();
             let u_contrast_c = u_contrast.clone();
             *slot.borrow_mut() = Some(Closure::new(move |timestamp: f64| {
-                // Stop the self-scheduling loop when Dioxus has removed this
-                // component. This is essential for browser tabs and minimized
-                // WebOS windows, where an orphaned canvas otherwise burns CPU.
                 if document_for_frame
                     .get_element_by_id(&canvas_id_for_frame)
                     .is_none()

@@ -1,10 +1,3 @@
-//! Stage 6.8 / exit gate: AI pipeline end-to-end over real on-disk bundles.
-//!
-//! Black-box through the serving contract (no GPU forward, no server):
-//! flat `models/` bundles -> manifest compatibility gate -> registry scan
-//! -> `/version` inputs -> frozen Stage 6 baseline record.
-//!
-//! Run: `cargo test -p lunar-backend --test ai_pipeline_e2e`.
 
 use lnai_models::{GNN_INPUT_DIM, GNN_OUTPUT_DIM, GNN_VARIATIONAL_DIM, GnnHeadKind};
 use lnai_training::artifacts::{

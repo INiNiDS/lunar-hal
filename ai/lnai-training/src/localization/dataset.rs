@@ -2,7 +2,6 @@ use lnai_data::split::{is_spatial_holdout, spatial_tile_id};
 use lnai_models::GraphBatch;
 use serde::{Deserialize, Serialize};
 
-/// Record for a single star in a neighborhood.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct LocalStar {
     pub source_id: String,
@@ -17,7 +16,6 @@ pub struct LocalStar {
     pub is_visible: bool,
 }
 
-/// A localized neighborhood extracted around an anchor star.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Neighborhood {
     pub anchor_id: String,
@@ -28,18 +26,15 @@ pub struct Neighborhood {
 }
 
 impl Neighborhood {
-    /// Total star count in the neighborhood (visible + hidden).
     pub fn total_stars(&self) -> usize {
         self.visible_stars.len() + self.hidden_stars.len()
     }
 
-    /// Whether this is a negative neighborhood (has no hidden stars).
     pub fn is_negative_example(&self) -> bool {
         self.hidden_stars.is_empty()
     }
 }
 
-/// Error returned when leakage audit fails.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LeakageError {
     HiddenCoordinateLeaked(String),
@@ -68,18 +63,12 @@ impl std::fmt::Display for LeakageError {
 
 impl std::error::Error for LeakageError {}
 
-/// Strict audit to guarantee zero target leakage in localization inputs.
-/// Exit gate requirement for Stage 8 & 9:
-/// 1. Encoder/inference graph is built strictly over visible nodes.
-/// 2. Hidden coordinates (x/y/z) and target-derived edges are NEVER present in visible features or adjacency.
-/// 3. Stars located in spatial holdout tiles are strictly forbidden from training sets.
 pub fn audit_leakage(
     visible_stars: &[LocalStar],
     hidden_stars: &[LocalStar],
     graph: &GraphBatch,
     is_training: bool,
 ) -> Result<(), LeakageError> {
-    // 1. Check graph node count matches visible stars only
     if graph.num_nodes != visible_stars.len() {
         return Err(LeakageError::HiddenEdgePresent(format!(
             "graph num_nodes ({}) does not match visible_stars ({})",
@@ -88,7 +77,6 @@ pub fn audit_leakage(
         )));
     }
 
-    // 2. Ensure visible stars do not contain hidden star IDs or coordinates
     let hidden_ids: std::collections::HashSet<&str> =
         hidden_stars.iter().map(|s| s.source_id.as_str()).collect();
 
@@ -114,7 +102,6 @@ pub fn audit_leakage(
         }
     }
 
-    // 3. Ensure edge indices are strictly within [0, visible_stars.len())
     for (i, &col) in graph.col_indices.iter().enumerate() {
         if col >= visible_stars.len() {
             return Err(LeakageError::HiddenEdgePresent(format!(
@@ -127,9 +114,6 @@ pub fn audit_leakage(
     Ok(())
 }
 
-/// Builds visible node feature matrix of shape [N, 8]:
-/// [rel_x, rel_y, rel_z, bp_rp, g_mag, ruwe, is_visible, is_anchor]
-/// scaled by `radius_pc`.
 pub fn build_visible_node_features(
     anchor_pos: [f32; 3],
     visible_stars: &[LocalStar],
@@ -159,17 +143,20 @@ pub fn build_visible_node_features(
         features.push(dx);
         features.push(dy);
         features.push(dz);
-        features.push((star.bp_rp - 1.0).clamp(-5.0, 5.0)); // normalized bp_rp
-        features.push((star.g_mag - 15.0) * 0.1); // normalized g_mag
-        features.push((star.ruwe - 1.0).clamp(-2.0, 5.0)); // normalized ruwe
-        features.push(1.0); // is_visible = 1.0
+        features.push((star.bp_rp - 1.0).clamp(-5.0, 5.0));
+
+        features.push((star.g_mag - 15.0) * 0.1);
+
+        features.push((star.ruwe - 1.0).clamp(-2.0, 5.0));
+
+        features.push(1.0);
+
         features.push(is_anchor);
     }
 
     features
 }
 
-/// Builds a sparse CSR k-NN graph strictly over visible nodes.
 pub fn build_visible_graph_batch(visible_stars: &[LocalStar], knn_k: usize) -> GraphBatch {
     let n = visible_stars.len();
     if n == 0 {
@@ -195,11 +182,9 @@ pub fn build_visible_graph_batch(visible_stars: &[LocalStar], knn_k: usize) -> G
         }
         dists.sort_by(|a, b| a.0.total_cmp(&b.0));
 
-        // Self-loop first
         col_indices.push(i);
         edge_weights.push(1.0f32);
 
-        // K nearest neighbors
         for (d2, j) in dists.into_iter().take(k) {
             let dist = d2.sqrt();
             let weight = 1.0 / (1.0 + dist);
@@ -213,7 +198,6 @@ pub fn build_visible_graph_batch(visible_stars: &[LocalStar], knn_k: usize) -> G
     GraphBatch::new(n, row_ptr, col_indices, edge_weights)
 }
 
-/// Deterministic synthetic catalog generator for unit/integration tests and baseline verification.
 pub fn generate_synthetic_stars(count: usize, seed: u64, max_radius_pc: f32) -> Vec<LocalStar> {
     let mut lcg = seed;
     let mut next = || {
@@ -256,7 +240,6 @@ pub fn generate_synthetic_stars(count: usize, seed: u64, max_radius_pc: f32) -> 
         .collect()
 }
 
-/// Partitions a localized group into visible and hidden stars according to mask_ratio.
 pub fn mask_neighborhood(
     mut stars: Vec<LocalStar>,
     mask_ratio: f32,
@@ -266,7 +249,6 @@ pub fn mask_neighborhood(
         return (Vec::new(), Vec::new());
     }
 
-    // Star at index 0 is always anchor and visible
     stars[0].is_visible = true;
 
     let mut lcg = seed;

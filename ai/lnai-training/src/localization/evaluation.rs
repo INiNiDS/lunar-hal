@@ -3,7 +3,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::localization::loss::{chamfer_distance_3d, hungarian_match};
 
-/// Evaluation report for masked-coordinate localization (Stage 8).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MaskedEvaluationReport {
     pub sample_count: usize,
@@ -18,7 +17,6 @@ pub struct MaskedEvaluationReport {
     pub baseline_knn_median_pc: f32,
 }
 
-/// Evaluation report for missing-neighbor set reconstruction (Stage 9).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct NeighborsEvaluationReport {
     pub precision: f32,
@@ -36,7 +34,6 @@ pub struct NeighborsEvaluationReport {
     pub baseline_poisson_chamfer: f32,
 }
 
-/// Single masked-coordinate sample evaluation data.
 #[derive(Debug, Clone)]
 pub struct MaskedSampleEval {
     pub pred_pos: [f32; 3],
@@ -46,7 +43,6 @@ pub struct MaskedSampleEval {
     pub knn_pred_pos: [f32; 3],
 }
 
-/// Computes evaluation report across multiple masked-coordinate evaluation samples.
 pub fn evaluate_masked_set(samples: &[MaskedSampleEval]) -> MaskedEvaluationReport {
     if samples.is_empty() {
         return MaskedEvaluationReport {
@@ -75,14 +71,12 @@ pub fn evaluate_masked_set(samples: &[MaskedSampleEval]) -> MaskedEvaluationRepo
     let mut in_cov_95 = 0usize;
 
     for s in samples {
-        // Euclidean error
         let dx = s.pred_pos[0] - s.true_pos[0];
         let dy = s.pred_pos[1] - s.true_pos[1];
         let dz = s.pred_pos[2] - s.true_pos[2];
         let err = (dx * dx + dy * dy + dz * dz).sqrt();
         errors.push(err);
 
-        // Baselines
         let mlp_err = ((s.mlp_pred_pos[0] - s.true_pos[0]).powi(2)
             + (s.mlp_pred_pos[1] - s.true_pos[1]).powi(2)
             + (s.mlp_pred_pos[2] - s.true_pos[2]).powi(2))
@@ -95,12 +89,10 @@ pub fn evaluate_masked_set(samples: &[MaskedSampleEval]) -> MaskedEvaluationRepo
         .sqrt();
         knn_errors.push(knn_err);
 
-        // Distance / radial error
         let pred_r = (s.pred_pos[0].powi(2) + s.pred_pos[1].powi(2) + s.pred_pos[2].powi(2)).sqrt();
         let true_r = (s.true_pos[0].powi(2) + s.true_pos[1].powi(2) + s.true_pos[2].powi(2)).sqrt();
         distance_errors.push((pred_r - true_r).abs());
 
-        // Angular error in degrees
         let dot = s.pred_pos[0] * s.true_pos[0]
             + s.pred_pos[1] * s.true_pos[1]
             + s.pred_pos[2] * s.true_pos[2];
@@ -109,10 +101,6 @@ pub fn evaluate_masked_set(samples: &[MaskedSampleEval]) -> MaskedEvaluationRepo
         let angle_deg = cos_angle.acos().to_degrees();
         angular_errors.push(angle_deg);
 
-        // Normalized Mahalanobis-like statistic under diagonal covariance:
-        // stat = sum_c (diff_c^2 / var_c) ~ ChiSquared(df=3)
-        // Chi-squared critical values for df=3:
-        // 50%: ~2.366, 90%: ~6.251, 95%: ~7.815
         let stat = (dx * dx / s.variances[0].max(1e-4))
             + (dy * dy / s.variances[1].max(1e-4))
             + (dz * dz / s.variances[2].max(1e-4));
@@ -151,13 +139,11 @@ pub fn evaluate_masked_set(samples: &[MaskedSampleEval]) -> MaskedEvaluationRepo
     }
 }
 
-/// Evaluates predicted candidates against true hidden star positions for one neighborhood.
 pub fn evaluate_neighborhood_set(
     candidates: &[StarCandidate],
     true_positions: &[[f32; 3]],
     tolerance_radius_pc: f32,
 ) -> (usize, usize, usize, Vec<f32>, f32, [usize; 3]) {
-    // Returns: (tp, fp, fn, matched_distances, chamfer, [cov50, cov90, cov95])
     let k = candidates.len();
     let m = true_positions.len();
 
@@ -171,7 +157,6 @@ pub fn evaluate_neighborhood_set(
         return (0, k, 0, Vec::new(), chamfer, [0, 0, 0]);
     }
 
-    // Cost matrix based on Euclidean distance
     let mut cost_matrix = vec![vec![0.0f32; m]; k];
     for i in 0..k {
         for j in 0..m {
@@ -219,7 +204,6 @@ pub fn evaluate_neighborhood_set(
     (tp, fp, false_neg, matched_dists, chamfer, cov_hits)
 }
 
-/// Evaluates missing-neighbor reconstruction across a batch of neighborhoods.
 pub fn evaluate_neighbors_dataset(
     neighborhood_predictions: &[(LocalizationOutput, Vec<[f32; 3]>)],
     tolerance_radius_pc: f32,
@@ -268,7 +252,6 @@ pub fn evaluate_neighbors_dataset(
         total_cov_hits[2] += cov[2];
     }
 
-    // Baseline Poisson chamfer
     let mut baseline_chamfer_sum = 0.0f32;
     for (output, truth) in poisson_baseline_predictions {
         let cand_positions: Vec<[f32; 3]> = output

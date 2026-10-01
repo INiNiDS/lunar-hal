@@ -1,21 +1,5 @@
-//! Stage-2 contract: inventory of Lunar-OS application state fields.
 #![allow(dead_code)]
-//!
-//! Every Lunar-OS window instance owns two disjoint groups of state:
-//!
-//! 1. **Common window state** — identical for every app ([`COMMON_WINDOW_STATE_FIELDS`],
-//!    backed by `WindowState` in `state.rs`). On minimize it is captured into the
-//!    `WindowSnapshotV1` envelope (geometry) plus envelope metadata.
-//! 2. **App-specific values** — listed per app in [`APP_STATE_INVENTORY`]. They are
-//!    the payload of `WindowSnapshotV1.app_state`: each app serializes them via its
-//!    `AppSnapshot::capture_state` implementation when minimize/restore lands
-//!    (Stage 12 migrates apps onto snapshot/restore).
-//!
-//! The inventory is the single source of truth for what must survive a
-//! minimize/restore cycle; `app_specific_fields()` resolves both static app ids
-//! and dynamic `log:<service>` windows.
 
-/// Fields of the common window state (`WindowState`, `state.rs`) shared by all apps.
 pub const COMMON_WINDOW_STATE_FIELDS: &[&str] = &[
     "id",
     "app_id",
@@ -33,16 +17,12 @@ pub const COMMON_WINDOW_STATE_FIELDS: &[&str] = &[
     "snapshot_payload",
 ];
 
-/// A single app-specific value that must be captured into `WindowSnapshotV1.app_state`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AppSpecificField {
-    /// Stable field key used in the snapshot JSON object.
     pub name: &'static str,
-    /// Human-readable type/shape note for contract review.
     pub kind: &'static str,
 }
 
-/// App-specific field set for one registered app id.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AppStateEntry {
     pub app_id: &'static str,
@@ -53,13 +33,10 @@ const fn f(name: &'static str, kind: &'static str) -> AppSpecificField {
     AppSpecificField { name, kind }
 }
 
-/// Fields captured for dynamic `log:<service>` windows.
 pub const LOG_WINDOW_FIELDS: &[AppSpecificField] = &[f("service", "String")];
 
-/// Current schema version for all snapshot payloads and envelopes.
 pub const SCHEMA_VERSION: u32 = 1;
 
-/// App-specific values per registered Lunar-OS application (contract v1).
 pub const APP_STATE_INVENTORY: &[AppStateEntry] = &[
     AppStateEntry {
         app_id: "dashboard",
@@ -198,8 +175,6 @@ pub const APP_STATE_INVENTORY: &[AppStateEntry] = &[
     },
 ];
 
-/// Resolves the app-specific field set for a window app id, including
-/// dynamic `log:<service>` windows. Returns `None` for unknown ids.
 pub fn app_specific_fields(app_id: &str) -> Option<&'static [AppSpecificField]> {
     if let Some(_service) = app_id.strip_prefix("log:") {
         return Some(LOG_WINDOW_FIELDS);
@@ -308,7 +283,6 @@ mod tests {
         use crate::pages::validation::ValidationSnapshot;
         use lunar_structures_testbench::ModelKind;
 
-        // 1. Training
         let orig_training = TrainingSnapshot {
             selected: Some("job-1".into()),
             model_kind: ModelKind::Gnn,
@@ -337,7 +311,6 @@ mod tests {
         hyd_training.hydrate_snapshot(&p).unwrap();
         assert_eq!(hyd_training, orig_training);
 
-        // 2. Validation
         let orig_validation = ValidationSnapshot {
             selected: Some("val-1".into()),
             model_kind: ModelKind::Siren,
@@ -357,7 +330,6 @@ mod tests {
         hyd_validation.hydrate_snapshot(&p).unwrap();
         assert_eq!(hyd_validation, orig_validation);
 
-        // 3. Benchmarks
         let orig_benchmarks = BenchmarksSnapshot {
             model_kind: ModelKind::Pinn,
             iterations: 200,
@@ -370,7 +342,6 @@ mod tests {
         hyd_benchmarks.hydrate_snapshot(&p).unwrap();
         assert_eq!(hyd_benchmarks, orig_benchmarks);
 
-        // 4. Models
         let orig_models = ModelsSnapshot {
             tab: Tab::Siren,
             x: 1.2,
@@ -387,7 +358,6 @@ mod tests {
         hyd_models.hydrate_snapshot(&p).unwrap();
         assert_eq!(hyd_models, orig_models);
 
-        // 5. Pipeline
         let orig_pipeline = PipelineSnapshot {
             x: 7.8,
             y: 9.0,
@@ -407,7 +377,6 @@ mod tests {
         hyd_pipeline.hydrate_snapshot(&p).unwrap();
         assert_eq!(hyd_pipeline, orig_pipeline);
 
-        // 6. Siren Gallery
         let orig_gallery = SirenGallerySnapshot {
             selected: None,
             sort: "created_asc".into(),
@@ -425,7 +394,6 @@ mod tests {
         hyd_gallery.hydrate_snapshot(&p).unwrap();
         assert_eq!(hyd_gallery, orig_gallery);
 
-        // 7. Backend API
         let orig_backend = BackendApiSnapshot {
             method: "POST".into(),
             path: "/pinn".into(),
@@ -443,7 +411,6 @@ mod tests {
         hyd_backend.hydrate_snapshot(&p).unwrap();
         assert_eq!(hyd_backend, orig_backend);
 
-        // 8. Datasets
         let orig_datasets = DatasetsSnapshot {
             coverage_dir: "/ai_data/coverage".into(),
             active_tab: "models".into(),
@@ -454,7 +421,6 @@ mod tests {
         hyd_datasets.hydrate_snapshot(&p).unwrap();
         assert_eq!(hyd_datasets, orig_datasets);
 
-        // 9. Log Window
         let orig_log = LogWindowSnapshot {
             service: "backend".into(),
             scroll_offset: 420.5,
@@ -464,7 +430,6 @@ mod tests {
         hyd_log.hydrate_snapshot(&p).unwrap();
         assert_eq!(hyd_log, orig_log);
 
-        // 10. Sandbox
         use crate::pages::sandbox::SandboxSnapshot;
         let orig_sandbox = SandboxSnapshot {
             selected_scene: Some("scene-stellar".into()),

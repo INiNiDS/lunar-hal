@@ -1,4 +1,3 @@
-//! Launcher — connects LogBackend to stdout output.
 
 use std::time::Duration;
 
@@ -8,7 +7,6 @@ use tokio::sync::mpsc;
 use crate::backend::{LogBackend, LogEvent, cargo_build};
 use crate::config::LauncherConfig;
 
-/// Launcher: starts services and streams logs to stdout.
 pub struct Launcher {
     config: LauncherConfig,
 }
@@ -18,7 +16,6 @@ impl Launcher {
         Self { config }
     }
 
-    /// Start all services and stream logs to stdout.
     pub async fn run(self) -> Result<()> {
         let service_names = self
             .config

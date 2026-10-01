@@ -1,10 +1,3 @@
-//! Stage 4A / пункт 6: per-source manifest with verifiable retrieval identity.
-//!
-//! Every raw recorded payload gets a `SourceManifestEntry`: the frozen query
-//! hash, retrieval timestamp, uncompressed payload SHA-256 and row count.
-//! This is the machine-readable half of "versioned subset" from the exit
-//! gate; secret values can never appear here because entries only carry
-//! names of adapters plus content hashes.
 
 use crate::integrity::sha256_hex;
 use serde::{Deserialize, Serialize};
@@ -13,10 +6,7 @@ use serde::{Deserialize, Serialize};
 pub struct SourceManifestEntry {
     pub adapter_id: String,
     pub endpoint_url: String,
-    /// Deterministic hash over the frozen request (query/body), not the URL.
     pub query_hash: String,
-    /// ms since UNIX epoch of the real retrieval session that produced
-    /// `payload_sha256`; frozen fixtures keep their original value.
     pub retrieved_ms: u64,
     pub payload_sha256: String,
     pub payload_bytes: u64,
@@ -44,7 +34,6 @@ impl SourceManifestEntry {
     }
 }
 
-/// Top-level list, serialized as `source_manifest.json` next to the dataset.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct SourceManifestV1 {
     pub version: String,
@@ -110,7 +99,6 @@ mod tests {
         m.register(make());
         assert_eq!(m.entries.len(), 1);
 
-        // Byte changes must alter the payload hash (detectability contract).
         let mut mutated = make();
         mutated.payload_sha256 = "different".into();
 

@@ -1,33 +1,20 @@
-//! E2E foundation: the frozen `stellar-e2e-v1` fixture contract.
-//!
-//! The fixture is a tiny synthetic stellar catalog committed under
-//! `ai/fixtures/stellar-e2e-v1/` together with `manifest.json`. It is fully
-//! deterministic (`examples/gen-fixture.rs` regenerates byte-identical
-//! artifacts), so CI can verify integrity by recomputing the SHA-256 of the
-//! parquet file and comparing source IDs / spatial tiles against the manifest.
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
-/// Fixture schema version.
 pub const FIXTURE_SCHEMA_VERSION: &str = "1.0.0";
 
-/// Directory containing the committed fixture artifacts.
 pub const FIXTURE_DIR: &str = "ai/fixtures/stellar-e2e-v1";
 
-/// Spatial tile descriptor: a closed-open RA/Dec box in degrees.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct SpatialTile {
     pub id: String,
-    /// `[start, end)` in degrees.
     pub ra_range: (f32, f32),
-    /// `[start, end)` in degrees.
     pub dec_range: (f32, f32),
 }
 
 impl SpatialTile {
-    /// Returns true when the coordinates belong to this tile.
     pub fn contains(&self, ra_deg: f32, dec_deg: f32) -> bool {
         ra_deg >= self.ra_range.0
             && ra_deg < self.ra_range.1
@@ -36,26 +23,20 @@ impl SpatialTile {
     }
 }
 
-/// Frozen manifest of `stellar-e2e-v1`.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct FixtureManifestV1 {
     pub version: String,
-    /// Hash of the canonical dataset schema this fixture conforms to.
     pub schema_hash: String,
     pub source_release: String,
     pub row_count: u64,
-    /// SHA-256 of `fixture.parquet` bytes.
     pub checksum: String,
     pub checksum_algorithm: String,
-    /// Deterministic seed used to synthesize the rows.
     pub seed: u64,
     pub spatial_tiles: Vec<SpatialTile>,
-    /// All source IDs in fixture order; enables exact leakage proofs.
     pub source_ids: Vec<String>,
 }
 
 impl FixtureManifestV1 {
-    /// Loads and parses `manifest.json` from the fixture directory.
     pub fn load(dir: &Path) -> std::io::Result<Self> {
         let path = dir.join("manifest.json");
         let raw = std::fs::read_to_string(path)?;
@@ -63,8 +44,6 @@ impl FixtureManifestV1 {
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
     }
 
-    /// Recomputes the SHA-256 of `fixture.parquet` and checks it against the
-    /// recorded checksum.
     pub fn verify_checksum(&self, dir: &Path) -> Result<(), String> {
         let bytes = std::fs::read(dir.join("fixture.parquet"))
             .map_err(|e| format!("failed to read fixture parquet: {e}"))?;
@@ -80,20 +59,14 @@ impl FixtureManifestV1 {
     }
 }
 
-/// Workspace-rooted path of the fixture directory.
-///
-/// Resolved against the crate manifest so tests/benches/examples find the
-/// artifacts regardless of the invocation working directory.
 pub fn workspace_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 
-/// Workspace-rooted path of the fixture directory.
 pub fn fixture_dir() -> PathBuf {
     workspace_root().join(FIXTURE_DIR)
 }
 
-/// SHA-256 as lowercase hex (single shared implementation for reports/fixtures).
 pub fn sha256_hex(bytes: &[u8]) -> String {
     use std::fmt::Write as _;
     let digest = Sha256::digest(bytes);
@@ -104,8 +77,6 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
     out
 }
 
-/// Proof that an evaluation fixture shares nothing with training data:
-/// no common source ID **and** no overlapping spatial tile.
 pub fn assert_no_leakage(
     fixture: &FixtureManifestV1,
     train: &FixtureManifestV1,

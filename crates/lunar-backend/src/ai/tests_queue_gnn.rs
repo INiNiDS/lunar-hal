@@ -137,7 +137,6 @@ fn serving_seed_is_deterministic_and_coordinate_sensitive() {
 fn deterministic_decode_at_zero_temperature_returns_exact_mean() {
     let stars = vec![dummy_star(0.0), dummy_star(1.0)];
     let norm = dummy_gnn().norm;
-    // Identity norm: denorm(x) == x, so output must equal the split mean.
     let mean = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
     let first = compute_deterministic_velocities(&mean, &stars, &norm, 0.0);
     let second = compute_deterministic_velocities(&mean, &stars, &norm, 0.0);
@@ -157,7 +156,6 @@ fn stochastic_decode_is_seeded_not_wall_clock() {
     let c = compute_variational_velocities(&mean, &logvar, &stars, &norm, 0.7);
     let d = compute_variational_velocities(&mean, &logvar, &stars, &norm, 0.7);
     assert_eq!(c, d, "variational path must be seeded too");
-    // Zero temperature disables sampling on both heads.
     assert_eq!(
         compute_variational_velocities(&mean, &logvar, &stars, &norm, 0.0),
         vec![[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]

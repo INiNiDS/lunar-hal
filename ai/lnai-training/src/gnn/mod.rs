@@ -1,8 +1,3 @@
-//! Stage 5 (task 4): GNN-Kinematics dataset/loss/trainer moved verbatim
-//! from `ai/lnai-gnn` — the single implementation CLI and Testbench share.
-//!
-//! Stdout stays a human-readable log attachment; typed
-//! [`JobEvent`](crate::events::JobEvent) NDJSON is the metric protocol.
 
 pub mod dataset;
 pub mod graph;

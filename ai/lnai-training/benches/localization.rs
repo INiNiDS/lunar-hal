@@ -1,12 +1,9 @@
-//! Localization decode microbench: candidate post-processing cost per
-//! neighborhood (pure CPU math, no model weights involved).
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 
 use lnai_models::LocalizationOutput;
 
-/// Builds a synthetic localization output: `anchors * slots` candidates.
 fn synthetic_output(anchors: usize, slots: usize, seed: u64) -> Vec<LocalizationOutput> {
     let mut lcg = seed;
     let mut next = || {
@@ -30,8 +27,6 @@ fn synthetic_output(anchors: usize, slots: usize, seed: u64) -> Vec<Localization
         .collect()
 }
 
-/// Full decode pipeline: filter by existence threshold, extract variances,
-/// accumulate the strongest candidate per anchor.
 fn decode_all(outputs: &[LocalizationOutput], threshold: f32) -> (usize, f64) {
     let mut kept = 0_usize;
     let mut best_sum_sq = 0.0_f64;

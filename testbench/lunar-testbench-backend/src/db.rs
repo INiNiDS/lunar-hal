@@ -18,7 +18,6 @@ impl Database {
         }
         let conn = Connection::open(p)?;
 
-        // WAL mode & performance pragmas
         conn.execute_batch(
             "PRAGMA journal_mode = WAL;
              PRAGMA busy_timeout = 5000;
@@ -152,7 +151,6 @@ impl Database {
             .map(|d| d.as_millis() as i64)
             .unwrap_or(0);
 
-        // Find active jobs that were abruptly terminated by process restart
         let mut stmt =
             conn.prepare("SELECT id, job_json FROM jobs WHERE status IN ('queued', 'running')")?;
         let rows = stmt.query_map([], |row| {

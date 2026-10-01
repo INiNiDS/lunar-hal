@@ -1,6 +1,3 @@
-//! Stage 5: frozen SIREN CLI surface (parity gate) plus additive
-//! library-owned flags (`--evaluate-only`, `--benchmark-*`).
-//! `--seed` already existed pre-Stage-5 and now feeds the shared spec.
 
 use clap::Parser;
 
@@ -41,15 +38,12 @@ pub struct Args {
     pub max_stars: usize,
     #[arg(long, default_value_t = 42)]
     pub seed: u64,
-    /// Read-only evaluation: load artifact, report losses, train nothing.
     #[arg(long, default_value_t = false)]
     pub evaluate_only: bool,
-    /// Benchmark mode: time forward passes instead of training (0 = off).
     #[arg(long, default_value_t = 0)]
     pub benchmark_iters: u32,
     #[arg(long, default_value_t = 10)]
     pub benchmark_warmup: u32,
-    /// Deterministic systematic sample cap (every k-th row); unset = all rows.
     #[arg(long)]
     pub max_rows: Option<u64>,
 }

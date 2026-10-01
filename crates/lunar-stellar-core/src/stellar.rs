@@ -1,10 +1,3 @@
-//! The [`StellarScene`] struct: a single source of truth for all gameplay states.
-//!
-//! Every UI (Dioxus, a hypothetical TUI, a future test harness, ...)
-//! talks to the same [`StellarScene`] and renders the resulting
-//! [`GameSnapshot`](GameSnapshot). The frontend never reaches
-//! into [`lunar_backend`](https://docs.rs/lunar-backend) directly; the
-//! game layer is the only client of the AI HTTP API.
 
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
@@ -29,11 +22,8 @@ use crate::validation::{
     validate_world, validate_world_id, validate_world_name, validate_world_summary, validate_zoom,
 };
 
-/// How the game reaches the AI backend.
 #[derive(Clone, Debug)]
 pub struct StellarConfig {
-    /// Base URL, e.g. `http://127.0.0.1:25255`. Defaults to
-    /// `LUNAR_BACKEND_HOST:LUNAR_BACKEND_PORT` (or 127.0.0.1:25255).
     pub backend_url: String,
 }
 
@@ -69,10 +59,7 @@ struct StellarSceneState {
     last_temp: f32,
     pipeline: Option<PipelineResponse>,
     world_cameras: HashMap<String, WorldCamera>,
-    /// Monotonic counter. Frontends can use this to detect changes
-    /// (via a `Signal<u64>` they bump on every `notify()`).
     version: u64,
-    /// Rolling buffer of recent player actions and camera snapshots.
     action_buffer: ActionBuffer,
 }
 
@@ -91,11 +78,6 @@ impl StellarSceneState {
 
 type ChangeHandler = Box<dyn Fn(u64) + Send + Sync + 'static>;
 
-/// The shared, framework-agnostic game object.
-///
-/// `Game` is `Clone` (lightweight, internal `Arc`-sharing) and is safe to
-/// pass into UI components. It is also `Send + Sync`, so it can be
-/// driven from background tasks (e.g., fetch workers).
 pub struct StellarScene {
     state: Arc<RwLock<StellarSceneState>>,
     api: Arc<ApiClient>,
@@ -121,8 +103,6 @@ impl Default for StellarScene {
 }
 
 impl StellarScene {
-    /// Build a game pointed at the AI backend URL stored in
-    /// `LUNAR_BACKEND_HOST` / `LUNAR_BACKEND_PORT` (or 127.0.0.1:25255).
     pub fn new() -> Self {
         Self::default()
     }
@@ -137,11 +117,6 @@ impl StellarScene {
         }
     }
 
-    /// Register a callback fired after every state mutation. The
-    /// callback receives the new monotonic version. Frontends use
-    /// this to bump a Dioxus `Signal<u64>` (or equivalent) so the UI
-    /// re-renders. The callback must be `Send + Sync`; if you need a
-    /// non-`Send` subscriber, use [`StellarScene::subscribe`] instead.
     pub fn with_change_handler<F>(self, handler: F) -> Self
     where
         F: Fn(u64) + Send + Sync + 'static,
@@ -157,9 +132,6 @@ impl StellarScene {
         *self.on_change.write() = Some(Box::new(handler));
     }
 
-    /// Get a `watch::Receiver` that fires every time the game state
-    /// changes. Useful for non-`Send` subscribers (e.g. Dioxus
-    /// signals).
     pub fn subscribe(&self) -> watch::Receiver<u64> {
         self.change_tx.subscribe()
     }
@@ -180,14 +152,10 @@ impl StellarScene {
         }
     }
 
-    /// Monotonic version that increases on every mutation. Frontends
-    /// can compare against the previous value to decide whether to
-    /// re-render.
     pub fn version(&self) -> u64 {
         self.state.read().version
     }
 
-    /// Read-only snapshot of the entire game state. Cheap to clone.
     pub fn snapshot(&self) -> GameSnapshot {
         let s = self.state.read();
         GameSnapshot {
@@ -246,8 +214,6 @@ impl StellarScene {
     }
 
     pub async fn create_world(&self, req: CreateWorldRequest) -> Result<World, GameError> {
-        // Validate every field of the user-facing request before any
-        // network traffic.
         let name = validate_world_name(&req.name)?.to_string();
         validate_center_x(req.center_x)?;
         validate_center_y(req.center_y)?;
@@ -295,9 +261,6 @@ impl StellarScene {
         self.state.read().active_world.clone()
     }
 
-    /// Set the active world directly (e.g., when the user picks a
-    /// world from the archive) and reset the sector cache to match
-    /// the new world. Validates the world before adopting it.
     pub fn adopt_world(&self, world: Option<World>) {
         if let Some(ref w) = world {
             if let Err(e) = validate_world(w) {
@@ -412,10 +375,6 @@ impl StellarScene {
         Ok(())
     }
 
-    /// If a per-world camera has been recorded for `world_id`, apply
-    /// it as the current camera. Returns whether anything was
-    /// applied. Frontends call this after hydrating
-    /// [`StellarScene::set_world_camera`] from their storage layer.
     pub fn apply_world_camera(&self, world_id: &str) -> ValidationResult<bool> {
         let world_id = validate_world_id(world_id)?.to_string();
         let mut s = self.state.write();
@@ -538,9 +497,6 @@ impl StellarScene {
         self.state.read().last_temp
     }
 
-    /// Internal bookkeeping; intentionally infallible because the
-    /// caller has just produced `t` via [`StellarScene::set_temperature`],
-    /// which already validated it.
     pub fn set_last_temp(&self, t: f32) {
         self.state.write().last_temp = t;
     }
@@ -558,9 +514,6 @@ impl StellarScene {
         self.notify();
     }
 
-    /// Build a pregen sector request: if a sector center is set,
-    /// request a sector there; otherwise ask the AI backend for a
-    /// fully random star. All outgoing parameters are validated.
     pub async fn fetch_pregen(&self) -> Result<GnnResponse, GameError> {
         let center = self.sector_center().unwrap_or((0.0, 0.0, 0.0));
         let t = self.temperature();
@@ -602,8 +555,6 @@ impl StellarScene {
         Ok(resp)
     }
 
-    /// Which sectors should the renderer request from the AI backend
-    /// right now, given the current viewport and camera?
     pub fn sectors_to_fetch(&self, viewport: (f32, f32)) -> Vec<(SectorKey, (f32, f32, f32))> {
         let s = self.state.read();
         let center = s
@@ -621,8 +572,6 @@ impl StellarScene {
         crate::sector::sectors_to_fetch(req, &s.sector_cache, &s.sector_loading)
     }
 
-    /// Mark a chunk as in-flight. Returns `false` if the chunk is
-    /// already cached or loading, or if the key is out of range.
     pub fn mark_sector_loading(&self, chunk: SectorKey) -> bool {
         if validate_sector_key(chunk).is_err() {
             return false;
@@ -638,9 +587,6 @@ impl StellarScene {
         true
     }
 
-    /// Apply a fetched sector to the cache. The key and every star
-    /// are validated; invalid input is dropped on the floor (the
-    /// caller is expected to handle the error path).
     pub fn apply_sector(&self, chunk: SectorKey, stars: Vec<ResponseStar>) -> bool {
         if validate_sector_key(chunk).is_err() {
             return false;
@@ -671,9 +617,6 @@ impl StellarScene {
         }
     }
 
-    /// Fetch a single sector by chunk coordinate and apply it.
-    /// Every parameter is validated up-front, and the response is
-    /// validated before it lands in the cache.
     pub async fn fetch_sector(
         &self,
         chunk: SectorKey,
@@ -716,8 +659,6 @@ impl StellarScene {
         }
     }
 
-    /// Evict farthest cached sectors. Should be called by the
-    /// frontend whenever the camera moves.
     pub fn evict_excess_sectors(&self) {
         let changed = {
             let mut s = self.state.write();
@@ -764,10 +705,6 @@ impl StellarScene {
         self.notify();
     }
 
-    /// Fetch a pipeline response for the given star and cache it.
-    /// Both the input star and the response are validated; the
-    /// texture is sanity-checked for the expected `width*height*3`
-    /// pixel count.
     pub async fn fetch_pipeline(&self, star: ResponseStar) -> Result<PipelineResponse, GameError> {
         validate_response_star(&star)?;
         let req = PipelineRequest {
@@ -789,24 +726,10 @@ impl StellarScene {
         Ok(resp)
     }
 
-    /// Append a player action to the rolling buffer. Called
-    /// automatically by every mutation method (pan, zoom, select,
-    /// etc.) but also available for custom frontend events.
     pub fn push_action(&self, action: PlayerAction) {
         self.state.write().action_buffer.push(action);
     }
 
-    /// Build and return an [`UpdatePayload`] containing:
-    ///
-    /// * **Camera movement** — total offset delta accumulated over
-    ///   the rolling window (default: 60 s), not just the last frame.
-    ///   Zero when the session is shorter than the window.
-    /// * **Recent actions** — every buffered action inside the window
-    ///   (`when = None` if session < window).
-    /// * **Current sector** — the chunk under the viewport center.
-    /// * **Sector stars** — stars in that chunk (empty if not cached).
-    ///
-    /// After building, the buffer is pruned to keep memory bounded.
     pub fn update(&self, _dt: f32) -> UpdatePayload {
         let camera = self.camera();
         let mut s = self.state.write();
@@ -829,10 +752,6 @@ impl StellarScene {
 
         payload
     }
-    /// Spawn a star into the sector cache at the chunk that contains
-    /// its world-space position. Unlike [`StellarScene::apply_sector`], this
-    /// appends to the chunk rather than overwriting it and never
-    /// drops stars that were already there.
     pub fn spawn_star(&self, star: ResponseStar) -> bool {
         if validate_response_star(&star).is_err() {
             return false;
@@ -856,9 +775,6 @@ impl StellarScene {
         true
     }
 
-    /// Wipe everything the sandbox owns: every cached sector and
-    /// every enemy in the live [`EnemyInstance`]. Camera, world
-    /// list, and other long-lived states are left alone.
     pub fn clear_sandbox(&self) {
         {
             let mut s = self.state.write();
