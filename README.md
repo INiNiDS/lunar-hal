@@ -10,7 +10,7 @@
 
 <br/>
 
-<img src=".github/assets/base.png" alt="Lunar-HAL Base" width="100%" style="border-radius: 14px; border: 1px solid rgba(255,255,255,0.1); box-shadow: 0 20px 40px rgba(0,0,0,0.5);"/>
+<img src=".github/assets/2.png" alt="Lunar-HAL Base" width="100%" style="border-radius: 14px; border: 1px solid rgba(255,255,255,0.1); box-shadow: 0 20px 40px rgba(0,0,0,0.5);"/>
 
 </div>
 
