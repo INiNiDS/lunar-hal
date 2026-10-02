@@ -2,7 +2,7 @@ use crate::assets::FONT_SANS;
 use crate::components::editor::embedded::{EmbeddedSandbox, embedded_scene_id};
 use crate::components::editor::scene_panel::{StarSceneCreator, StarScenePicker};
 use crate::components::editor::sidebar::StarSidebar;
-use crate::components::editor::star_map::StarMap;
+use crate::components::editor::star_map::{use_viewport_measurement, StarMap};
 use crate::stellar_state::{
     restore_camera, use_persist_scene_camera, use_pipeline_snapshot,
     use_provide_scene_camera_persistence, use_scene_id_change, use_stellar_scene,
@@ -313,7 +313,7 @@ pub fn Editor() -> Element {
         return rsx! { EmbeddedSandbox { scene_id } };
     }
 
-    let game = use_stellar_scene();
+    let mut game = use_stellar_scene();
     let version = use_context::<Signal<u64>>();
     let map_active = use_signal(|| true);
 
@@ -373,8 +373,27 @@ pub fn Editor() -> Element {
         spawn(load_scene_action(game.read().clone(), id, show_picker));
     };
 
+    let viewport = use_viewport_measurement();
+
     rsx! {
         div {
+            tabindex: 0,
+            autofocus: true,
+            onkeydown: move |evt| {
+                if let Key::Character(ref c) = evt.key() {
+                    if c.eq_ignore_ascii_case("r") {
+                        game.read().clone().recenter_camera();
+                    } else if c.eq_ignore_ascii_case("+") {
+                        let vp = *viewport.read();
+                        let g = game.read().clone();
+                        g.zoom_camera(vp, 1.3);
+                    } else if c.eq_ignore_ascii_case("-") {
+                        let vp = *viewport.read();
+                        let g = game.read().clone();
+                        g.zoom_camera(vp, 1.0 / 1.3);
+                    }
+                }
+            },
             class: "h-screen w-screen bg-[#050505] overflow-hidden relative select-none [background-image:radial-gradient(ellipse_at_center,_rgba(255,255,255,0.015)_0%,_transparent_70%)]",
             style: "font-family: {FONT_SANS};",
 

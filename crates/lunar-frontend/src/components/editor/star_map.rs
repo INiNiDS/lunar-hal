@@ -153,7 +153,7 @@ const ELEMENT_SIZE_OBSERVER: &str = r#"
 })();
 "#;
 
-fn use_viewport_measurement() -> Signal<(f32, f32)> {
+pub(super) fn use_viewport_measurement() -> Signal<(f32, f32)> {
     let viewport = use_signal(|| (0.0_f32, 0.0_f32));
 
     use_effect(move || {

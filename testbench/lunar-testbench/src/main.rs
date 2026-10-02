@@ -18,6 +18,8 @@ fn main() {
 
 fn App() -> Element {
     rsx! {
+        document::Meta { name: "darkreader-lock" }
+        document::Meta { name: "color-scheme", content: "dark" }
         document::Link {
             rel: "preconnect",
             href: "https://fonts.googleapis.com",

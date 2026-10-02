@@ -370,7 +370,10 @@ impl LogBackend {
             let name = self.services[idx].config.name.clone();
             let deadline = Instant::now() + Duration::from_secs(90);
             loop {
-                if probe_http(&host, port, path).await {
+                if probe_http(&host, port, path).await
+                    || (path != "/" && probe_http(&host, port, "/").await)
+                    || (path == "/" && probe_http(&host, port, "/testbench").await)
+                {
                     break;
                 }
                 if let Some(status) = self
@@ -428,6 +431,21 @@ fn readiness_target(
                 .ok()?
                 .port?,
             "/",
+        ),
+        ServiceKind::DxServe {
+            crate_name,
+            default_port,
+            ..
+        } if crate_name == "lunar-testbench" => (
+            "127.0.0.1",
+            extra_args
+                .windows(2)
+                .find(|args| matches!(args[0].as_str(), "--port" | "-p"))
+                .map(|args| args[1].as_str())
+                .unwrap_or(default_port)
+                .parse()
+                .ok()?,
+            "/testbench",
         ),
         ServiceKind::DxServe { default_port, .. } => (
             "127.0.0.1",
@@ -1031,6 +1049,19 @@ mod tests {
         assert_eq!(
             readiness_target(&kind, &env, &[]),
             Some(("127.0.0.1".into(), 8080, "/"))
+        );
+    }
+
+    #[test]
+    fn readiness_uses_testbench_base_path() {
+        let kind = ServiceKind::DxServe {
+            crate_name: "lunar-testbench".into(),
+            crate_subdir: "testbench".into(),
+            default_port: "16180".into(),
+        };
+        assert_eq!(
+            readiness_target(&kind, &HashMap::new(), &[]),
+            Some(("127.0.0.1".into(), 16180, "/testbench"))
         );
     }
 }

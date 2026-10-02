@@ -62,6 +62,8 @@ fn App() -> Element {
                 if !active() { active.set(true); }
             },
 
+            document::Meta { name: "darkreader-lock" }
+            document::Meta { name: "color-scheme", content: "dark" }
             document::Link { rel: "stylesheet", href: MAIN_CSS }
             canvas { id: "dither-canvas" }
             div { id: "lunar-hal-text", "LUNAR-HAL" }

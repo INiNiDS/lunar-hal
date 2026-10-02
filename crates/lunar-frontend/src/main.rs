@@ -39,6 +39,8 @@ fn Home() -> Element {
 fn App() -> Element {
     let _scene = use_provide_stellar_scene();
     rsx! {
+        document::Meta { name: "darkreader-lock" }
+        document::Meta { name: "color-scheme", content: "dark" }
         document::Link { rel: "stylesheet", href: MAIN_CSS }
         document::Link { rel: "stylesheet", href: TAILWIND_CSS }
         document::Link { rel: "preconnect", href: "https://fonts.googleapis.com" }
